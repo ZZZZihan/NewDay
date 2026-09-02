@@ -1,14 +1,28 @@
-import type { Task, TimeBlock } from "../domain/planner-model";
+import type {
+  FocusRecord,
+  RecurrenceSeries,
+  Task,
+} from "../domain/planner-model";
 
 export interface PlannerStore {
   transaction<T>(operation: () => Promise<T>): Promise<T>;
+
   getTask(id: string): Promise<Task | undefined>;
-  getTimeBlock(id: string): Promise<TimeBlock | undefined>;
+  getTaskByOccurrenceKey(occurrenceKey: string): Promise<Task | undefined>;
   putTask(task: Task): Promise<void>;
-  putTimeBlock(timeBlock: TimeBlock): Promise<void>;
   deleteTask(id: string): Promise<void>;
-  deleteTimeBlock(id: string): Promise<void>;
-  deleteTimeBlocksForTask(taskId: string): Promise<void>;
-  listTasksForDate(date: string): Promise<Task[]>;
-  listTimeBlocksForDate(date: string): Promise<TimeBlock[]>;
+  listAllTasks(): Promise<Task[]>;
+  listTasksBySeries(seriesId: string): Promise<Task[]>;
+
+  getRecurrenceSeries(id: string): Promise<RecurrenceSeries | undefined>;
+  putRecurrenceSeries(series: RecurrenceSeries): Promise<void>;
+  deleteRecurrenceSeries(id: string): Promise<void>;
+  listAllRecurrenceSeries(): Promise<RecurrenceSeries[]>;
+
+  getFocusRecord(id: string): Promise<FocusRecord | undefined>;
+  putFocusRecord(record: FocusRecord): Promise<void>;
+  deleteFocusRecord(id: string): Promise<void>;
+  listFocusRecordsForDate(date: string): Promise<FocusRecord[]>;
+  listFocusRecordsForTask(taskId: string): Promise<FocusRecord[]>;
+  listAllFocusRecords(): Promise<FocusRecord[]>;
 }

@@ -1,19 +1,27 @@
 import Dexie, { type Table } from "dexie";
 
-import { getDayPlan } from "../application/day-plan";
-import type { PlannerArchiveStore } from "../application/planner-archive-store";
-import {
-  DEFAULT_PLANNER_PREFERENCES,
-  type DayPlan,
-  type PlannerPreferences,
-  type Task,
-  type TimeBlock,
+import type {
+  PlannerArchiveData,
+  PlannerArchiveStore,
+} from "../application/planner-archive-store";
+import type {
+  FocusRecord,
+  RecurrenceSeries,
+  Task,
 } from "../domain/planner-model";
+
+type LegacyTaskRecord = {
+  plannedDate?: string;
+  estimatedMinutes?: number | null;
+  startDate?: string;
+  endDate?: string;
+  completedOn?: string | null;
+};
 
 class NewDayDatabase extends Dexie {
   tasks!: Table<Task, string>;
-  timeBlocks!: Table<TimeBlock, string>;
-  preferences!: Table<PlannerPreferences, string>;
+  recurrenceSeries!: Table<RecurrenceSeries, string>;
+  focusRecords!: Table<FocusRecord, string>;
 
   constructor(name: string) {
     super(name);
@@ -28,6 +36,46 @@ class NewDayDatabase extends Dexie {
       timeBlocks: "id, taskId, date, start, updatedAt",
       preferences: "id",
     });
+
+    this.version(3)
+      .stores({
+        tasks: "id, startDate, endDate, status, updatedAt",
+        timeBlocks: null,
+        preferences: null,
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table<LegacyTaskRecord, string>("tasks")
+          .toCollection()
+          .modify((task) => {
+            const fallbackDate = task.startDate ?? task.plannedDate;
+
+            if (!fallbackDate) {
+              throw new Error("旧任务缺少所属日期，无法迁移");
+            }
+
+            task.startDate = fallbackDate;
+            task.endDate = task.endDate ?? fallbackDate;
+            delete task.plannedDate;
+            delete task.estimatedMinutes;
+          });
+      });
+
+    this.version(4)
+      .stores({
+        tasks:
+          "id, startDate, endDate, status, completedOn, updatedAt, seriesId, occurrenceDate, &occurrenceKey",
+        recurrenceSeries: "id, startDate, updatedAt",
+        focusRecords: "id, date, taskId, focusedAt, &[date+taskId]",
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table<LegacyTaskRecord, string>("tasks")
+          .toCollection()
+          .modify((task) => {
+            task.completedOn = null;
+          });
+      });
   }
 }
 
@@ -50,8 +98,8 @@ export class DexiePlannerStore implements PlannerArchiveStore {
     return this.database.transaction(
       "rw",
       this.database.tasks,
-      this.database.timeBlocks,
-      this.database.preferences,
+      this.database.recurrenceSeries,
+      this.database.focusRecords,
       operation,
     );
   }
@@ -60,85 +108,88 @@ export class DexiePlannerStore implements PlannerArchiveStore {
     return this.database.tasks.get(id);
   }
 
-  async getTimeBlock(id: string) {
-    return this.database.timeBlocks.get(id);
+  async getTaskByOccurrenceKey(occurrenceKey: string) {
+    return this.database.tasks
+      .where("occurrenceKey")
+      .equals(occurrenceKey)
+      .first();
   }
 
   async putTask(task: Task) {
     await this.database.tasks.put(task);
   }
 
-  async putTimeBlock(timeBlock: TimeBlock) {
-    await this.database.timeBlocks.put(timeBlock);
-  }
-
   async deleteTask(id: string) {
     await this.database.tasks.delete(id);
-  }
-
-  async deleteTimeBlock(id: string) {
-    await this.database.timeBlocks.delete(id);
-  }
-
-  async deleteTimeBlocksForTask(taskId: string) {
-    await this.database.timeBlocks.where("taskId").equals(taskId).delete();
-  }
-
-  async listTasksForDate(date: string) {
-    return this.database.tasks.where("plannedDate").equals(date).toArray();
-  }
-
-  async listTimeBlocksForDate(date: string) {
-    return this.database.timeBlocks.where("date").equals(date).toArray();
   }
 
   async listAllTasks() {
     return this.database.tasks.toArray();
   }
 
-  async listAllTimeBlocks() {
-    return this.database.timeBlocks.toArray();
+  async listTasksBySeries(seriesId: string) {
+    return this.database.tasks.where("seriesId").equals(seriesId).toArray();
   }
 
-  async getPreferences() {
-    const stored = await this.database.preferences.get("default");
-
-    if (stored) {
-      return stored;
-    }
-
-    return {
-      ...DEFAULT_PLANNER_PREFERENCES,
-      timeZone:
-        Intl.DateTimeFormat().resolvedOptions().timeZone ||
-        DEFAULT_PLANNER_PREFERENCES.timeZone,
-    };
+  async getRecurrenceSeries(id: string) {
+    return this.database.recurrenceSeries.get(id);
   }
 
-  async replaceAllData(data: {
-    tasks: readonly Task[];
-    timeBlocks: readonly TimeBlock[];
-    preferences: PlannerPreferences;
-  }) {
+  async putRecurrenceSeries(series: RecurrenceSeries) {
+    await this.database.recurrenceSeries.put(series);
+  }
+
+  async deleteRecurrenceSeries(id: string) {
+    await this.database.recurrenceSeries.delete(id);
+  }
+
+  async listAllRecurrenceSeries() {
+    return this.database.recurrenceSeries.toArray();
+  }
+
+  async getFocusRecord(id: string) {
+    return this.database.focusRecords.get(id);
+  }
+
+  async putFocusRecord(record: FocusRecord) {
+    await this.database.focusRecords.put(record);
+  }
+
+  async deleteFocusRecord(id: string) {
+    await this.database.focusRecords.delete(id);
+  }
+
+  async listFocusRecordsForDate(date: string) {
+    return this.database.focusRecords.where("date").equals(date).toArray();
+  }
+
+  async listFocusRecordsForTask(taskId: string) {
+    return this.database.focusRecords.where("taskId").equals(taskId).toArray();
+  }
+
+  async listAllFocusRecords() {
+    return this.database.focusRecords.toArray();
+  }
+
+  async replaceAllData(data: PlannerArchiveData) {
     await this.database.transaction(
       "rw",
       this.database.tasks,
-      this.database.timeBlocks,
-      this.database.preferences,
+      this.database.recurrenceSeries,
+      this.database.focusRecords,
       async () => {
         await Promise.all([
           this.database.tasks.clear(),
-          this.database.timeBlocks.clear(),
-          this.database.preferences.clear(),
+          this.database.recurrenceSeries.clear(),
+          this.database.focusRecords.clear(),
         ]);
         await this.database.tasks.bulkAdd([...data.tasks]);
-        await this.database.timeBlocks.bulkAdd([...data.timeBlocks]);
-        await this.database.preferences.put(data.preferences);
+        await this.database.recurrenceSeries.bulkAdd([
+          ...(data.recurrenceSeries ?? []),
+        ]);
+        await this.database.focusRecords.bulkAdd([...(data.focusRecords ?? [])]);
       },
     );
   }
 
-  async getDayPlan(date: string): Promise<DayPlan> {
-    return getDayPlan(this, date);
-  }
 }

@@ -6,81 +6,205 @@ export const localDateSchema = z
   .refine(isRealCalendarDate, { message: "日期不是有效的日历日期" });
 export const instantSchema = z.string().datetime({ offset: true });
 
-export const taskSchema = z.object({
-  id: z.string().min(1),
-  title: z.string().trim().min(1).max(200),
-  notes: z.string().max(10_000).default(""),
-  plannedDate: localDateSchema,
-  status: z.enum(["open", "completed"]),
-  estimatedMinutes: z.number().int().positive().max(24 * 60).nullable(),
-  createdAt: instantSchema,
-  updatedAt: instantSchema,
-  completedAt: instantSchema.nullable(),
-});
+export type LocalDate = z.infer<typeof localDateSchema>;
+export type Instant = z.infer<typeof instantSchema>;
 
-export const timeBlockSchema = z
+export const isoWeekdaySchema = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+  z.literal(4),
+  z.literal(5),
+  z.literal(6),
+  z.literal(7),
+]);
+export type IsoWeekday = z.infer<typeof isoWeekdaySchema>;
+
+const weeklyRecurrencePatternSchema = z
+  .object({
+    kind: z.literal("weekly"),
+    weekdays: z.array(isoWeekdaySchema).min(1),
+  })
+  .superRefine((pattern, context) => {
+    for (let index = 1; index < pattern.weekdays.length; index += 1) {
+      if (pattern.weekdays[index] <= pattern.weekdays[index - 1]) {
+        context.addIssue({
+          code: "custom",
+          message: "每周重复日期必须按 ISO 星期顺序排列且不能重复",
+          path: ["weekdays", index],
+        });
+        return;
+      }
+    }
+  });
+
+export const recurrencePatternSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("daily") }),
+  z.object({ kind: z.literal("weekdays") }),
+  weeklyRecurrencePatternSchema,
+  z.object({
+    kind: z.literal("monthly"),
+    dayOfMonth: z.number().int().min(1).max(31),
+  }),
+]);
+
+export const recurrenceEndSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("never") }),
+  z.object({ kind: z.literal("onDate"), date: localDateSchema }),
+]);
+
+export const recurrenceSeriesSchema = z
   .object({
     id: z.string().min(1),
-    taskId: z.string().min(1),
-    date: localDateSchema,
-    start: instantSchema,
-    end: instantSchema,
+    title: z.string().trim().min(1).max(200),
+    notes: z.string().max(10_000).default(""),
+    startDate: localDateSchema,
+    pattern: recurrencePatternSchema,
+    end: recurrenceEndSchema,
+    excludedDates: z.array(localDateSchema).default([]),
     createdAt: instantSchema,
     updatedAt: instantSchema,
   })
-  .refine((block) => new Date(block.start) < new Date(block.end), {
-    message: "时间块结束时间必须晚于开始时间",
-    path: ["end"],
-  })
-  .refine((block) => localDateForInstant(block.start) === block.date, {
-    message: "时间块开始时间必须位于所属日期",
-    path: ["start"],
-  })
-  .refine((block) => localDateForInstant(block.end) === block.date, {
-    message: "时间块暂不支持跨越午夜",
-    path: ["end"],
-  });
-
-export const plannerPreferencesSchema = z
-  .object({
-    id: z.literal("default"),
-    timeZone: z.string().min(1),
-    dayStartMinute: z.number().int().min(0).max(24 * 60 - 1),
-    dayEndMinute: z.number().int().min(1).max(24 * 60),
-    slotMinutes: z.number().int().positive().max(60),
-    defaultBlockMinutes: z.number().int().positive().max(24 * 60),
-  })
   .refine(
-    (preferences) => preferences.dayEndMinute > preferences.dayStartMinute,
+    (series) => series.end.kind === "never" || series.end.date >= series.startDate,
     {
-      message: "每日结束时间必须晚于开始时间",
-      path: ["dayEndMinute"],
+      message: "重复结束日期不能早于开始日期",
+      path: ["end"],
     },
   );
 
-export type Task = z.infer<typeof taskSchema>;
-export type TimeBlock = z.infer<typeof timeBlockSchema>;
-export type PlannerPreferences = z.infer<typeof plannerPreferencesSchema>;
+export const focusRecordSchema = z.object({
+  id: z.string().min(1),
+  date: localDateSchema,
+  taskId: z.string().min(1),
+  focusedAt: instantSchema,
+});
 
-export const DEFAULT_PLANNER_PREFERENCES: PlannerPreferences = {
-  id: "default",
-  timeZone: "local",
-  dayStartMinute: 7 * 60,
-  dayEndMinute: 23 * 60,
-  slotMinutes: 15,
-  defaultBlockMinutes: 30,
+export const taskSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().trim().min(1).max(200),
+    notes: z.string().max(10_000).default(""),
+    startDate: localDateSchema,
+    endDate: localDateSchema,
+    status: z.enum(["open", "completed"]),
+    createdAt: instantSchema,
+    updatedAt: instantSchema,
+    completedAt: instantSchema.nullable(),
+    completedOn: localDateSchema.nullable().default(null),
+    seriesId: z.string().min(1).optional(),
+    occurrenceDate: localDateSchema.optional(),
+    occurrenceKey: z.string().min(1).optional(),
+    isSeriesException: z.boolean().optional(),
+  })
+  .superRefine((task, context) => {
+    if (task.endDate < task.startDate) {
+      context.addIssue({
+        code: "custom",
+        message: "截止日期不能早于开始日期",
+        path: ["endDate"],
+      });
+    }
+
+    if (task.status === "open") {
+      if (task.completedAt !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "未完成任务不能包含完成时间",
+          path: ["completedAt"],
+        });
+      }
+
+      if (task.completedOn !== null) {
+        context.addIssue({
+          code: "custom",
+          message: "未完成任务不能包含完成日期",
+          path: ["completedOn"],
+        });
+      }
+    } else if (task.completedAt === null) {
+      context.addIssue({
+        code: "custom",
+        message: "已完成任务必须包含完成时间",
+        path: ["completedAt"],
+      });
+    }
+
+    const recurrenceMetadata = [
+      task.seriesId,
+      task.occurrenceDate,
+      task.occurrenceKey,
+      task.isSeriesException,
+    ];
+    const recurrenceFieldCount = recurrenceMetadata.filter(
+      (value) => value !== undefined,
+    ).length;
+
+    if (recurrenceFieldCount !== 0 && recurrenceFieldCount !== recurrenceMetadata.length) {
+      context.addIssue({
+        code: "custom",
+        message: "重复任务实例元数据必须同时提供",
+        path: ["seriesId"],
+      });
+      return;
+    }
+
+    if (recurrenceFieldCount === recurrenceMetadata.length) {
+      if (task.occurrenceKey !== `${task.seriesId}:${task.occurrenceDate}`) {
+        context.addIssue({
+          code: "custom",
+          message: "重复任务实例键必须匹配系列和名义日期",
+          path: ["occurrenceKey"],
+        });
+      }
+
+      if (task.startDate !== task.endDate) {
+        context.addIssue({
+          code: "custom",
+          message: "重复任务实例必须是单日任务",
+          path: ["endDate"],
+        });
+      }
+
+      if (
+        task.isSeriesException === false &&
+        (task.startDate !== task.occurrenceDate || task.endDate !== task.occurrenceDate)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "未修改的重复任务实例日期必须与名义日期一致",
+          path: ["occurrenceDate"],
+        });
+      }
+    }
+  });
+
+export type RecurrencePattern = z.infer<typeof recurrencePatternSchema>;
+export type RecurrenceEnd = z.infer<typeof recurrenceEndSchema>;
+export type RecurrenceSeries = z.infer<typeof recurrenceSeriesSchema>;
+export type FocusRecord = z.infer<typeof focusRecordSchema>;
+export type Task = z.infer<typeof taskSchema>;
+
+export type DayPlanItem = {
+  task: Task;
+  isOverdue: boolean;
 };
 
 export type DayPlan = {
-  date: string;
-  tasks: Task[];
-  timeBlocks: TimeBlock[];
-  conflictingTimeBlockIds: Set<string>;
+  selectedDate: LocalDate;
+  asOfDate: LocalDate;
+  isToday: boolean;
+  focus: DayPlanItem[];
+  overdue: DayPlanItem[];
+  open: DayPlanItem[];
+  completed: DayPlanItem[];
+  counts: {
+    open: number;
+    completed: number;
+    overdue: number;
+    focus: number;
+  };
 };
-
-export function localDateForInstant(instant: string) {
-  return instant.slice(0, 10);
-}
 
 function isRealCalendarDate(value: string) {
   const parsed = new Date(`${value}T00:00:00.000Z`);

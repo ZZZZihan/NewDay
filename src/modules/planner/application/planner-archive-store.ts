@@ -1,17 +1,16 @@
 import type {
-  PlannerPreferences,
+  FocusRecord,
+  RecurrenceSeries,
   Task,
-  TimeBlock,
 } from "../domain/planner-model";
 import type { PlannerStore } from "./planner-store";
 
+export type PlannerArchiveData = {
+  tasks: readonly Task[];
+  recurrenceSeries?: readonly RecurrenceSeries[];
+  focusRecords?: readonly FocusRecord[];
+};
+
 export interface PlannerArchiveStore extends PlannerStore {
-  listAllTasks(): Promise<Task[]>;
-  listAllTimeBlocks(): Promise<TimeBlock[]>;
-  getPreferences(): Promise<PlannerPreferences>;
-  replaceAllData(data: {
-    tasks: readonly Task[];
-    timeBlocks: readonly TimeBlock[];
-    preferences: PlannerPreferences;
-  }): Promise<void>;
+  replaceAllData(data: PlannerArchiveData): Promise<void>;
 }

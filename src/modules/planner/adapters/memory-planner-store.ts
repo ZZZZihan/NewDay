@@ -1,31 +1,29 @@
-import { getDayPlan } from "../application/day-plan";
-import type { PlannerArchiveStore } from "../application/planner-archive-store";
-import {
-  DEFAULT_PLANNER_PREFERENCES,
-  type DayPlan,
-  type PlannerPreferences,
-  type Task,
-  type TimeBlock,
+import type {
+  PlannerArchiveData,
+  PlannerArchiveStore,
+} from "../application/planner-archive-store";
+import type {
+  FocusRecord,
+  RecurrenceSeries,
+  Task,
 } from "../domain/planner-model";
 
 export class MemoryPlannerStore implements PlannerArchiveStore {
   private tasks = new Map<string, Task>();
-  private timeBlocks = new Map<string, TimeBlock>();
-  private preferences: PlannerPreferences = structuredClone(
-    DEFAULT_PLANNER_PREFERENCES,
-  );
+  private recurrenceSeries = new Map<string, RecurrenceSeries>();
+  private focusRecords = new Map<string, FocusRecord>();
 
   async transaction<T>(operation: () => Promise<T>): Promise<T> {
     const tasksSnapshot = new Map(this.tasks);
-    const timeBlocksSnapshot = new Map(this.timeBlocks);
-    const preferencesSnapshot = structuredClone(this.preferences);
+    const recurrenceSeriesSnapshot = new Map(this.recurrenceSeries);
+    const focusRecordsSnapshot = new Map(this.focusRecords);
 
     try {
       return await operation();
     } catch (error) {
       this.tasks = tasksSnapshot;
-      this.timeBlocks = timeBlocksSnapshot;
-      this.preferences = preferencesSnapshot;
+      this.recurrenceSeries = recurrenceSeriesSnapshot;
+      this.focusRecords = focusRecordsSnapshot;
       throw error;
     }
   }
@@ -34,77 +32,169 @@ export class MemoryPlannerStore implements PlannerArchiveStore {
     return clone(this.tasks.get(id));
   }
 
-  async getTimeBlock(id: string) {
-    return clone(this.timeBlocks.get(id));
+  async getTaskByOccurrenceKey(occurrenceKey: string) {
+    return clone(
+      [...this.tasks.values()].find(
+        (task) => task.occurrenceKey === occurrenceKey,
+      ),
+    );
   }
 
   async putTask(task: Task) {
-    this.tasks.set(task.id, structuredClone(task));
-  }
+    const duplicate = [...this.tasks.values()].find(
+      (stored) =>
+        task.occurrenceKey !== undefined &&
+        stored.occurrenceKey === task.occurrenceKey &&
+        stored.id !== task.id,
+    );
 
-  async putTimeBlock(timeBlock: TimeBlock) {
-    this.timeBlocks.set(timeBlock.id, structuredClone(timeBlock));
+    if (duplicate) {
+      throw new Error(`重复任务实例键：${task.occurrenceKey}`);
+    }
+
+    this.tasks.set(task.id, structuredClone(task));
   }
 
   async deleteTask(id: string) {
     this.tasks.delete(id);
   }
 
-  async deleteTimeBlock(id: string) {
-    this.timeBlocks.delete(id);
+  async listAllTasks() {
+    return cloneValues(this.tasks);
   }
 
-  async deleteTimeBlocksForTask(taskId: string) {
-    for (const [id, block] of this.timeBlocks) {
-      if (block.taskId === taskId) {
-        this.timeBlocks.delete(id);
-      }
-    }
-  }
-
-  async listTasksForDate(date: string) {
+  async listTasksBySeries(seriesId: string) {
     return [...this.tasks.values()]
-      .filter((task) => task.plannedDate === date)
+      .filter((task) => task.seriesId === seriesId)
       .map((task) => structuredClone(task));
   }
 
-  async listTimeBlocksForDate(date: string) {
-    return [...this.timeBlocks.values()]
-      .filter((block) => block.date === date)
-      .map((block) => structuredClone(block));
+  async getRecurrenceSeries(id: string) {
+    return clone(this.recurrenceSeries.get(id));
   }
 
-  async listAllTasks() {
-    return [...this.tasks.values()].map((task) => structuredClone(task));
+  async putRecurrenceSeries(series: RecurrenceSeries) {
+    this.recurrenceSeries.set(series.id, structuredClone(series));
   }
 
-  async listAllTimeBlocks() {
-    return [...this.timeBlocks.values()].map((block) => structuredClone(block));
+  async deleteRecurrenceSeries(id: string) {
+    this.recurrenceSeries.delete(id);
   }
 
-  async getPreferences() {
-    return structuredClone(this.preferences);
+  async listAllRecurrenceSeries() {
+    return cloneValues(this.recurrenceSeries);
   }
 
-  async replaceAllData(data: {
-    tasks: readonly Task[];
-    timeBlocks: readonly TimeBlock[];
-    preferences: PlannerPreferences;
-  }) {
+  async getFocusRecord(id: string) {
+    return clone(this.focusRecords.get(id));
+  }
+
+  async putFocusRecord(record: FocusRecord) {
+    const duplicate = [...this.focusRecords.values()].find(
+      (stored) =>
+        stored.date === record.date &&
+        stored.taskId === record.taskId &&
+        stored.id !== record.id,
+    );
+
+    if (duplicate) {
+      throw new Error(`任务在该日期已设为重点：${record.taskId}`);
+    }
+
+    this.focusRecords.set(record.id, structuredClone(record));
+  }
+
+  async deleteFocusRecord(id: string) {
+    this.focusRecords.delete(id);
+  }
+
+  async listFocusRecordsForDate(date: string) {
+    return [...this.focusRecords.values()]
+      .filter((record) => record.date === date)
+      .map((record) => structuredClone(record));
+  }
+
+  async listFocusRecordsForTask(taskId: string) {
+    return [...this.focusRecords.values()]
+      .filter((record) => record.taskId === taskId)
+      .map((record) => structuredClone(record));
+  }
+
+  async listAllFocusRecords() {
+    return cloneValues(this.focusRecords);
+  }
+
+  async replaceAllData(data: PlannerArchiveData) {
     await this.transaction(async () => {
-      this.tasks = new Map(
-        data.tasks.map((task) => [task.id, structuredClone(task)]),
+      const tasks = new Map<string, Task>();
+      const occurrenceKeys = new Set<string>();
+
+      for (const task of data.tasks) {
+        if (tasks.has(task.id)) {
+          throw new Error(`重复任务 ID：${task.id}`);
+        }
+
+        if (
+          task.occurrenceKey !== undefined &&
+          occurrenceKeys.has(task.occurrenceKey)
+        ) {
+          throw new Error(`重复任务实例键：${task.occurrenceKey}`);
+        }
+
+        tasks.set(task.id, structuredClone(task));
+        if (task.occurrenceKey !== undefined) {
+          occurrenceKeys.add(task.occurrenceKey);
+        }
+      }
+
+      const recurrenceSeries = mapUniqueById(
+        data.recurrenceSeries ?? [],
+        "重复系列",
       );
-      this.timeBlocks = new Map(
-        data.timeBlocks.map((block) => [block.id, structuredClone(block)]),
-      );
-      this.preferences = structuredClone(data.preferences);
+      const focusRecords = new Map<string, FocusRecord>();
+      const focusKeys = new Set<string>();
+
+      for (const record of data.focusRecords ?? []) {
+        if (focusRecords.has(record.id)) {
+          throw new Error(`重复重点记录 ID：${record.id}`);
+        }
+
+        const focusKey = `${record.date}:${record.taskId}`;
+        if (focusKeys.has(focusKey)) {
+          throw new Error(`任务在该日期已设为重点：${record.taskId}`);
+        }
+
+        focusRecords.set(record.id, structuredClone(record));
+        focusKeys.add(focusKey);
+      }
+
+      this.tasks = tasks;
+      this.recurrenceSeries = recurrenceSeries;
+      this.focusRecords = focusRecords;
     });
   }
 
-  async getDayPlan(date: string): Promise<DayPlan> {
-    return getDayPlan(this, date);
+}
+
+function mapUniqueById<T extends { id: string }>(
+  values: readonly T[],
+  label: string,
+) {
+  const result = new Map<string, T>();
+
+  for (const value of values) {
+    if (result.has(value.id)) {
+      throw new Error(`${label} ID 重复：${value.id}`);
+    }
+
+    result.set(value.id, structuredClone(value));
   }
+
+  return result;
+}
+
+function cloneValues<T>(values: Map<string, T>) {
+  return [...values.values()].map((value) => structuredClone(value));
 }
 
 function clone<T>(value: T | undefined): T | undefined {

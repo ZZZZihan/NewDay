@@ -2,6 +2,7 @@
 
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { useEffect } from "react";
+import { Button } from "@heroui/react/button";
 
 export default function AppError({
   error,
@@ -25,10 +26,10 @@ export default function AppError({
         <p>
           可能是浏览器存储暂时不可用。请先重试；如果问题持续，避免清除本站数据。
         </p>
-        <button type="button" className="primary-button" onClick={reset}>
+        <Button type="button" variant="primary" onPress={reset}>
           <RotateCcw size={15} />
           重试
-        </button>
+        </Button>
       </div>
     </main>
   );

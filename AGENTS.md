@@ -7,3 +7,12 @@ This version has breaking changes — APIs, conventions, and file structure may 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
 <!-- END:nextjs-agent-rules -->
+
+## Project management: Linear + Git
+
+- Use the Linear **NewDay** project in team **CoLife (COL)** for requirements, work status, acceptance criteria, and blockers. Project ID: `3456fad5-6548-4edb-8cb4-d5448e7df87c`; URL: https://linear.app/colife/project/newday-aa09602a66c8.
+- Read `docs/project-management.md` when starting or resuming development. Search the project for an existing issue before creating one; keep Linear current as authorized work progresses.
+- Use Git/GitHub for implementation history and review: https://github.com/ZZZZihan/NewDay. New development branches use `codex/col-<number>-<short-description>`; include the `COL-<number>` in commit messages and PR titles, and link the Linear issue in the PR body.
+- Inspect the branch, worktree, staging area, and remote before changes. Preserve pre-existing edits; stage only the intended scope. Continue existing work on its current branch when appropriate instead of renaming or resetting it to match the new convention.
+- Record the candidate commit SHA, relevant validation, and PR URL in the Linear issue. Use `In Review` for code awaiting review; use `Done` only after merge and issue-specific acceptance. Documentation or administrative tasks can finish after their stated deliverables are verified.
+- Linear and GitHub are the live status sources; repository status documents are dated evidence. Do not equate linked repositories with configured automatic status synchronization, or software checks with real-model or personal-use acceptance.

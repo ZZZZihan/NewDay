@@ -2,6 +2,10 @@
 
 NewDay 是一个本地优先的每日任务清单。它只关注“哪几天需要看到这件事”，不再提供小时级时间轴。
 
+## 项目管理
+
+需求、进度和验收统一放在 [Linear · NewDay](https://linear.app/colife/project/newday-aa09602a66c8)，代码、分支、提交与 PR 放在 [GitHub · ZZZZihan/NewDay](https://github.com/ZZZZihan/NewDay)。后续开发先关联 Linear issue，再以 `COL-编号` 串起分支、提交和 PR；具体步骤见 [Linear + Git 工作流](./docs/project-management.md)。
+
 ## 核心功能
 
 - 桌面端采用左右分栏：左侧显示大号当前时钟，右侧专注每日任务

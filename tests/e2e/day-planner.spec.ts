@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 function shiftDate(date: string, days: number) {
   const value = new Date(`${date}T12:00:00`);
@@ -117,6 +117,112 @@ test("a daily recurrence creates an independent task tomorrow", async ({ page })
   await expect(page.getByText("已完成 · 1")).toBeVisible();
   await page.getByRole("button", { name: "前一天" }).click();
   await expect(page.getByRole("button", { name: "完成任务：每日复盘" })).toBeVisible();
+});
+
+test("a future broader recurrence rule respects its cutover and can be undone", async ({
+  page,
+}) => {
+  const selectedDate = await page.getByLabel("选择日期").inputValue();
+  const preCutover = shiftDate(selectedDate, 1);
+  const cutover = shiftDate(selectedDate, 7);
+  const afterCutover = shiftDate(cutover, 1);
+  const title = "每周检查任务";
+  await page.getByTestId("quick-task-input").fill(title);
+  await page.getByRole("button", { name: "添加任务" }).click();
+  await page.getByRole("button", { name: `编辑任务：${title}` }).click();
+
+  let dialog = page.getByRole("dialog", { name: "编辑任务" });
+  await dialog.getByLabel("重复", { exact: true }).selectOption("weekly");
+  await dialog.getByRole("button", { name: "保存" }).click();
+
+  await page.getByLabel("选择日期").fill(cutover);
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: `编辑任务：${title}` }).click();
+  dialog = page.getByRole("dialog", { name: "编辑任务" });
+  await dialog.getByLabel("编辑范围").selectOption("series");
+  await dialog.getByLabel("重复", { exact: true }).selectOption("daily");
+  await dialog.getByRole("button", { name: "保存" }).click();
+
+  const notice = page.getByTestId("app-notice");
+  await expect(notice).toContainText("后续重复已更新");
+  await page.getByLabel("选择日期").fill(preCutover);
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toHaveCount(0);
+  await page.getByLabel("选择日期").fill(afterCutover);
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toBeVisible();
+
+  await notice.getByRole("button", { name: "撤销" }).click();
+  await expect(notice).toContainText("已撤销");
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toHaveCount(0);
+  await page.getByLabel("选择日期").fill(cutover);
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toBeVisible();
+});
+
+test("stopping recurrence previews impact, supports cancel, and can be undone", async ({
+  page,
+}) => {
+  const selectedDate = await page.getByLabel("选择日期").inputValue();
+  const tomorrow = shiftDate(selectedDate, 1);
+  const title = "两天重复任务";
+  await page.getByTestId("quick-task-input").fill(title);
+  await page.getByRole("button", { name: "添加任务" }).click();
+  await page.getByRole("button", { name: `编辑任务：${title}` }).click();
+
+  let dialog = page.getByRole("dialog", { name: "编辑任务" });
+  await dialog.getByLabel("重复", { exact: true }).selectOption("daily");
+  await dialog.getByLabel("重复结束").selectOption("onDate");
+  await dialog.getByLabel("重复截止日期").fill(tomorrow);
+  await dialog.getByRole("button", { name: "保存" }).click();
+
+  await page.getByRole("button", { name: "后一天" }).click();
+  await expect(page.getByLabel("选择日期")).toHaveValue(tomorrow);
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "前一天" }).click();
+  await page.getByRole("button", { name: `编辑任务：${title}` }).click();
+  dialog = page.getByRole("dialog", { name: "编辑任务" });
+
+  const expectedMessage = `将停止 ${selectedDate} 之后的重复，并移除 1 个已生成且尚未完成的普通实例。你可以在提示消失前撤销。继续吗？`;
+  let confirmationPromise = page.waitForEvent("dialog");
+  let stopClick = dialog
+    .getByRole("button", { name: "停止后续重复" })
+    .click();
+  let confirmation = await confirmationPromise;
+  expect(confirmation.message()).toBe(expectedMessage);
+  await confirmation.dismiss();
+  await stopClick;
+  await expect(dialog).toBeVisible();
+
+  confirmationPromise = page.waitForEvent("dialog");
+  stopClick = dialog.getByRole("button", { name: "停止后续重复" }).click();
+  confirmation = await confirmationPromise;
+  expect(confirmation.message()).toBe(expectedMessage);
+  await confirmation.accept();
+  await stopClick;
+  await expect(dialog).toHaveCount(0);
+
+  const notice = page.getByTestId("app-notice");
+  await expect(notice).toContainText("已停止后续重复");
+  await page.getByRole("button", { name: "后一天" }).click();
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toHaveCount(0);
+
+  await notice.getByRole("button", { name: "撤销" }).click();
+  await expect(notice).toContainText("已撤销");
+  await expect(
+    page.getByRole("button", { name: `编辑任务：${title}` }),
+  ).toBeVisible();
 });
 
 test("today focus is limited to three tasks without duplicate rows", async ({ page }) => {

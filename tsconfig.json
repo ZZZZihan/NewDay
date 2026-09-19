@@ -1,34 +1,33 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "strict": true,
-    "noEmit": true,
-    "esModuleInterop": true,
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "jsx": "react-jsx",
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
     ],
+    "jsx": "react-jsx",
+    "allowJs": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./apps/web/src/*"
+      ],
+      "@newday/core/*": [
+        "./packages/core/src/*"
+      ]
     }
   },
   "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "tooling/**/*.mjs",
+    "tooling/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "apps/*/dist",
+    "apps/web/.next"
+  ]
 }

@@ -8,6 +8,16 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
+## Workspace responsibilities
+
+- `apps/web`: Next.js frontend. Read its installed guides at `apps/web/node_modules/next/dist/docs/` before frontend changes. Keep `src/app` limited to routing and layout; planner UI, hooks, HTTP requests, and browser migration live in `src/features/planner`.
+- `apps/api`: independent Fastify HTTP server and SQLite persistence. HTTP validation belongs in `src/http`, business orchestration in `src/services`, database access in `src/storage`.
+- `packages/core`: framework-independent domain rules, application operations, storage interfaces, and backup contracts. The frontend may execute domain/contract helpers but must call the HTTP API to run application operations.
+- `tests`: shared regression suites and test stores. Browser tests use a disposable SQLite database on ports 3100/3002; never point replacement-import fixtures at development data.
+- `tooling`: process coordination and architecture lint rules. Root `pnpm dev` starts web and API; each app also has independent dev/build/start commands.
+
+Read `docs/architecture.md` for dependencies and API ownership. Run `pnpm check`, `pnpm build`, and the relevant `pnpm test:e2e` scenarios for changes spanning the HTTP interface or persistence. Preserve the existing working tree when moving code.
+
 ## Project management: Linear + Git
 
 - Use the Linear **NewDay** project in team **CoLife (COL)** for requirements, work status, acceptance criteria, and blockers. Project ID: `3456fad5-6548-4edb-8cb4-d5448e7df87c`; URL: https://linear.app/colife/project/newday-aa09602a66c8.

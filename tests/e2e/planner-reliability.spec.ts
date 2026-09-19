@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 import { readFile } from "node:fs/promises";
 
@@ -23,7 +23,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   const archive = JSON.parse(await readFile(exportedPath, "utf8"));
   expect(archive).toEqual({
     format: "newday-backup",
-    version: 3,
+    version: 4,
     exportedAt: expect.any(String),
     tasks: [
       expect.objectContaining({
@@ -53,7 +53,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   );
 });
 
-test("version 3 backup includes recurrence and today's focus", async ({
+test("version 4 backup includes recurrence and today's focus", async ({
   page,
 }, testInfo) => {
   await page.getByTestId("quick-task-input").fill("周期重点任务");
@@ -68,7 +68,7 @@ test("version 3 backup includes recurrence and today's focus", async ({
   await page.getByRole("button", { name: "更多操作" }).click();
   await page.getByRole("menuitem", { name: "导出数据" }).click();
   const download = await downloadPromise;
-  const exportedPath = testInfo.outputPath("newday-v3-planning-data.json");
+  const exportedPath = testInfo.outputPath("newday-v4-planning-data.json");
   await download.saveAs(exportedPath);
   const archive = JSON.parse(await readFile(exportedPath, "utf8"));
   const focusedRecord = archive.focusRecords[0];
@@ -76,16 +76,22 @@ test("version 3 backup includes recurrence and today's focus", async ({
     (task: { id?: string }) => task.id === focusedRecord.taskId,
   );
 
-  expect(archive.version).toBe(3);
+  expect(archive.version).toBe(4);
   expect(focusedTask).toEqual(
     expect.objectContaining({
       seriesId: expect.any(String),
+      logicalSeriesId: expect.any(String),
       occurrenceDate: expect.any(String),
       occurrenceKey: expect.any(String),
     }),
   );
   expect(archive.recurrenceSeries).toEqual([
-    expect.objectContaining({ title: "周期重点任务", pattern: { kind: "daily" } }),
+    expect.objectContaining({
+      title: "周期重点任务",
+      logicalSeriesId: expect.any(String),
+      effectiveEndDate: null,
+      pattern: { kind: "daily" },
+    }),
   ]);
   expect(archive.focusRecords).toEqual([
     expect.objectContaining({ taskId: focusedTask.id }),

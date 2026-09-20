@@ -109,7 +109,7 @@ test("opening another store does not recover a live sender as an unknown attempt
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("a second process leaves a live sender alone and recovers it after exit", async () => {
+test("a second process recovers a sender that exits between recovery and claim", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-process-sender-"));
   const path = join(directory, "planner.sqlite");
   try {
@@ -142,9 +142,21 @@ test("a second process leaves a live sender alone and recovers it after exit", a
         assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "sending");
         assert.equal((await observer.getNotionConnection("workspace-1"))?.status, "active");
         await observer.enqueueNotionOutbox(await operation(observer, "operation-2"));
-        child.stdin.end();
-        if (child.exitCode === null) await once(child, "exit", { signal: AbortSignal.timeout(5_000) });
-        assert.equal(child.exitCode, 0, stderr);
+        const originalTransaction = observer.transaction.bind(observer);
+        let transactions = 0;
+        observer.transaction = (<T>(work: () => Promise<T>) => {
+          const result = originalTransaction(work);
+          if (++transactions !== 1) return result;
+          return result.then(async (value) => {
+            // The first committed recovery saw a live process. It exits before
+            // the claim transaction starts, exercising the second check.
+            assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "sending");
+            child.stdin.end();
+            if (child.exitCode === null) await once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+            assert.equal(child.exitCode, 0, stderr);
+            return value;
+          });
+        }) as typeof observer.transaction;
         await assert.rejects(observer.markNotionOutboxSending("operation-2", at), /connection is paused/);
         assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "unknown");
         assert.equal((await observer.getNotionOutboxOperation("operation-2"))?.status, "pending");
@@ -157,6 +169,56 @@ test("a second process leaves a live sender alone and recovers it after exit", a
       } finally { recovered.close(); }
     } finally {
       if (child.exitCode === null) { child.kill(); await once(child, "exit"); }
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("closing a sender store pauses its workspace even while its process remains alive", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-closed-sender-"));
+  const path = join(directory, "planner.sqlite");
+  try {
+    const seed = new SQLitePlannerStore(path);
+    try {
+      await seed.putTask(task());
+      await seed.putNotionConnection(connection());
+      await seed.putNotionTaskMapping(mapping());
+      await seed.enqueueNotionOutbox(await operation(seed));
+    } finally { seed.close(); }
+
+    const moduleUrl = new URL("../src/storage/sqlite-planner-store.ts", import.meta.url).href;
+    const childCode = `import { SQLitePlannerStore } from ${JSON.stringify(moduleUrl)};
+      const store = new SQLitePlannerStore(process.argv[1]);
+      await store.markNotionOutboxSending("operation-1", ${JSON.stringify(at)});
+      process.stdout.write("READY\\n");
+      process.stdin.once("data", () => {
+        store.close();
+        process.stdout.write("CLOSED\\n");
+        process.stdin.resume();
+      });`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childCode, path], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    try {
+      const [ready] = await once(child.stdout, "data", { signal: AbortSignal.timeout(5_000) });
+      assert.equal((ready as Buffer).toString(), "READY\n", stderr);
+      const observer = new SQLitePlannerStore(path);
+      try {
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "sending");
+        await observer.enqueueNotionOutbox(await operation(observer, "operation-2"));
+        child.stdin.write("CLOSE\n");
+        const [closed] = await once(child.stdout, "data", { signal: AbortSignal.timeout(5_000) });
+        assert.equal((closed as Buffer).toString(), "CLOSED\n", stderr);
+        assert.equal(child.exitCode, null, "the owner process is still alive");
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "unknown");
+        assert.equal((await observer.getNotionConnection("workspace-1"))?.status, "paused_unknown");
+        await assert.rejects(observer.markNotionOutboxSending("operation-2", at), /connection is paused/);
+      } finally { observer.close(); }
+    } finally {
+      child.stdin.end();
+      if (child.exitCode === null) await once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+      assert.equal(child.exitCode, 0, stderr);
     }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

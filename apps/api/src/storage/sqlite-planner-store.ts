@@ -62,7 +62,24 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     } catch (error) { activeNotionSenderInstances.delete(this.senderInstanceId); this.database.close(); throw error; }
   }
 
-  close() { activeNotionSenderInstances.delete(this.senderInstanceId); this.database.close(); }
+  close() {
+    // A process can keep running after this connection closes. Persist the
+    // ambiguous HTTP outcome before removing the only live store instance;
+    // PID liveness alone cannot reveal that the connection was closed.
+    activeNotionSenderInstances.delete(this.senderInstanceId);
+    try {
+      if (this.database.prepare("SELECT 1 FROM notion_outbox WHERE status='sending' LIMIT 1").get()) {
+        this.database.exec("BEGIN IMMEDIATE");
+        try { this.recoverOrphanedNotionSends(); this.database.exec("COMMIT"); }
+        catch (error) { this.database.exec("ROLLBACK"); throw error; }
+      }
+    } catch (error) {
+      // Keep the store usable if SQLite could not persist the pause.
+      activeNotionSenderInstances.add(this.senderInstanceId);
+      throw error;
+    }
+    this.database.close();
+  }
   setFailureInjector(injector?: (point: StorageFailurePoint) => void) { this.failureInjector = injector; }
 
   transaction<T>(operation: () => Promise<T>): Promise<T> {
@@ -314,9 +331,13 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     // Recovery must commit separately. A later claim rejection must not roll
     // an orphaned attempt back to sending or reopen its workspace.
     await this.transaction(async () => { this.recoverOrphanedNotionSends(); });
-    return this.transaction(async () => {
+    const claim = await this.transaction(async () => {
       const operation = await this.getNotionOutboxOperation(operationId);
       if (!operation || operation.status !== "pending") throw new Error("Notion operation is not pending");
+      // The owner may have exited after the first committed recovery. Recheck
+      // under the claim write lock; return a result rather than throwing so
+      // the unknown transition and workspace pause are committed.
+      if (this.recoverOrphanedNotionSends(operation.workspaceId)) return null;
       const connection = await this.getNotionConnection(operation.workspaceId);
       if (connection?.status !== "active") throw new Error("Notion connection is paused");
       const version = await this.getPlanningVersion();
@@ -340,6 +361,8 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       this.updateNotionOutbox(sending);
       return sending;
     });
+    if (claim === null) throw new Error("Notion connection is paused");
+    return claim;
   }
 
   /** The caller has completed preflight but has not started HTTP. A later
@@ -822,10 +845,13 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   /** Caller holds a SQLite write transaction. A live process owns its HTTP
    * attempt; an absent owner is an ambiguous result that blocks later sends. */
-  private recoverOrphanedNotionSends() {
+  private recoverOrphanedNotionSends(workspaceId?: string): boolean {
     const at = new Date().toISOString();
     const orphanedWorkspaces = new Set<string>();
-    for (const raw of this.many<unknown>("SELECT payload FROM notion_outbox WHERE status='sending'")) {
+    const query = workspaceId
+      ? this.many<unknown>("SELECT payload FROM notion_outbox WHERE status='sending' AND workspace_id=?", workspaceId)
+      : this.many<unknown>("SELECT payload FROM notion_outbox WHERE status='sending'");
+    for (const raw of query) {
       const operation = notionOutboxOperationSchema.parse(raw);
       if (isNotionSenderLive(operation.sendingOwner)) continue;
       this.updateNotionOutbox({ ...operation, status: "unknown" });
@@ -836,6 +862,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         payload=json_set(payload,'$.status','paused_unknown','$.updatedAt',?)
         WHERE workspace_id=? AND status IN ('active','paused')`).run(at, workspaceId);
     }
+    return orphanedWorkspaces.size > 0;
   }
 }
 

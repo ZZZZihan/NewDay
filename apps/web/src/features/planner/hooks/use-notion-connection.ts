@@ -5,7 +5,23 @@ import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructu
 
 const oauthFragment = /^#notion-oauth=(ready|cancelled|error):([A-Za-z0-9_-]{43})(?::([A-Za-z0-9_-]{43}))?$/;
 
-export function useNotionConnection(onReturn: () => void, onScanComplete: () => Promise<void>) {
+export function writableNotionWorkspaces(status: NotionStatus | null,
+  structures: Record<string, NotionStructureProgress>, reads: Record<string, NotionReadStatus>,
+  syncs: Record<string, NotionSyncStatus>) {
+  return status?.connections.filter((item) => {
+    const read = reads[item.workspaceId];
+    const sync = syncs[item.workspaceId];
+    const localWriteReady = sync?.connectionStatus === "active" ||
+      (sync?.connectionStatus === "paused" && sync.pauseReason === "preflight_read");
+    return item.status === "active" && structures[item.workspaceId]?.state === "ready" &&
+      localWriteReady && read?.sources.some((source) =>
+        source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) &&
+        (!source.watermark?.lastError || ["network", "remote", "rate_limited", "local"].includes(source.watermark.lastError)));
+  }) ?? [];
+}
+
+export function useNotionConnection(onReturn: () => void, onScanComplete: () => Promise<void>,
+  onAvailabilityChanged?: (workspaceIds: readonly string[]) => void) {
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [structures, setStructures] = useState<Record<string, NotionStructureProgress>>({});
   const [reads, setReads] = useState<Record<string, NotionReadStatus>>({});
@@ -16,25 +32,30 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   const refresh = useCallback(async () => {
     try {
       const next = await notionApi.status();
-      setStatus(next);
       const entries = await Promise.all(next.connections.map(async (item) => {
         try { return [item.workspaceId, await notionApi.structure(item.workspaceId)] as const; }
         catch { return null; }
       }));
-      setStructures(Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+      const nextStructures = Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null));
       const readEntries = await Promise.all(next.connections.map(async (item) => {
         try { return [item.workspaceId, await notionApi.readStatus(item.workspaceId)] as const; }
         catch { return null; }
       }));
-      setReads(Object.fromEntries(readEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+      const nextReads = Object.fromEntries(readEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null));
       const syncEntries = await Promise.all(next.connections.map(async (item) => {
         try { return [item.workspaceId, await notionApi.syncStatus(item.workspaceId)] as const; }
         catch { return null; }
       }));
-      setSyncs(Object.fromEntries(syncEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+      const nextSyncs = Object.fromEntries(syncEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null));
+      setStatus(next);
+      setStructures(nextStructures);
+      setReads(nextReads);
+      setSyncs(nextSyncs);
+      onAvailabilityChanged?.(writableNotionWorkspaces(next, nextStructures, nextReads, nextSyncs)
+        .map((item) => item.workspaceId));
     }
     catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态"); }
-  }, []);
+  }, [onAvailabilityChanged]);
 
   useEffect(() => {
     const match = window.location.hash.match(oauthFragment);

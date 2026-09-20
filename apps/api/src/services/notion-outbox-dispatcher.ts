@@ -36,6 +36,9 @@ export interface NotionTaskTransport {
   updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>): Promise<void>;
 }
 
+/** The transport proves that no page write was attempted. */
+export class NotionWritePreflightFailure extends Error {}
+
 type DispatchResult = "confirmed" | "unknown" | "quarantined" | "superseded" | "paused";
 
 /** Serializes one local process; SQLite fences unresolved sends across restarts. */
@@ -84,7 +87,10 @@ export class NotionOutboxDispatcher {
         return this.markUnknownOrQuarantined(operation);
       }
       try { await this.transport.createPage(connection, mapping, operation.desired); }
-      catch { /* The write may have committed before its response was lost. */ }
+      catch (error) {
+        if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+        // The page write may have committed before its response was lost.
+      }
       return this.readBackAndConfirm(operation, connection, mapping);
     }
 
@@ -110,7 +116,10 @@ export class NotionOutboxDispatcher {
     }).remotePatch;
     if (Object.keys(patch).length === 0) return this.markUnknownOrQuarantined(operation);
     try { await this.transport.updatePage(connection, mapping, patch); }
-    catch { /* Read back before treating an error as a failed write. */ }
+    catch (error) {
+      if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+      // Read back before treating an attempted write as failed.
+    }
     return this.readBackAndConfirm(operation, connection, mapping);
   }
 

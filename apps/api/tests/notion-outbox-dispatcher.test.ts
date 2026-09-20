@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { notionClientKey, type NotionConnection, type NotionOutboxOperation, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 
-import { NotionOutboxDispatcher, type NotionTaskPage, type NotionTaskTransport } from "../src/services/notion-outbox-dispatcher.js";
+import { NotionOutboxDispatcher, NotionWritePreflightFailure, type NotionTaskPage, type NotionTaskTransport } from "../src/services/notion-outbox-dispatcher.js";
 import { NotionSyncService } from "../src/services/notion-sync-service.js";
 import { PlannerService } from "../src/services/planner-service.js";
 import { SQLitePlannerStore } from "../src/storage/sqlite-planner-store.js";
@@ -122,6 +122,22 @@ test("failed remote preflight pauses an unsent intent and explicit resume retrie
     await sync.resume("workspace-1");
     assert.equal((await sync.drain("workspace-1")).operations[0]?.status, "confirmed");
     assert.equal(fake.calls.update, 1);
+  } finally { store.close(); }
+});
+
+test("a setup failure after successful preflight stays retryable without claiming an ambiguous page write", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  fake.transport.createPage = async () => {
+    throw new NotionWritePreflightFailure("credential disappeared before page request");
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    assert.equal(await dispatcher.dispatch("operation-1"), "paused");
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "pending");
+    assert.equal((await store.getNotionConnection("workspace-1"))?.pauseReason, "preflight_read");
+    assert.equal(fake.calls.create, 0);
+    assert.equal(fake.pages.size, 0);
   } finally { store.close(); }
 });
 
@@ -262,6 +278,43 @@ test("a newer local intent during preflight supersedes the unsent attempt withou
     assert.equal(await dispatcher.dispatch("operation-2"), "confirmed");
     assert.deepEqual(fake.pages.get("remote-1")?.fields, { ...second, title: remote.title });
     assert.equal((await store.getTask("task-1"))?.title, remote.title);
+  } finally { store.close(); }
+});
+
+test("a newer intent also supersedes an unsent attempt when its remote preflight fails", async () => {
+  const first: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const second: NotionTaskFields = { ...fields, date: ["2026-09-10", "2026-09-10"] };
+  const store = await setup("remote-1", first);
+  const fake = fakeTransport();
+  fake.pages.set("remote-1", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields, inTrash: false });
+  const read = fake.transport.readPage;
+  let failed = false;
+  fake.transport.readPage = async (...args) => {
+    if (!failed) {
+      failed = true;
+      await store.transaction(async () => {
+        const current = (await store.getTask("task-1"))!;
+        await store.putTask({ ...current, startDate: second.date![0], endDate: second.date![1] });
+        const older = (await store.getNotionOutboxOperation("operation-1"))!;
+        await store.enqueueNotionOutbox({ ...older, operationId: "operation-2", desired: second,
+          status: "pending", attemptCount: 0, lastAttemptAt: null, confirmedAt: null });
+      });
+      throw new Error("read failed after a newer local edit");
+    }
+    return read(...args);
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    assert.equal(await dispatcher.dispatch("operation-1"), "paused");
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "superseded");
+    assert.equal((await store.getNotionOutboxOperation("operation-2"))?.status, "pending");
+    assert.equal(fake.calls.update, 0);
+    const sync = new NotionSyncService(store, dispatcher);
+    await sync.resume("workspace-1");
+    assert.equal(await dispatcher.dispatch("operation-2"), "confirmed");
+    assert.equal((await store.getNotionOutboxOperation("operation-2"))?.status, "confirmed");
+    assert.deepEqual(fake.pages.get("remote-1")?.fields, second);
   } finally { store.close(); }
 });
 

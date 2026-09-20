@@ -18,7 +18,7 @@ import { PlannerStatus } from "./planner-status";
 import { FullscreenToggle } from "./fullscreen-toggle";
 import { LifePanel, type LifeView } from "./life-panel";
 import { useLifeWorkspace } from "../hooks/use-life-workspace";
-import { useNotionConnection } from "../hooks/use-notion-connection";
+import { useNotionConnection, writableNotionWorkspaces } from "../hooks/use-notion-connection";
 import { NotionConnectionPanel } from "./notion-connection-panel";
 
 const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"] as const;
@@ -40,7 +40,13 @@ export function DayPlanner() {
   const refreshAfterNotionScan = useCallback(async () => {
     await Promise.all([refresh(), refreshLife()]);
   }, [refresh, refreshLife]);
-  const notion = useNotionConnection(onNotionReturn, refreshAfterNotionScan);
+  const onNotionAvailabilityChanged = useCallback((workspaceIds: readonly string[]) => {
+    setQuickWorkspaceId((current) => current && !workspaceIds.includes(current) ? "" : current);
+  }, []);
+  const notion = useNotionConnection(onNotionReturn, refreshAfterNotionScan, onNotionAvailabilityChanged);
+  const writableWorkspaces = writableNotionWorkspaces(notion.status, notion.structures, notion.reads, notion.syncs);
+  const quickWorkspaceAvailable = writableWorkspaces.some((item) => item.workspaceId === quickWorkspaceId);
+  const selectedQuickWorkspaceId = quickWorkspaceAvailable ? quickWorkspaceId : "";
   if (!selectedDate) return <PlannerLoading />;
 
   const selectedIsToday = selectedDate === today;
@@ -59,18 +65,6 @@ export function DayPlanner() {
   );
   const taskTotal = (dayPlan?.counts.open ?? 0) + (dayPlan?.counts.completed ?? 0);
   const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
-  const writableWorkspaces = notion.status?.connections.filter((item) => {
-    const read = notion.reads[item.workspaceId];
-    const sync = notion.syncs[item.workspaceId];
-    const localWriteReady = sync?.connectionStatus === "active" ||
-      (sync?.connectionStatus === "paused" && sync.pauseReason === "preflight_read");
-    return item.status === "active" && notion.structures[item.workspaceId]?.state === "ready" &&
-      localWriteReady && read?.sources.some((source) =>
-        source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) &&
-        (!source.watermark?.lastError || ["network", "remote", "rate_limited", "local"].includes(source.watermark.lastError)));
-  }) ?? [];
-  const selectedQuickWorkspaceId = writableWorkspaces.some((item) => item.workspaceId === quickWorkspaceId)
-    ? quickWorkspaceId : "";
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);

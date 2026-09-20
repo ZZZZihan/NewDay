@@ -450,7 +450,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       const connection = await this.getNotionConnection(operation.workspaceId);
       if (!connection || connection.status !== "active" ||
         (await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) return false;
-      this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
+      // The preflight never sent HTTP. A newer local intent may have arrived
+      // while the read was in flight; do not revive an obsolete pending write.
+      if (!await this.supersedeNotionUnsentIfNewer(operationId)) {
+        this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
+      }
       await this.putNotionConnection({ ...connection, status: "paused", pauseReason: "preflight_read", updatedAt: at });
       return true;
     });

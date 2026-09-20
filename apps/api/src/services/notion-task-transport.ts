@@ -2,7 +2,7 @@ import { Client, type CreatePageParameters, type PageObjectResponse, type Update
 import { notionTaskFieldsSchema, type NotionConnection, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 
 import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
-import type { NotionTaskPage, NotionTaskTransport } from "./notion-outbox-dispatcher.js";
+import { NotionWritePreflightFailure, type NotionTaskPage, type NotionTaskTransport } from "./notion-outbox-dispatcher.js";
 import { NotionReadFailure, assertRuleSourceReadable, parseRow } from "./notion-read-gateway.js";
 
 type Properties = NonNullable<CreatePageParameters["properties"]>;
@@ -60,21 +60,33 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
 
   async createPage(connection: NotionConnection, mapping: NotionTaskMapping, fields: NotionTaskFields) {
     if (mapping.remotePageId) throw new Error("Notion mapping already has a page");
-    const client = this.client(connection, mapping);
-    await assertRuleSourceReadable(client, connection);
-    const properties = this.sharedProperties(connection, notionTaskFieldsSchema.parse(fields));
-    properties[this.propertyId(connection, "NewDay Key")] = {
-      rich_text: [{ type: "text", text: { content: mapping.clientKey } }],
-    };
+    let client: Client;
+    let properties: Properties;
+    try {
+      client = this.client(connection, mapping);
+      properties = this.sharedProperties(connection, notionTaskFieldsSchema.parse(fields));
+      properties[this.propertyId(connection, "NewDay Key")] = {
+        rich_text: [{ type: "text", text: { content: mapping.clientKey } }],
+      };
+    } catch {
+      throw new NotionWritePreflightFailure("Notion create setup failed before sending HTTP");
+    }
+    // readTarget already checked Rules accessibility. Keep no asynchronous
+    // preflight between the dispatcher's epoch fence and the page request.
     await client.pages.create({ parent: { type: "data_source_id", data_source_id: mapping.dataSourceId }, properties });
   }
 
   async updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>) {
     if (!mapping.remotePageId) throw new Error("Notion mapping has no page");
-    const client = this.client(connection, mapping);
-    await assertRuleSourceReadable(client, connection);
-    const properties = this.sharedProperties(connection, patch);
-    if (!Object.keys(properties).length) throw new Error("Notion update has no shared fields");
+    let client: Client;
+    let properties: Properties;
+    try {
+      client = this.client(connection, mapping);
+      properties = this.sharedProperties(connection, patch);
+      if (!Object.keys(properties).length) throw new Error("Notion update has no shared fields");
+    } catch {
+      throw new NotionWritePreflightFailure("Notion update setup failed before sending HTTP");
+    }
     await client.pages.update({ page_id: mapping.remotePageId,
       properties: properties as NonNullable<UpdatePageParameters["properties"]> });
   }

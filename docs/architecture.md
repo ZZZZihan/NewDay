@@ -151,7 +151,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 
 ### Notion 连接与同步候选 API
 
-`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化。COL-35/COL-37 候选接入一次性任务读取与写回，仍需在隔离 Notion 工作区验收。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md)、[结构初始化说明](./notion-structure-operations.md)和[一次性任务写回说明](./notion-write-operations.md)。
+`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化。COL-35/COL-37 候选接入一次性任务读取与写回，COL-38 候选增加重复规则读取与稳定实例同步；这些路径仍需在隔离 Notion 工作区验收。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md)、[结构初始化说明](./notion-structure-operations.md)、[一次性任务写回说明](./notion-write-operations.md)和[联动契约](./notion-sync-contract.md)。
 
 | 方法与路径 | 输入 | 成功响应 |
 | --- | --- | --- |
@@ -164,7 +164,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `GET /api/notion/connections/:workspaceId/structure` | 无 | 当前初始化步骤、读回 ID 与待核对类别，不含令牌 |
 | `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
 | `GET /api/notion/connections/:workspaceId/read` | 无 | 各数据源扫描水位与失败类别 |
-| `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、一次性任务 |
+| `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、规则、任务与实例；生成窗口内缺少的规则实例进入持久待发送队列 |
 | `GET /api/notion/connections/:workspaceId/sync` | 无 | 写回操作状态及字段冲突，不含凭据 |
 | `POST /api/notion/connections/:workspaceId/sync/drain` | `{}` | 串行尝试待发送操作，返回最新状态 |
 | `POST /api/notion/connections/:workspaceId/sync/operations/:operationId/reconcile` | `{}` | 对未知操作只读核对；不再次发送 |

@@ -71,13 +71,20 @@ export class PlannerService {
         if (command.type === "createTask" && command.input.notionWorkspaceId) {
           const workspaceId = command.input.notionWorkspaceId;
           const connection = await this.store.getNotionConnection(workspaceId);
-          if (!connection || connection.status !== "active" || !connection.dataSources.tasks) {
+          if (!connection || connection.status !== "active" ||
+            !connection.dataSources.areas || !connection.dataSources.projects ||
+            !connection.dataSources.tasks || !connection.dataSources.rules) {
             throw new ApiError(409, "Notion 工作区尚未准备好，无法创建联动任务");
           }
+          const taskSourceId = connection.dataSources.tasks.dataSourceId;
+          const scanned = (await this.store.listNotionScanWatermarks()).some((watermark) =>
+            watermark.workspaceId === workspaceId && watermark.dataSourceId === taskSourceId &&
+            watermark.lastSuccessAt !== null && !watermark.lastError);
+          if (!scanned) throw new ApiError(409, "Notion 任务尚未完成首次成功扫描");
           if (newLinks.has(command.input.id) || await this.store.getNotionTaskMapping(command.input.id)) {
             throw new ApiError(409, "联动任务标识已存在");
           }
-          newLinks.set(command.input.id, { workspaceId, dataSourceId: connection.dataSources.tasks.dataSourceId,
+          newLinks.set(command.input.id, { workspaceId, dataSourceId: taskSourceId,
             installationId: connection.installationId });
         }
         if (command.type === "setTodayFocus" || command.type === "removeTodayFocus" || !("taskId" in command.input)) continue;

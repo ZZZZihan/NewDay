@@ -18,11 +18,22 @@ const taskId = "linked-task";
 const initial: NotionTaskFields = { title: "第一项", date: ["2026-09-21", "2026-09-21"], completed: false };
 
 function connection(): NotionConnection {
+  const source = (name: string) => {
+    const propertyIds: Record<string, string> = name === "tasks"
+      ? { Name: "title", "Plan Date": "date", Completed: "done", "NewDay Key": "key" } : {};
+    return { databaseId: `${name}-db`, dataSourceId: `${name}-source`,
+      schemaFingerprint: "test-fingerprint", propertyIds };
+  };
   return { workspaceId, installationId: "test-installation", rootPageId: "test-root",
-    status: "active", updatedAt: at, dataSources: { tasks: {
-      databaseId: "tasks-db", dataSourceId: "tasks-source", schemaFingerprint: "test-fingerprint",
-      propertyIds: { Name: "title", "Plan Date": "date", Completed: "done", "NewDay Key": "key" },
-    } } };
+    status: "active", updatedAt: at, dataSources: {
+      areas: source("areas"), projects: source("projects"), tasks: source("tasks"), rules: source("rules"),
+    } };
+}
+
+async function seedReady(store: SQLitePlannerStore) {
+  await store.putNotionConnection(connection());
+  await store.putNotionScanWatermark({ workspaceId, dataSourceId: "tasks-source",
+    completedThrough: at, lastAttemptAt: at, lastSuccessAt: at, lastError: null, lastErrorAt: null });
 }
 
 function transport() {
@@ -55,6 +66,12 @@ test("opt-in task creation commits its mapping and intent, then confirms one rem
   try {
     await store.putNotionConnection(connection());
     const planner = new PlannerService(store, () => Date.parse(at));
+    await assert.rejects(planner.commands([{ type: "createTask", input: {
+      id: "before-scan", title: "不能提前创建", startDate: "2026-09-21",
+      endDate: "2026-09-21", now: at, notionWorkspaceId: workspaceId,
+    } }], "test-client"), /首次成功扫描/);
+    assert.equal(await store.getTask("before-scan"), undefined);
+    await seedReady(store);
     await assert.rejects(planner.commands([{ type: "createTask", input: {
       id: "wrong-workspace", title: "不能创建", startDate: "2026-09-21", endDate: "2026-09-21",
       now: at, notionWorkspaceId: "missing",
@@ -101,7 +118,7 @@ test("linked edits and undo enqueue the final intent without a stale remote writ
   const store = new SQLitePlannerStore(":memory:");
   const remote = transport();
   try {
-    await store.putNotionConnection(connection());
+    await seedReady(store);
     const planner = new PlannerService(store, () => Date.parse(at));
     await planner.commands([{ type: "createTask", input: { id: taskId, title: initial.title,
       startDate: initial.date![0], endDate: initial.date![1], now: at,
@@ -137,7 +154,7 @@ test("HTTP command and sync status routes expose a confirmed write across the SQ
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-write-"));
   const databasePath = join(directory, "planner.sqlite");
   const seed = new SQLitePlannerStore(databasePath);
-  await seed.putNotionConnection(connection());
+  await seedReady(seed);
   seed.close();
   const remote = transport();
   const app = createApp({ databasePath, planningModel: null, notionTaskTransport: remote.fake,

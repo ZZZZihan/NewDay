@@ -54,7 +54,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     }
     queueMicrotask(() => setBusy(true));
     void notionApi.claim(state, ticket)
-      .then(() => setMessage("已保存 Notion 授权。完成结构初始化后可开始只读同步。"))
+      .then(() => setMessage("已保存 Notion 授权。完成结构初始化后请先读取一次性任务。"))
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "授权结果领取失败，请重新授权"))
       .finally(() => { setBusy(false); void refresh(); });
   }, [onReturn, refresh]);

@@ -61,7 +61,9 @@ export function DayPlanner() {
   const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
   const writableWorkspaces = notion.status?.connections.filter((item) => item.status === "active" &&
     notion.structures[item.workspaceId]?.state === "ready" &&
-    notion.reads[item.workspaceId]?.connectionStatus === "active") ?? [];
+    notion.reads[item.workspaceId]?.connectionStatus === "active" &&
+    notion.reads[item.workspaceId]?.sources.some((source) =>
+      source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) && !source.watermark?.lastError)) ?? [];
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);

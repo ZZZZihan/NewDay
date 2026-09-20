@@ -23,7 +23,7 @@ test("OAuth return clears the one-time ticket before claiming and only shows a c
   await page.goto(`/#notion-oauth=ready:${state}:${ticket}`);
   await expect(page.getByRole("heading", { name: "Notion 连接" })).toBeVisible();
   await expect(page.getByText("隔离测试空间")).toBeVisible();
-  await expect(page.getByText("已授权；结构就绪后可只读同步")).toBeVisible();
+  await expect(page.getByText("已授权；结构就绪后可同步一次性任务")).toBeVisible();
   expect(page.url()).not.toContain(ticket);
   expect(await page.locator("body").innerText()).not.toContain(ticket);
   await page.setViewportSize({ width: 390, height: 844 });

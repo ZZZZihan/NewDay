@@ -422,6 +422,7 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   assertUnique(sync.connections, (value) => value.workspaceId, "Notion 工作区 ID");
   assertUnique(sync.initializationSteps ?? [], (value) => JSON.stringify([value.workspaceId, value.step]), "Notion 初始化步骤");
   assertUnique(sync.taskMappings, (value) => value.localTaskId, "Notion 本地任务映射");
+  assertUnique(sync.ruleMappings ?? [], (value) => JSON.stringify([value.workspaceId, value.remotePageId]), "Notion 规则映射");
   assertUnique(sync.outbox, (value) => value.operationId, "Notion 待发送操作 ID");
   assertUnique(sync.conflicts, (value) => value.id, "Notion 冲突 ID");
   assertUnique(sync.watermarks, (value) => JSON.stringify([value.workspaceId, value.dataSourceId]), "Notion 扫描水位");
@@ -430,6 +431,15 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   assertUnique(sync.restoreQuarantine, (value) => JSON.stringify([value.operation.datasetEpoch, value.operation.operationId]), "Notion 恢复隔离操作");
 
   const connections = new Map(sync.connections.map((value) => [value.workspaceId, value]));
+  const ruleMappings = new Map((sync.ruleMappings ?? []).map((value) =>
+    [JSON.stringify([value.workspaceId, value.remotePageId]), value]));
+  for (const rule of sync.ruleMappings ?? []) {
+    const connection = connections.get(rule.workspaceId);
+    if (!connection || connection.dataSources.rules?.dataSourceId !== rule.dataSourceId ||
+      !backup.recurrenceSeries.some((series) => series.logicalSeriesId === rule.logicalSeriesId)) {
+      throw new Error(`Notion 规则映射与工作区或本地规则不匹配：${rule.remotePageId}`);
+    }
+  }
   for (const step of sync.initializationSteps ?? []) {
     const connection = connections.get(step.workspaceId);
     if (!connection) {
@@ -460,6 +470,16 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
     }
     if (mapping.clientKey !== notionClientKey(connection.installationId, mapping.localTaskId)) {
       throw new Error(`Notion 映射客户端键不匹配：${mapping.localTaskId}`);
+    }
+    const task = backup.tasks.find((value) => value.id === mapping.localTaskId);
+    if (mapping.rulePageId) {
+      const rule = ruleMappings.get(JSON.stringify([mapping.workspaceId, mapping.rulePageId]));
+      if (!rule || task?.logicalSeriesId !== rule.logicalSeriesId ||
+        task.occurrenceKey !== mapping.occurrenceKey) {
+        throw new Error(`Notion 实例映射与规则或发生键不匹配：${mapping.localTaskId}`);
+      }
+    } else if (task?.seriesId) {
+      throw new Error(`Notion 本地重复任务不能作为一次性任务映射：${mapping.localTaskId}`);
     }
     const clientKey = JSON.stringify([mapping.workspaceId, mapping.clientKey]);
     if (clientKeys.has(clientKey)) throw new Error(`Notion 客户端键重复：${mapping.clientKey}`);

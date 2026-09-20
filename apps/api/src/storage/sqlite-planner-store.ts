@@ -14,6 +14,7 @@ import {
   notionOutboxOperationSchema,
   notionTaskFieldsSchema,
   notionTaskMappingSchema,
+  notionRuleMappingSchema,
   notionConflictRecordSchema,
   notionScanWatermarkSchema,
   notionReadNodeSchema,
@@ -22,6 +23,7 @@ import {
   notionSyncArchiveSchema,
   emptyNotionSyncArchive,
   notionClientKey,
+  notionLogicalSeriesId,
   type NotionConnection,
   type NotionInitializationStep,
   type NotionInitializationStepName,
@@ -29,6 +31,7 @@ import {
   type NotionOutboxOperation,
   type NotionTaskFields,
   type NotionTaskMapping,
+  type NotionRuleMapping,
   type NotionScanWatermark,
   type NotionReadNode,
   type NotionReadTaskContext,
@@ -300,10 +303,32 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.many<NotionTaskMapping>("SELECT payload FROM notion_task_mappings ORDER BY local_task_id");
   }
 
+  async listNotionRuleMappings(workspaceId?: string): Promise<NotionRuleMapping[]> {
+    return workspaceId
+      ? this.many<NotionRuleMapping>("SELECT payload FROM notion_rule_mappings WHERE workspace_id=? ORDER BY remote_page_id", workspaceId)
+      : this.many<NotionRuleMapping>("SELECT payload FROM notion_rule_mappings ORDER BY workspace_id,remote_page_id");
+  }
+
+  async putNotionRuleMapping(value: NotionRuleMapping): Promise<void> {
+    const mapping = notionRuleMappingSchema.parse(value);
+    await this.transaction(async () => {
+      const connection = await this.getNotionConnection(mapping.workspaceId);
+      if (!connection || connection.dataSources.rules?.dataSourceId !== mapping.dataSourceId ||
+        mapping.logicalSeriesId !== notionLogicalSeriesId(mapping.workspaceId, mapping.remotePageId)) {
+        throw new Error("Notion rule mapping has a different workspace or identity");
+      }
+      this.database.prepare(`INSERT INTO notion_rule_mappings(workspace_id,remote_page_id,data_source_id,logical_series_id,payload)
+        VALUES(?,?,?,?,?) ON CONFLICT(workspace_id,remote_page_id) DO UPDATE SET payload=excluded.payload`)
+        .run(mapping.workspaceId, mapping.remotePageId, mapping.dataSourceId,
+          mapping.logicalSeriesId, JSON.stringify(mapping));
+    });
+  }
+
   async putNotionTaskMapping(value: NotionTaskMapping): Promise<void> {
     const mapping = notionTaskMappingSchema.parse(value);
     await this.transaction(async () => {
-      if (!await this.getTask(mapping.localTaskId)) throw new Error("Notion mapping task does not exist");
+      const task = await this.getTask(mapping.localTaskId);
+      if (!task) throw new Error("Notion mapping task does not exist");
       const connection = await this.getNotionConnection(mapping.workspaceId);
       if (!connection) throw new Error("Notion mapping workspace does not exist");
       if (mapping.clientKey !== notionClientKey(connection.installationId, mapping.localTaskId)) {
@@ -312,9 +337,20 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       if (connection.dataSources.tasks && connection.dataSources.tasks.dataSourceId !== mapping.dataSourceId) {
         throw new Error("Notion mapping data source does not match the workspace schema");
       }
+      if (mapping.rulePageId) {
+        const rule = (await this.listNotionRuleMappings(mapping.workspaceId)).find((item) =>
+          item.remotePageId === mapping.rulePageId);
+        if (!rule || task.logicalSeriesId !== rule.logicalSeriesId ||
+          task.occurrenceKey !== mapping.occurrenceKey) {
+          throw new Error("Notion occurrence mapping does not match its rule and task");
+        }
+      } else if (task.seriesId) {
+        throw new Error("Notion local recurrence cannot be linked as a one-off task");
+      }
       const existing = await this.getNotionTaskMapping(mapping.localTaskId);
       if (existing && (existing.workspaceId !== mapping.workspaceId || existing.dataSourceId !== mapping.dataSourceId ||
-        existing.clientKey !== mapping.clientKey ||
+        existing.clientKey !== mapping.clientKey || existing.rulePageId !== mapping.rulePageId ||
+        existing.occurrenceKey !== mapping.occurrenceKey ||
         (existing.remotePageId !== null && existing.remotePageId !== mapping.remotePageId))) {
         throw new Error("Notion mapping identity cannot change");
       }
@@ -600,6 +636,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       connections: await this.listNotionConnections(),
       initializationSteps: await this.listNotionInitializationSteps(),
       taskMappings: await this.listNotionTaskMappings(),
+      ruleMappings: await this.listNotionRuleMappings(),
       outbox: await this.listNotionOutboxOperations(),
       conflicts: await this.listNotionConflicts(),
       watermarks: await this.listNotionScanWatermarks(),
@@ -716,7 +753,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
       }
       await this.rotateDatasetEpoch();
-      this.database.exec("DELETE FROM notion_read_task_contexts; DELETE FROM notion_read_nodes; DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
+      this.database.exec("DELETE FROM notion_read_task_contexts; DELETE FROM notion_read_nodes; DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_rule_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
       this.database.exec("DELETE FROM life_resource_tasks; DELETE FROM life_inbox; DELETE FROM life_resources; DELETE FROM life_folders WHERE parent_id IS NOT NULL; DELETE FROM life_folders WHERE parent_id IS NULL; DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
       for (const series of data.recurrenceSeries ?? []) await this.putRecurrenceSeries(series);
       for (const task of data.tasks) await this.putTask(task);
@@ -731,6 +768,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
       }
       for (const step of sync.initializationSteps ?? []) await this.putNotionInitializationStep(step);
+      for (const rule of sync.ruleMappings ?? []) await this.putNotionRuleMapping(rule);
       for (const connection of orphanedStructures) {
         await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
         for (const step of priorSteps.filter((item) => item.workspaceId === connection.workspaceId)) {
@@ -974,6 +1012,23 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
             payload TEXT NOT NULL CHECK(json_valid(payload))
           ) STRICT;
           PRAGMA user_version=6;
+          COMMIT;
+        `);
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    }
+    if (version < 7) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(`
+          CREATE TABLE notion_rule_mappings (
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            remote_page_id TEXT NOT NULL,
+            data_source_id TEXT NOT NULL,
+            logical_series_id TEXT NOT NULL UNIQUE,
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            PRIMARY KEY(workspace_id,remote_page_id)
+          ) STRICT;
+          PRAGMA user_version=7;
           COMMIT;
         `);
       } catch (error) { this.database.exec("ROLLBACK"); throw error; }

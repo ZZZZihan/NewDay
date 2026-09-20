@@ -47,7 +47,7 @@ function connection(): NotionConnection {
 }
 
 class FakeReadGateway implements NotionReadGateway {
-  rows: Record<ReadTable, ReadRow[]> = { areas: [area()], projects: [project()], tasks: [task()] };
+  rows: Record<ReadTable, ReadRow[]> = { areas: [area()], projects: [project()], rules: [], tasks: [task()] };
   fail: ReadTable | null = null;
   knownPageTrash = new Map<string, boolean>();
   calls: ReadTable[] = [];

@@ -47,3 +47,174 @@
 .historyEntry:last-child { border-bottom: 0; }
 .historyEntry ul { padding-left: 1.25rem; }
 @media (max-width: 560px) { .panel { padding: .9rem; } .header { align-items: stretch; flex-direction: column; gap: .65rem; } .columns { grid-template-columns: 1fr; } .proposal { padding: .8rem; } .actions > button { flex-grow: 1; } }
+
+/* The assistant now occupies a dedicated column in the paper workspace. */
+.panel {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: .75rem;
+  line-height: 1.58;
+}
+
+.header {
+  display: block;
+}
+
+.kicker {
+  margin: 0;
+  color: var(--accent);
+  font-size: .63rem;
+  font-weight: 760;
+  letter-spacing: .08em;
+}
+
+.header h2 {
+  margin: .85rem 0 .35rem;
+  font-family: var(--font-editorial);
+  font-size: 1.55rem;
+  font-weight: 600;
+  letter-spacing: -.03em;
+  line-height: 1.15;
+}
+
+.header .muted {
+  margin: 0;
+  font-size: .72rem;
+  line-height: 1.7;
+}
+
+.muted,
+.optional {
+  color: var(--muted);
+  font-size: .68rem;
+}
+
+.header > button {
+  width: 100%;
+  min-height: 2.55rem;
+  margin-top: 1.15rem;
+  border: 1px solid var(--accent);
+  border-radius: .25rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.header > button:not(:disabled):hover {
+  background: var(--accent-pressed);
+  filter: none;
+}
+
+.body {
+  margin-top: 1.05rem;
+  border-top: 1px solid var(--line);
+  padding-top: .8rem;
+}
+
+.form,
+.form fieldset {
+  gap: .72rem;
+}
+
+.panel label,
+.panel summary {
+  font-size: .72rem;
+  font-weight: 650;
+}
+
+.panel input:not([type=checkbox]),
+.panel textarea,
+.panel select {
+  min-height: 2.3rem;
+  margin-top: .3rem;
+  border-radius: .25rem;
+  background: var(--field-background);
+  padding: .5rem .6rem;
+  font-size: .72rem;
+}
+
+.panel textarea {
+  min-height: 4rem;
+}
+
+.panel button {
+  min-height: 2.4rem;
+  border-radius: .25rem;
+  padding: .45rem .65rem;
+  font-size: .72rem;
+}
+
+.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.secondary {
+  background: var(--surface);
+}
+
+.columns {
+  gap: .5rem;
+}
+
+.panel .checkbox {
+  gap: .45rem;
+  padding: .2rem 0;
+  font-size: .72rem;
+  font-weight: 450;
+}
+
+.proposal {
+  margin-top: 1rem;
+  border-color: var(--line);
+  border-radius: .25rem;
+  padding: .78rem;
+  background: var(--surface);
+}
+
+.proposal h3 {
+  font-family: var(--font-editorial);
+  font-size: 1rem;
+}
+
+.preview,
+.assumptions {
+  border: 1px solid var(--line);
+  border-radius: .25rem;
+  padding: .65rem;
+  background: var(--surface);
+}
+
+.history {
+  margin-top: 1rem;
+  padding-top: .55rem;
+}
+
+.history > summary {
+  color: var(--ink);
+  font-size: .73rem;
+}
+
+.historyEntry {
+  padding: .75rem 0;
+}
+
+.error,
+.pending {
+  border-radius: .25rem;
+}
+
+@media (max-width: 560px) {
+  .panel {
+    padding: 0;
+  }
+
+  .columns {
+    grid-template-columns: 1fr 1fr;
+  }
+}

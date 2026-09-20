@@ -18,5 +18,5 @@ export function createTask(id = "task-1"): PlannerCommand {
 }
 
 export function backup(tasks: Task[] = [task()]): PlannerBackup {
-  return { format: "newday-backup", version: 4, exportedAt: now, tasks, recurrenceSeries: [], focusRecords: [] };
+  return { format: "newday-backup", version: 5, exportedAt: now, tasks, recurrenceSeries: [], focusRecords: [], inboxItems: [], folders: [], resources: [], resourceTaskLinks: [] };
 }

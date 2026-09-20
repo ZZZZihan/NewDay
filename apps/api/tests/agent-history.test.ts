@@ -198,7 +198,7 @@ test("agent backup imports read-only history without tasks or execution IDs and 
   await target.history.importBackup(JSON.stringify(exported), false);
   assert.notEqual((await targetStore.getPlanningVersion()).datasetEpoch, currentVersion.datasetEpoch);
   assert.deepEqual(await createPlannerBackup(targetStore, now), taskBackup);
-  assert.equal(taskBackup.version, 4);
+  assert.equal(taskBackup.version, 5);
   assert.equal("agent" in taskBackup, false);
   assert.deepEqual(await target.preferences.getPreferences(), currentPreferences);
   assert.equal((await targetStore.getOperationResult("operation-1")).status, "not_found");

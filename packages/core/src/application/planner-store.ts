@@ -3,6 +3,7 @@ import type {
   RecurrenceSeries,
   Task,
 } from "../domain/planner-model";
+import type { ResourceTaskLink } from "../domain/life-model";
 
 export interface PlannerStore {
   transaction<T>(operation: () => Promise<T>): Promise<T>;
@@ -32,4 +33,8 @@ export interface PlannerStore {
   listFocusRecordsForDate(date: string): Promise<FocusRecord[]>;
   listFocusRecordsForTask(taskId: string): Promise<FocusRecord[]>;
   listAllFocusRecords(): Promise<FocusRecord[]>;
+
+  /** Life management stores can preserve resource links when a task deletion is undone. */
+  listResourceTaskLinksForTask?(taskId: string): Promise<ResourceTaskLink[]>;
+  putResourceTaskLink?(link: ResourceTaskLink): Promise<void>;
 }

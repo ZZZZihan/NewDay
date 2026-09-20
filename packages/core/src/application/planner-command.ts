@@ -358,6 +358,7 @@ async function applyPlannerCommand(
       const task = await requireTask(store, input.taskId);
       captureTask(undoChanges, task);
       await captureAndDeleteTaskFocus(store, task.id, undoChanges);
+      await captureTaskResourceLinks(store, task.id, undoChanges);
 
       if (task.seriesId && task.occurrenceDate) {
         const series = await requireRecurrenceSeries(store, task.seriesId);
@@ -627,6 +628,7 @@ async function applyPlannerCommand(
         }
 
         await captureAndDeleteTaskFocus(store, occurrence.id, undoChanges);
+        await captureTaskResourceLinks(store, occurrence.id, undoChanges);
         await store.deleteTask(occurrence.id);
       }
 
@@ -689,6 +691,7 @@ async function applyPlannerCommand(
         captureTask(undoChanges, occurrence);
         if (shouldRemoveAfterStop(occurrence, endDate)) {
           await captureAndDeleteTaskFocus(store, occurrence.id, undoChanges);
+          await captureTaskResourceLinks(store, occurrence.id, undoChanges);
           await store.deleteTask(occurrence.id);
         } else {
           await store.putTask(
@@ -863,6 +866,20 @@ async function captureAndDeleteTaskFocus(
   for (const record of records) {
     captureFocusRecord(undoChanges, record);
     await store.deleteFocusRecord(record.id);
+  }
+}
+
+async function captureTaskResourceLinks(
+  store: PlannerStore,
+  taskId: string,
+  undoChanges: UndoChangeSet,
+) {
+  if (!store.listResourceTaskLinksForTask) return;
+  for (const link of await store.listResourceTaskLinksForTask(taskId)) {
+    if (!undoChanges.resourceTaskLinks.some((saved) =>
+      saved.resourceId === link.resourceId && saved.taskId === link.taskId)) {
+      undoChanges.resourceTaskLinks.push(link);
+    }
   }
 }
 

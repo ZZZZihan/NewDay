@@ -39,6 +39,7 @@ export function useDayPlanner() {
   const selectedDate = dateOverride ?? (hydrated && planningClock.ready ? today : null);
   const [quickTitle, setQuickTitle] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [externalEditingTask, setExternalEditingTask] = useState<Task | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
@@ -57,7 +58,8 @@ export function useDayPlanner() {
       : [];
     return new Map(items.map(({ task }) => [task.id, task]));
   }, [dayPlan]);
-  const editingTask = editingTaskId ? taskById.get(editingTaskId) : undefined;
+  const editingTask = editingTaskId ? taskById.get(editingTaskId) ??
+    (externalEditingTask?.id === editingTaskId ? externalEditingTask : undefined) : undefined;
   const editingSeriesId = editingTask?.seriesId;
   const { series: editingSeries, error: seriesError, loading: seriesLoading, retry: retrySeries } = usePlannerSeries(
     editingSeriesId, editingTask?.updatedAt, dayPlan,
@@ -199,7 +201,7 @@ export function useDayPlanner() {
     try {
       const backup = await plannerApi.backup();
       downloadBackup(backup);
-      showNotice(`已导出 ${backup.tasks.length} 项任务`);
+      showNotice(`已导出 ${backup.tasks.length} 项任务、${backup.resources.length} 份资料`);
     } catch (error) {
       showFailureNotice(error instanceof Error ? error.message : "导出失败，请重试");
     } finally {
@@ -220,7 +222,7 @@ export function useDayPlanner() {
       const source = await file.text();
       const candidate = parsePlannerBackup(source);
       const confirmed = window.confirm(
-        `导入将替换当前全部数据，共 ${candidate.tasks.length} 项任务。继续吗？`,
+        `导入将替换当前全部数据，共 ${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料、${candidate.inboxItems.length} 条收集箱内容。继续吗？`,
       );
       if (!confirmed) return;
 
@@ -229,7 +231,8 @@ export function useDayPlanner() {
       await plannerApi.restore(source);
       await refresh();
       setEditingTaskId(null);
-      showNotice(`导入完成：${candidate.tasks.length} 项任务`);
+      setExternalEditingTask(null);
+      showNotice(`导入完成：${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料`);
     } catch (error) {
       showFailureNotice(error instanceof Error ? error.message : "导入失败，请检查文件");
     } finally {
@@ -326,6 +329,12 @@ export function useDayPlanner() {
     if (!selectedDate) return;
     setDateOverride(shiftDate(selectedDate, offset));
     setEditingTaskId(null);
+    setExternalEditingTask(null);
+  }
+
+  function openExternalTask(task: Task) {
+    setExternalEditingTask(task);
+    setEditingTaskId(task.id);
   }
 
   async function deleteEditingTask() {
@@ -392,7 +401,7 @@ export function useDayPlanner() {
 
   return {
     now, today, timeZone, selectedDate, setDateOverride, quickTitle, setQuickTitle,
-    setEditingTaskId, editingTask, editingSeries, editingSeriesActionsAllowed,
+    setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
     notice, isSaving, isUndoing, quickInputRef, importInputRef,
     dayPlan, dataError, refreshing, refresh, migration, seriesError, seriesLoading, retrySeries,
     handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,

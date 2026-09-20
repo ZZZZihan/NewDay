@@ -1,0 +1,768 @@
+/* Paper-and-forest workspace: a compact shell around the existing planner flows. */
+:root {
+  --page-background: #e9e5da;
+  --page-start: #e9e5da;
+  --surface: #f9f7f0;
+  --surface-solid: #f9f7f0;
+  --surface-muted: #efede4;
+  --surface-hover: #e7e7da;
+  --field-background: #fbfaf5;
+  --ink: #29312a;
+  --muted: #71766b;
+  --tertiary: #858b7e;
+  --line: #d7d6c8;
+  --line-strong: #abb5a4;
+  --glass-border: #d0d0c2;
+  --dialog-border: #c8cbbd;
+  --accent: #3f6b4f;
+  --accent-pressed: #31583f;
+  --success: #3f6b4f;
+  --on-accent: #fffef9;
+  --card-shadow: 0 16px 45px rgb(45 52 39 / 9%);
+  --radius-control: 0.36rem;
+  --radius-sheet: 0.36rem;
+}
+
+[data-theme="dark"] {
+  --page-background: #151b17;
+  --page-start: #151b17;
+  --surface: #202821;
+  --surface-solid: #202821;
+  --surface-muted: #1b231d;
+  --surface-hover: #2a352c;
+  --field-background: #222c25;
+  --ink: #e9ede5;
+  --muted: #adb8a8;
+  --tertiary: #929e90;
+  --line: #3b493d;
+  --line-strong: #617464;
+  --glass-border: #475749;
+  --dialog-border: #586a5a;
+  --accent: #a7c8a6;
+  --accent-pressed: #b9d7b5;
+  --success: #a7c8a6;
+  --on-accent: #18251b;
+  --card-shadow: 0 16px 45px rgb(0 0 0 / 24%);
+}
+
+.day-page {
+  padding: clamp(0.5rem, 2vw, 1.25rem);
+}
+
+.workspace-shell {
+  width: min(100%, 1600px);
+  min-height: calc(100dvh - 2.5rem);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sheet);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
+}
+
+.workspace-header.panel-header {
+  height: 3.9rem;
+  padding: 0 1.35rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.workspace-header .panel-brand {
+  gap: 0.68rem;
+}
+
+.workspace-header .brand-mark {
+  width: 2.05rem;
+  height: 2.05rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 1rem;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.workspace-header .brand-name {
+  font-family: var(--font-editorial);
+  font-size: 1.06rem;
+  line-height: 1.1;
+}
+
+.workspace-header .brand-caption {
+  margin-top: 0.15rem;
+  font-size: 0.68rem;
+}
+
+.workspace-header .header-icon-button.button,
+.workspace-header .more-trigger {
+  width: 2.25rem;
+  height: 2.25rem;
+  color: var(--muted);
+}
+
+.workspace-header .panel-utilities {
+  gap: 0.15rem;
+}
+
+.planner-frame {
+  grid-template-columns: clamp(13.75rem, 17.5vw, 16.25rem) minmax(0, 1fr) clamp(18.75rem, 23vw, 22rem);
+  width: 100%;
+  height: calc(100dvh - 6.45rem);
+  min-height: 39rem;
+  margin: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.time-panel {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding: 1.55rem 1.25rem 1.25rem;
+  background: var(--surface-muted);
+}
+
+.sidebar-kicker {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-weight: 670;
+  letter-spacing: 0.07em;
+}
+
+.time-panel__clock {
+  margin-top: 0.85rem;
+}
+
+.hero-clock {
+  font-family: var(--font-interface);
+  font-size: clamp(2.9rem, 3.7vw, 3.7rem);
+  font-weight: 650;
+  letter-spacing: -0.075em;
+  line-height: 1;
+}
+
+.hero-date {
+  margin-top: 0.25rem;
+  font-family: var(--font-interface);
+  font-size: 0.76rem;
+  font-weight: 450;
+}
+
+.time-panel__bottom {
+  margin-top: 2.1rem;
+}
+
+.week-navigation {
+  margin-top: 0.9rem;
+  padding: 0.45rem 0 0.6rem;
+}
+
+.week-navigation__header {
+  grid-template-columns: 2rem minmax(0, 1fr) 2rem;
+  gap: 0;
+}
+
+.date-arrow.button {
+  width: 2rem;
+  height: 2rem;
+  color: var(--muted);
+}
+
+.date-picker-button.button {
+  min-height: 2rem;
+  padding: 0 0.1rem;
+  font-size: 0.76rem;
+}
+
+.date-picker-button.button svg {
+  width: 0.85rem;
+}
+
+.week-strip {
+  gap: 0.1rem;
+  margin-top: 0.45rem;
+}
+
+.week-day.button {
+  min-height: 3rem;
+  border-radius: 0.26rem;
+}
+
+.week-day small {
+  font-size: 0.64rem;
+}
+
+.week-day span {
+  font-size: 0.78rem;
+}
+
+.week-day--selected.button,
+.week-day--selected.button:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.time-panel__summary {
+  min-height: 2.75rem;
+  margin-top: 0.85rem;
+}
+
+.task-summary {
+  font-size: 0.71rem;
+}
+
+.task-summary strong {
+  font-weight: 680;
+}
+
+.today-button.button {
+  padding-inline: 0.35rem;
+  font-size: 0.68rem;
+}
+
+.sidebar-progress {
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+
+.sidebar-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.sidebar-progress-label {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-progress-label strong {
+  color: var(--accent);
+}
+
+.time-panel__footer-zone {
+  margin-top: auto;
+  padding-top: 1rem;
+}
+
+.time-panel__footer {
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+  font-size: 0.67rem;
+}
+
+.schedule-panel {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.55rem clamp(1.2rem, 2.5vw, 2.25rem) 2rem;
+  background: var(--surface);
+}
+
+.schedule-heading {
+  max-width: none;
+  align-items: end;
+  margin-top: 0;
+}
+
+.section-kicker {
+  color: var(--accent);
+  font-size: 0.64rem;
+  font-weight: 730;
+  letter-spacing: 0.07em;
+}
+
+.schedule-heading h1 {
+  margin-top: 0.33rem;
+  font-size: clamp(1.9rem, 2.6vw, 2.45rem);
+  line-height: 1.1;
+}
+
+.schedule-subtitle {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.73rem;
+}
+
+.schedule-meta {
+  margin-bottom: 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  padding: 0.42rem 0.6rem;
+  background: var(--surface-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
+.planner-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1.4rem;
+}
+
+.planner-metrics > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-content: space-between;
+  min-width: 0;
+  min-height: 4.55rem;
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  border-radius: 0.24rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--surface-muted);
+}
+
+.planner-metrics span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.planner-metrics strong {
+  align-self: end;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 690;
+  letter-spacing: -0.055em;
+  line-height: 1;
+}
+
+.planner-metrics strong em {
+  font-size: 0.72rem;
+  font-style: normal;
+}
+
+.planner-metrics small {
+  align-self: end;
+  color: var(--tertiary);
+  font-size: 0.6rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.planner-metrics .planner-metrics__progress {
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface));
+  border-color: var(--accent);
+}
+
+.planner-metrics__progress strong {
+  color: var(--accent);
+}
+
+.planner-status {
+  margin: 1rem 0 0;
+  font-size: 0.74rem;
+}
+
+.quick-add {
+  grid-template-columns: minmax(0, 1fr) 2.55rem;
+  gap: 0.2rem;
+  margin-top: 1.25rem;
+  border-color: var(--accent);
+  border-radius: 0.28rem;
+}
+
+.quick-add .input,
+.quick-add .button--primary {
+  min-height: 2.55rem;
+}
+
+.quick-add .input {
+  font-size: 0.78rem;
+}
+
+.quick-add .button--primary {
+  width: 2.55rem;
+  border-radius: 0.2rem;
+}
+
+.daily-task-list {
+  margin-top: 0.85rem;
+  border-top: 0;
+}
+
+.task-group {
+  margin-top: 0.45rem;
+  border-bottom: 0;
+}
+
+.task-group > h2 {
+  min-height: 2.3rem;
+  justify-content: flex-start;
+  gap: 0.55rem;
+  padding-inline: 0;
+  color: var(--ink);
+  font-size: 0.76rem;
+}
+
+.task-group > h2::before {
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.task-group > h2 span {
+  min-width: 1.15rem;
+  border-radius: 0.2rem;
+  padding: 0.15rem 0.27rem;
+  background: var(--surface-muted);
+  text-align: center;
+  font-size: 0.64rem;
+}
+
+.task-group--focus > h2 {
+  border-left: 0;
+  padding-left: 0;
+  color: var(--ink);
+}
+
+.day-task {
+  min-height: 3.2rem;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  border-color: var(--line);
+}
+
+.task-group > div > .day-task:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.task-check.button,
+.task-edit.button,
+.task-focus.button,
+.task-repeat-mark {
+  width: 2rem;
+  min-width: 2rem;
+  min-height: 3.2rem;
+}
+
+.task-main.button {
+  min-height: 3.2rem;
+  padding: 0.45rem 0.25rem;
+}
+
+.task-main strong {
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.task-main span {
+  margin-top: 0.17rem;
+  font-size: 0.66rem;
+}
+
+.task-actions {
+  height: 3.2rem;
+}
+
+.completed-section {
+  margin-top: 0.85rem;
+  padding-top: 0.35rem;
+}
+
+.completed-section summary {
+  min-height: 2.2rem;
+  padding: 0 0.15rem;
+  font-size: 0.73rem;
+}
+
+.completed-list {
+  margin-top: 0.15rem;
+}
+
+.task-empty.card {
+  min-height: 10rem;
+  margin-top: 0.45rem;
+}
+
+.assistant-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  padding: 1.55rem 1.25rem 2rem;
+  background: var(--surface-muted);
+}
+
+html:fullscreen .workspace-shell {
+  width: 100%;
+  min-height: 100dvh;
+  border: 0;
+  border-radius: 0;
+}
+
+html:fullscreen .planner-frame {
+  grid-template-columns: clamp(13.75rem, 17.5vw, 17rem) minmax(0, 1fr) clamp(18.75rem, 23vw, 24rem);
+  height: calc(100dvh - 3.9rem);
+  min-height: 0;
+}
+
+html:fullscreen .time-panel,
+html:fullscreen .schedule-panel {
+  padding: 1.55rem clamp(1.2rem, 2.5vw, 2.25rem);
+}
+
+html:fullscreen .time-panel__clock {
+  margin-top: 0.85rem;
+  text-align: left;
+}
+
+html:fullscreen .hero-clock {
+  justify-content: flex-start;
+  font-size: clamp(2.9rem, 3.7vw, 3.7rem);
+}
+
+html:fullscreen .hero-date {
+  margin-top: 0.25rem;
+  font-size: 0.76rem;
+}
+
+html:fullscreen .time-panel__bottom {
+  width: auto;
+  max-width: none;
+  margin-top: 2.1rem;
+}
+
+@media (max-width: 1050px) {
+  .planner-frame,
+  html:fullscreen .planner-frame {
+    grid-template-columns: clamp(12rem, 24vw, 15rem) minmax(0, 1fr);
+    height: auto;
+    min-height: 0;
+  }
+
+  .time-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    grid-row: 1 / span 2;
+    min-height: 0;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .assistant-panel {
+    grid-column: 2;
+    border-top: 1px solid var(--line);
+  }
+
+  .schedule-panel {
+    min-height: 34rem;
+  }
+}
+
+@media (max-width: 700px) {
+  .day-page {
+    padding: 0;
+  }
+
+  .workspace-shell {
+    width: 100%;
+    min-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .workspace-header.panel-header {
+    height: 3.55rem;
+    padding: 0 0.9rem;
+  }
+
+  .planner-frame,
+  html:fullscreen .planner-frame {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+  }
+
+  .time-panel {
+    display: block;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 1rem;
+  }
+
+  .time-panel__clock {
+    margin-top: 0.25rem;
+  }
+
+  .hero-clock {
+    font-size: 3rem;
+  }
+
+  .time-panel__bottom {
+    margin-top: 1.25rem;
+  }
+
+  .week-navigation {
+    margin-top: 0.25rem;
+  }
+
+  .time-panel__footer-zone {
+    margin-top: 0.8rem;
+    padding-top: 0;
+  }
+
+  .schedule-panel,
+  .assistant-panel {
+    width: 100%;
+    min-height: 0;
+    overflow: visible;
+    padding: 1.4rem 1rem 1.8rem;
+  }
+
+  .assistant-panel {
+    border-left: 0;
+  }
+
+  .schedule-heading h1 {
+    font-size: 2rem;
+  }
+
+  .planner-metrics {
+    gap: 0.35rem;
+  }
+
+  .planner-metrics > div {
+    min-height: 4rem;
+    padding: 0.45rem;
+  }
+
+  .planner-metrics strong {
+    font-size: 1.25rem;
+  }
+
+  .planner-metrics small {
+    font-size: 0.53rem;
+  }
+}
+
+@media (max-width: 390px) {
+  .schedule-meta {
+    display: none;
+  }
+
+  .planner-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.life-navigation { display: grid; gap: .2rem; margin-top: 1.6rem; }
+.life-navigation .sidebar-kicker { margin-bottom: .45rem; }
+.life-navigation button, .life-folders button, .life-folder-toolbar button,
+.life-panel button, .life-resource-editor button {
+  font: inherit;
+  cursor: pointer;
+}
+.life-navigation button {
+  display: flex; align-items: center; gap: .7rem; width: 100%; min-height: 2.25rem;
+  border: 0; border-radius: .25rem; padding: .35rem .6rem; background: transparent;
+  color: var(--muted); text-align: left; font-size: .78rem; font-weight: 600;
+}
+.life-navigation button:hover, .life-navigation button.selected {
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-muted)); color: var(--accent);
+}
+.life-panel { min-width: 0; }
+.life-heading { margin-bottom: 1.4rem; }
+.life-panel input, .life-panel textarea, .life-panel select {
+  width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: .25rem;
+  padding: .55rem .65rem; background: var(--field-background); color: var(--ink);
+  font: inherit; font-size: .76rem;
+}
+.life-panel textarea { resize: vertical; }
+.life-panel label { display: grid; gap: .3rem; color: var(--muted); font-size: .7rem; font-weight: 600; }
+.life-panel button { color: var(--ink); }
+.life-panel button:disabled { opacity: .45; cursor: default; }
+.life-panel button:focus-visible, .life-navigation button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.life-capture { display: grid; gap: .55rem; border: 1px solid var(--line); border-top: 2px solid var(--accent); border-radius: .25rem; padding: .9rem; background: var(--surface-muted); }
+.life-capture-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .45rem; }
+.life-capture-row button, .life-primary, .life-folder-toolbar button, .life-link-picker button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  min-height: 2.15rem; border: 1px solid var(--line); border-radius: .25rem;
+  padding: .4rem .7rem; background: var(--surface-muted); color: var(--ink); font-size: .73rem; font-weight: 650;
+}
+.life-capture-row button, .life-primary, .life-folder-toolbar .life-primary {
+  border-color: var(--accent); background: var(--accent); color: var(--on-accent) !important;
+}
+.life-list { display: grid; gap: .55rem; margin-top: 1rem; }
+.life-item { min-width: 0; border: 1px solid var(--line); border-radius: .25rem; padding: .8rem .9rem; background: var(--surface); }
+.life-item-head { display: flex; align-items: start; justify-content: space-between; gap: .5rem; }
+.life-item-head > div, .life-task-main { display: grid; gap: .3rem; min-width: 0; }
+.life-item strong { color: var(--ink); font-size: .82rem; font-weight: 650; overflow-wrap: anywhere; }
+.life-item small { color: var(--muted); font-size: .66rem; }
+.life-item p, .life-detail p { margin: .5rem 0; color: var(--muted); font-size: .74rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.life-icon-button { display: grid; place-items: center; width: 1.7rem; height: 1.7rem; border: 0; background: transparent; color: var(--muted) !important; }
+.life-text-button { display: inline-flex; align-items: center; gap: .2rem; border: 0; padding: .4rem 0 0; background: transparent; color: var(--accent) !important; font-size: .7rem !important; font-weight: 680 !important; }
+.life-classify { display: grid; gap: .65rem; margin-top: .8rem; border-top: 1px solid var(--line); padding-top: .75rem; }
+.life-segment { display: flex; gap: .25rem; }
+.life-segment button { border: 1px solid var(--line); border-radius: .2rem; padding: .35rem .7rem; background: var(--surface-muted); font-size: .7rem; }
+.life-segment button.active { border-color: var(--accent); color: var(--accent); }
+.life-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .45rem; margin-top: .7rem; }
+.life-actions button { border: 1px solid var(--line); border-radius: .25rem; padding: .42rem .75rem; background: var(--surface-muted); font-size: .72rem; }
+.life-error { display: flex; align-items: center; gap: .6rem; border: 1px solid #b46d60; padding: .7rem; color: #9a3f30; font-size: .76rem; }
+.life-error button { border: 0; background: transparent; color: inherit; text-decoration: underline; }
+.life-empty { display: grid; justify-items: center; gap: .35rem; border: 1px dashed var(--line); border-radius: .3rem; padding: 2rem .6rem; color: var(--muted); font-size: .76rem; }
+.life-empty p { margin: 0; }
+.life-toolbar { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.life-toolbar .life-search { display: flex; align-items: center; gap: .3rem; flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: .25rem; padding-left: .55rem; background: var(--field-background); }
+.life-search input { border: 0; background: transparent; }
+.life-toolbar > select { width: 7.5rem; flex: none; }
+.life-task-main { width: 100%; border: 0; padding: 0; background: transparent; text-align: left; }
+.life-task-main strong { display: inline-flex; align-items: center; gap: .35rem; }
+.life-task--done .life-task-main strong { text-decoration: line-through; color: var(--muted); }
+.life-detail { border-top: 1px solid var(--line); margin-top: .7rem; padding-top: .7rem; }
+.life-detail h3, .life-resource-links h3 { margin: .7rem 0 .45rem; font-size: .74rem; }
+.life-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+.life-chips > button, .life-chips > span { border: 1px solid var(--line); border-radius: .2rem; padding: .25rem .4rem; background: var(--surface-muted); color: var(--muted); font-size: .67rem; }
+.life-chips > span > button { border: 0; background: transparent; color: var(--muted); }
+.life-link-picker { display: flex; gap: .4rem; margin-top: .65rem; }
+.life-link-picker select { flex: 1; }
+.life-hint { margin-top: .6rem; color: var(--muted); font-size: .66rem; }
+.life-folder-toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .4rem; margin-bottom: .8rem; }
+.life-library-layout { display: grid; grid-template-columns: minmax(9rem, 11.5rem) minmax(0, 1fr); gap: .8rem; }
+.life-folders { min-width: 0; border: 1px solid var(--line); border-radius: .25rem; padding: .35rem; align-self: start; background: var(--surface-muted); }
+.life-folders button { display: flex; align-items: center; gap: .3rem; width: 100%; min-width: 0; border: 0; border-radius: .2rem; padding: .38rem .3rem; background: transparent; text-align: left; font-size: .68rem; overflow-wrap: anywhere; }
+.life-folders button.selected { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); color: var(--accent); font-weight: 700; }
+.life-folders button small { margin-left: auto; font-size: .62rem; }
+.life-folder-row { display: flex; align-items: center; min-width: 0; }
+.life-folder-row > button:not(.life-expand) { flex: 1; }
+.life-folder-row .life-expand { flex: none; width: 1.2rem; padding: .3rem .1rem; justify-content: center; }
+.life-folder-children { margin-left: .8rem; }
+.life-folders .life-rename { color: var(--muted); font-size: .62rem; }
+.life-library-main { min-width: 0; }
+.life-library-main .life-list { margin-top: .6rem; }
+.life-resource-editor { margin-top: 1rem; border: 1px solid var(--line-strong); border-radius: .25rem; padding: .9rem; background: var(--surface-muted); }
+.life-editor-head { display: flex; justify-content: space-between; align-items: center; }
+.life-editor-head h2 { margin: 0 0 .75rem; font-size: .88rem; }
+.life-editor-head button { border: 0; background: transparent; color: var(--muted); font-size: .7rem; }
+.life-resource-editor form { display: grid; gap: .65rem; }
+.life-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) 8rem; gap: .5rem; }
+.life-resource-links { border-top: 1px solid var(--line); margin-top: .8rem; }
+
+@media (max-width: 700px) {
+  .life-navigation { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .2rem; margin-top: 1rem; }
+  .life-navigation .sidebar-kicker { grid-column: 1 / -1; }
+  .life-navigation button { display: grid; justify-items: center; gap: .15rem; padding: .35rem .1rem; text-align: center; font-size: .65rem; }
+  .life-library-layout { grid-template-columns: 1fr; }
+  .life-folders { max-height: 13rem; overflow-y: auto; }
+}
+
+@media (max-width: 390px) {
+  .life-toolbar { flex-wrap: wrap; }
+  .life-toolbar > select { width: 100%; }
+  .life-form-grid { grid-template-columns: 1fr; }
+}

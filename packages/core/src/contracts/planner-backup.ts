@@ -3,6 +3,9 @@ import { z } from "zod";
 import { shiftDate } from "../domain/planner-date";
 import { recursOnDate } from "../domain/planner-recurrence";
 import {
+  inboxItemSchema, lifeFolderSchema, lifeResourceSchema, resourceTaskLinkSchema,
+} from "../domain/life-model";
+import {
   focusRecordSchema,
   instantSchema,
   localDateSchema,
@@ -17,12 +20,20 @@ import {
 
 export const plannerBackupSchema = z.object({
   format: z.literal("newday-backup"),
-  version: z.literal(4),
+  version: z.literal(5),
   exportedAt: instantSchema,
   tasks: z.array(taskSchema),
   recurrenceSeries: z.array(recurrenceSeriesSchema),
   focusRecords: z.array(focusRecordSchema),
+  inboxItems: z.array(inboxItemSchema),
+  folders: z.array(lifeFolderSchema),
+  resources: z.array(lifeResourceSchema),
+  resourceTaskLinks: z.array(resourceTaskLinkSchema),
 });
+
+const versionFourBackupSchema = plannerBackupSchema.omit({
+  inboxItems: true, folders: true, resources: true, resourceTaskLinks: true,
+}).extend({ version: z.literal(4) });
 
 const versionThreeTaskSchema = z.object({
   id: z.string().min(1),
@@ -119,8 +130,13 @@ export function parsePlannerBackup(source: string): PlannerBackup {
 
   const version = Reflect.get(candidate, "version");
 
-  if (version === 4) {
+  if (version === 5) {
     return parseAndValidateCurrentBackup(candidate);
+  }
+
+  if (version === 4) {
+    const backup = parseSchema(versionFourBackupSchema, candidate);
+    return parseAndValidateCurrentBackup({ ...backup, version: 5, ...emptyLifeData() });
   }
 
   if (version === 3) {
@@ -128,7 +144,7 @@ export function parsePlannerBackup(source: string): PlannerBackup {
 
     return parseAndValidateCurrentBackup({
       format: "newday-backup",
-      version: 4,
+      version: 5,
       exportedAt: backup.exportedAt,
       tasks: backup.tasks.map(normalizeVersionThreeTask),
       recurrenceSeries: backup.recurrenceSeries.map((series) =>
@@ -139,6 +155,7 @@ export function parsePlannerBackup(source: string): PlannerBackup {
         }),
       ),
       focusRecords: backup.focusRecords,
+      ...emptyLifeData(),
     });
   }
 
@@ -147,11 +164,12 @@ export function parsePlannerBackup(source: string): PlannerBackup {
 
     return parseAndValidateCurrentBackup({
       format: "newday-backup",
-      version: 4,
+      version: 5,
       exportedAt: backup.exportedAt,
       tasks: backup.tasks.map(normalizeVersionTwoTask),
       recurrenceSeries: [],
       focusRecords: [],
+      ...emptyLifeData(),
     });
   }
 
@@ -160,7 +178,7 @@ export function parsePlannerBackup(source: string): PlannerBackup {
 
     return parseAndValidateCurrentBackup({
       format: "newday-backup",
-      version: 4,
+      version: 5,
       exportedAt: backup.exportedAt,
       tasks: backup.tasks.map((task) =>
         taskSchema.parse({
@@ -178,6 +196,7 @@ export function parsePlannerBackup(source: string): PlannerBackup {
       ),
       recurrenceSeries: [],
       focusRecords: [],
+      ...emptyLifeData(),
     });
   }
 
@@ -202,6 +221,10 @@ function normalizeVersionTwoTask(
   });
 }
 
+function emptyLifeData() {
+  return { inboxItems: [], folders: [], resources: [], resourceTaskLinks: [] };
+}
+
 export function parseAndValidateCurrentBackup(candidate: unknown): PlannerBackup {
   const backup = parseSchema(plannerBackupSchema, candidate);
   validatePlannerBackup(backup);
@@ -222,6 +245,40 @@ function validatePlannerBackup(backup: PlannerBackup) {
   assertUnique(backup.tasks, (task) => task.id, "任务 ID");
   assertUnique(backup.recurrenceSeries, (series) => series.id, "重复系列 ID");
   assertUnique(backup.focusRecords, (record) => record.id, "重点记录 ID");
+  assertUnique(backup.inboxItems, (item) => item.id, "收集箱条目 ID");
+  assertUnique(backup.folders, (folder) => folder.id, "文件夹 ID");
+  assertUnique(backup.resources, (resource) => resource.id, "资料 ID");
+  assertUnique(backup.resourceTaskLinks, (link) => JSON.stringify([link.resourceId, link.taskId]), "任务资料关联");
+
+  const folderById = new Map(backup.folders.map((folder) => [folder.id, folder]));
+  const siblingNames = new Set<string>();
+  for (const folder of backup.folders) {
+    if (folder.parentId !== null) {
+      const parent = folderById.get(folder.parentId);
+      if (!parent) throw new Error(`文件夹引用了不存在的上级目录：${folder.id}`);
+      if (parent.parentId !== null) throw new Error(`文件夹超过两级：${folder.id}`);
+    }
+    const siblingKey = JSON.stringify([folder.parentId, folder.name.toLocaleLowerCase()]);
+    if (siblingNames.has(siblingKey)) throw new Error(`同级文件夹名称重复：${folder.name}`);
+    siblingNames.add(siblingKey);
+  }
+  const resourceIds = new Set(backup.resources.map((resource) => resource.id));
+  const taskIds = new Set(backup.tasks.map((task) => task.id));
+  for (const item of backup.inboxItems) {
+    if (item.sourceResourceId !== null && !resourceIds.has(item.sourceResourceId)) {
+      throw new Error(`收集箱条目引用了不存在的资料：${item.id}`);
+    }
+  }
+  for (const resource of backup.resources) {
+    if (resource.folderId !== null && !folderById.has(resource.folderId)) {
+      throw new Error(`资料引用了不存在的文件夹：${resource.id}`);
+    }
+  }
+  for (const link of backup.resourceTaskLinks) {
+    if (!resourceIds.has(link.resourceId) || !taskIds.has(link.taskId)) {
+      throw new Error(`任务资料关联引用了不存在的记录：${link.resourceId}:${link.taskId}`);
+    }
+  }
 
   const occurrenceTasks = backup.tasks.filter(
     (

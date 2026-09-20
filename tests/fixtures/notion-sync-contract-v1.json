@@ -114,6 +114,41 @@
       "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
     },
     {
+      "id": "lost-root-create-search-ambiguous",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": ["99999999-9999-4999-8999-999999999999", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "table-create-crash-before-local-id",
+      "kind": "initialization",
+      "step": "Projects",
+      "attemptPersistedBeforePost": true,
+      "priorCreateCalls": 1,
+      "processRestarted": true,
+      "localDatabaseId": null,
+      "rootChildScanComplete": true,
+      "matchingDatabaseIds": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+      "schemaAndRelationTargetsMatch": true,
+      "expected": { "decision": "bind_existing_table", "newCreateCalls": 0, "readBackDataSourceAndPropertyIds": true }
+    },
+    {
+      "id": "table-create-crash-no-match",
+      "kind": "initialization",
+      "step": "Projects",
+      "attemptPersistedBeforePost": true,
+      "priorCreateCalls": 1,
+      "processRestarted": true,
+      "localDatabaseId": null,
+      "rootChildScanComplete": true,
+      "matchingDatabaseIds": [],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
       "id": "partial-scan-does-not-advance",
       "kind": "scan",
       "pagesRead": 2,
@@ -134,6 +169,22 @@
       "sourceDatasetEpoch": "synthetic-old-epoch",
       "outbox": [{ "operationId": "synthetic-op-1", "status": "pending" }],
       "expected": { "decision": "paused_after_restore", "quarantinedOperationIds": ["synthetic-op-1"], "sendCallsBeforeReconciliation": 0 }
+    },
+    {
+      "id": "restore-waits-for-in-flight-write",
+      "kind": "backup",
+      "currentDatasetEpoch": "synthetic-current-epoch",
+      "inFlight": [{ "operationId": "synthetic-op-2", "status": "sending", "remoteResult": "pending" }],
+      "restoreRequested": true,
+      "expected": { "decision": "block_new_sends_and_wait", "commitReplacementBeforeRemoteReconciliation": false, "newSendCalls": 0 }
+    },
+    {
+      "id": "restore-quarantines-unknown-late-write",
+      "kind": "backup",
+      "currentDatasetEpoch": "synthetic-current-epoch",
+      "inFlight": [{ "operationId": "synthetic-op-3", "status": "sending", "remoteResult": "unknown" }],
+      "restoreRequested": true,
+      "expected": { "decision": "paused_after_restore", "quarantinedOperationIds": ["synthetic-op-3"], "sendSameMappingBeforeResolution": false, "manualResolutionIfLateEffectCannotBeExcluded": true }
     },
     {
       "id": "restore-v6-rejects-duplicate-mapping",

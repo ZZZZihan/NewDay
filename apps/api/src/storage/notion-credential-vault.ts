@@ -76,12 +76,21 @@ export class NotionCredentialVault {
 
   close(): void { this.database.close(); }
 
-  putPending(state: string, verifier: string, expiresAt: number, now = Date.now()): void {
+  beginAuthorization(): number {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const sequence = this.nextSequence();
+      this.database.exec("COMMIT");
+      return sequence;
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+
+  putPending(state: string, verifier: string, expiresAt: number, now = Date.now(), startSequence?: number): void {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       this.database.prepare("DELETE FROM oauth_pending WHERE expires_at<=?").run(now);
       this.database.prepare("INSERT INTO oauth_pending(state,encrypted_verifier,expires_at,start_sequence) VALUES(?,?,?,?)")
-        .run(state, this.encrypt(verifier), expiresAt, this.nextSequence());
+        .run(state, this.encrypt(verifier), expiresAt, startSequence ?? this.nextSequence());
       this.database.exec("COMMIT");
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }

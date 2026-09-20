@@ -146,6 +146,41 @@ test("disconnect rejects an older claim for that workspace across restart, but p
   }
 });
 
+test("disconnect rejects an authorization whose Worker start response arrives afterward", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const delayedState = "d".repeat(43);
+  let workerEntered!: () => void;
+  let releaseWorker!: () => void;
+  const entered = new Promise<void>((resolve) => { workerEntered = resolve; });
+  const workerGate = new Promise<void>((resolve) => { releaseWorker = resolve; });
+  const fetcher: typeof fetch = async (input) => {
+    const endpoint = new URL(String(input)).pathname;
+    if (endpoint === "/oauth/start") {
+      workerEntered();
+      await workerGate;
+      const authorization = new URL("https://api.notion.com/v1/oauth/authorize");
+      authorization.searchParams.set("state", delayedState);
+      authorization.searchParams.set("redirect_uri", `${origin}/oauth/callback`);
+      return Response.json({ state: delayedState, authorizationUrl: authorization.href });
+    }
+    if (endpoint === "/oauth/claim") return Response.json(credential);
+    return Response.json({ status: "acknowledged" });
+  };
+  const now = Date.parse("2026-09-21T00:00:00.000Z");
+  try {
+    vault.putPending(state, "initial", now + 60_000, now);
+    vault.storeClaimed(state, credential, new Date(now).toISOString());
+    const service = new NotionOAuthService(origin, workerApiKey, vault, fetcher, () => now);
+    const starting = service.start();
+    await entered;
+    assert.equal(service.disconnect("workspace-one"), true);
+    releaseWorker();
+    assert.equal(new URL((await starting).authorizationUrl).searchParams.get("state"), delayedState);
+    await assert.rejects(service.claim(delayedState, ticket), /已断开/);
+    assert.equal(vault.getCredential("workspace-one"), null);
+  } finally { vault.close(); }
+});
+
 test("lost refresh response keeps one persisted attempt and blocks stale token until a retry confirms rotation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-refresh-"));
   const path = join(directory, "vault.sqlite");

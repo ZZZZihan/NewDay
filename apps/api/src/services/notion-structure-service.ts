@@ -166,14 +166,28 @@ export class NotionStructureService {
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, schema.title, connection.rootPageId,
       fingerprint({ kind: "data-source", name, schema: schema.expected }));
     try {
+      if (created) {
+        // The first call has not sent a create yet. A same-title child may be a
+        // previous human or uncertain app creation; require explicit readback
+        // before this installation can adopt it or create another one.
+        for (const candidateId of await this.gateway.listChildDatabases(token, connection.rootPageId)) {
+          const candidate = await this.gateway.getDatabase(token, candidateId);
+          if (candidate.title === schema.title && candidate.parentPageId === connection.rootPageId) {
+            await this.markReview(step, "ambiguous");
+            return;
+          }
+        }
+      }
       const id = created ? await this.gateway.createDatabase(token, connection.rootPageId, schema.title, schema.properties) : null;
       const candidateIds = [...new Set([...(id ? [id] : []),
         ...await this.gateway.listChildDatabases(token, connection.rootPageId)])];
       const matchingTitle: Array<{ id: string; dataSourceId: string; propertyIds: Record<string, string> }> = [];
+      let sameTitleCount = 0;
       let invalidSchema = false;
       for (const candidateId of candidateIds) {
         const database = await this.gateway.getDatabase(token, candidateId);
         if (database.title !== schema.title || database.parentPageId !== connection.rootPageId) continue;
+        sameTitleCount += 1;
         if (database.dataSourceIds.length !== 1) { invalidSchema = true; continue; }
         const dataSourceId = database.dataSourceIds[0];
         const properties = await this.gateway.getDataSourceProperties(token, dataSourceId);
@@ -181,8 +195,8 @@ export class NotionStructureService {
         if (propertyIds) matchingTitle.push({ id: database.id, dataSourceId, propertyIds });
         else invalidSchema = true;
       }
-      if (matchingTitle.length !== 1) {
-        await this.markReview(step, matchingTitle.length > 1 ? "ambiguous" : invalidSchema ? "schema_mismatch" : "not_found");
+      if (sameTitleCount !== 1 || matchingTitle.length !== 1 || invalidSchema) {
+        await this.markReview(step, sameTitleCount > 1 ? "ambiguous" : invalidSchema ? "schema_mismatch" : "not_found");
         return;
       }
       const remote = matchingTitle[0];
@@ -198,7 +212,14 @@ export class NotionStructureService {
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, relation.name, source.dataSourceId,
       fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }));
     try {
-      if (created) await this.gateway.addRelation(token, source.dataSourceId, relation.name, target.dataSourceId);
+      if (created) {
+        const existing = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
+        if (existing && (existing.type !== "relation" || existing.relationTarget !== target.dataSourceId)) {
+          await this.markReview(step, "schema_mismatch");
+          return;
+        }
+        if (!existing) await this.gateway.addRelation(token, source.dataSourceId, relation.name, target.dataSourceId);
+      }
       const property = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
       if (!property || property.type !== "relation" || property.relationTarget !== target.dataSourceId) {
         await this.markReview(step, "schema_mismatch");
@@ -239,6 +260,9 @@ export class NotionStructureService {
     await this.store.transaction(async () => {
       const current = await this.store.getNotionConnection(step.workspaceId);
       if (!current) throw new Error("Notion initialization workspace disappeared");
+      if (current.status === "paused_after_restore" || current.status === "paused_unknown") {
+        throw new ApiError(409, "Notion 结构在扫描期间被恢复或暂停，不能确认本次写入");
+      }
       const next: NotionConnection = { ...current, dataSources: { ...current.dataSources }, updatedAt: this.timestamp() };
       if (step.step === "root") {
         if (next.rootPageId && next.rootPageId !== remoteId) throw new Error("Notion root identity changed");

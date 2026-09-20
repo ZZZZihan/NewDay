@@ -684,6 +684,16 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     const sync = notionSyncArchiveSchema.parse(data.notionSync ?? emptyNotionSyncArchive());
     await this.transaction(async () => {
       const quarantinedAt = new Date().toISOString();
+      // A replacement backup may contain no Notion records even though this
+      // installation has already attempted remote creation. Keep that local
+      // identity fenced until a person reconciles the existing remote objects.
+      const priorSteps = await this.listNotionInitializationSteps();
+      const importedWorkspaces = new Set(sync.connections.map((connection) => connection.workspaceId));
+      const orphanedStructures = (await this.listNotionConnections()).filter((connection) =>
+        !importedWorkspaces.has(connection.workspaceId) && (connection.rootPageId !== null ||
+          Object.keys(connection.dataSources).length > 0 ||
+          priorSteps.some((step) => step.workspaceId === connection.workspaceId) ||
+          connection.status === "paused_after_restore" || connection.status === "paused_unknown"));
       for (const operation of this.many<NotionOutboxOperation>(
         "SELECT payload FROM notion_outbox WHERE status IN ('sending','unknown','quarantined')")) {
         const mapping = await this.getNotionTaskMapping(operation.localTaskId);
@@ -706,6 +716,12 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
       }
       for (const step of sync.initializationSteps ?? []) await this.putNotionInitializationStep(step);
+      for (const connection of orphanedStructures) {
+        await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
+        for (const step of priorSteps.filter((item) => item.workspaceId === connection.workspaceId)) {
+          await this.putNotionInitializationStep(step);
+        }
+      }
       for (const mapping of sync.taskMappings) await this.putNotionTaskMapping(mapping);
       for (const operation of sync.outbox) {
         const restored: NotionOutboxOperation = ["confirmed", "superseded"].includes(operation.status)

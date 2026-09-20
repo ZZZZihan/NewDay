@@ -94,8 +94,10 @@ export class NotionOutboxDispatcher {
         baseline: mapping.baseline, local: operation.desired, remote: before.fields,
       });
       try {
-        operation = await this.applyPreflightMerge(operation, mapping, before.fields,
+        const merged = await this.applyPreflightMerge(operation, mapping, before.fields,
           resolution.merged, resolution.conflicts);
+        if (merged === "superseded") return merged;
+        operation = merged;
         mapping = (await this.store.getNotionTaskMapping(operation.localTaskId))!;
       } catch { return this.markUnknownOrQuarantined(operation); }
     }
@@ -163,7 +165,7 @@ export class NotionOutboxDispatcher {
     remote: NotionTaskFields,
     merged: NotionTaskFields,
     conflicts: NotionFieldConflict[],
-  ): Promise<NotionOutboxOperation> {
+  ): Promise<NotionOutboxOperation | "superseded"> {
     if (merged.date === null) throw new Error("Undated Notion tasks need the T4 task model");
     const at = this.now();
     return this.store.transaction(async () => {
@@ -174,6 +176,9 @@ export class NotionOutboxDispatcher {
       if (!task || !sameFields({
         title: task.title, date: [task.startDate, task.endDate], completed: task.status === "completed",
       }, operation.desired)) {
+        // A newer local command can commit after the earlier preflight check.
+        // This transaction still holds the send before any external HTTP.
+        if (await this.store.supersedeNotionUnsentIfNewer(operation.operationId)) return "superseded";
         throw new Error("Local task changed during Notion preflight");
       }
       const commands: PlannerCommand[] = [];

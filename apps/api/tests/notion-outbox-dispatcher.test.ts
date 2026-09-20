@@ -212,6 +212,43 @@ test("a newer local intent during preflight supersedes the unsent attempt withou
   } finally { store.close(); }
 });
 
+test("a newer intent after the first supersession check is caught by the merge transaction", async () => {
+  const first: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const second: NotionTaskFields = { ...fields, date: ["2026-09-10", "2026-09-10"] };
+  const remote: NotionTaskFields = { ...fields, title: "Notion 新标题" };
+  const store = await setup("remote-1", first);
+  const fake = fakeTransport();
+  fake.pages.set("remote-1", {
+    workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields: remote, inTrash: false,
+  });
+  const check = store.supersedeNotionUnsentIfNewer.bind(store);
+  let committedNewer = false;
+  store.supersedeNotionUnsentIfNewer = async (operationId) => {
+    const result = await check(operationId);
+    if (!committedNewer) {
+      committedNewer = true;
+      await store.transaction(async () => {
+        const current = (await store.getTask("task-1"))!;
+        await store.putTask({ ...current, startDate: second.date![0], endDate: second.date![1] });
+        const older = (await store.getNotionOutboxOperation("operation-1"))!;
+        await store.enqueueNotionOutbox({ ...older, operationId: "operation-2", desired: second,
+          status: "pending", attemptCount: 0, lastAttemptAt: null, confirmedAt: null });
+      });
+    }
+    return result;
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    assert.equal(await dispatcher.dispatch("operation-1"), "superseded");
+    assert.equal(fake.calls.update, 0);
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "active");
+    assert.equal(await dispatcher.dispatch("operation-2"), "confirmed");
+    assert.deepEqual(fake.pages.get("remote-1")?.fields, { ...second, title: remote.title });
+    assert.equal((await store.getTask("task-1"))?.title, remote.title);
+  } finally { store.close(); }
+});
+
 test("a remote edit after preflight survives a selective date patch", async () => {
   const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
   const store = await setup("remote-1", desired);

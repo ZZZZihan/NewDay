@@ -101,7 +101,9 @@ export function DayPlanner() {
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   event.target.value = "";
-                  if (file) void handleImport(file);
+                  if (file) void (async () => {
+                    if (await handleImport(file)) await life.refresh();
+                  })();
                 }}
               />
             </div>

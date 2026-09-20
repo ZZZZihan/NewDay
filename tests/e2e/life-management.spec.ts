@@ -85,3 +85,26 @@ test("a resource can seed an inbox task and keeps the task association", async (
   const workspace = (await (await request.get("/api/life/workspace")).json()) as { resourceTaskLinks: unknown[] };
   expect(workspace.resourceTaskLinks).toHaveLength(1);
 });
+
+test("restoring a backup refreshes the active library view", async ({ page, request }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "资料库", exact: true }).click();
+  await expect(page.getByText("这里还没有资料")).toBeVisible();
+  const emptyBackup = await (await request.get("/api/planner/backup")).json();
+
+  await page.getByRole("button", { name: "新建资料", exact: true }).click();
+  const editor = page.getByRole("region", { name: "新建资料" });
+  await editor.getByLabel("资料标题").fill("恢复前资料");
+  await editor.getByRole("button", { name: "创建资料" }).click();
+  await expect(page.getByRole("button", { name: /恢复前资料/ })).toBeVisible();
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("import-input").setInputFiles({
+    name: "empty-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(emptyBackup)),
+  });
+  await expect(page.getByText("导入完成：0 项任务、0 份资料")).toBeVisible();
+  expect((await (await request.get("/api/life/workspace")).json()).resources).toHaveLength(0);
+  await expect(page.getByText("这里还没有资料")).toBeVisible();
+});

@@ -108,8 +108,12 @@ export class NotionCredentialVault {
   storeClaimed(state: string, credential: NotionCredential, now: string): NotionCredentialSummary | null {
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const pending = this.database.prepare("SELECT start_sequence FROM oauth_pending WHERE state=?").get(state);
-      if (!pending) throw new Error("Notion OAuth state is no longer pending");
+      const pending = this.database.prepare("SELECT start_sequence,expires_at FROM oauth_pending WHERE state=?").get(state);
+      if (!pending || Number(pending.expires_at) <= Date.parse(now)) {
+        this.database.prepare("DELETE FROM oauth_pending WHERE state=?").run(state);
+        this.database.exec("COMMIT");
+        return null;
+      }
       const disconnected = this.database.prepare("SELECT disconnect_sequence FROM disconnected_workspaces WHERE workspace_id=?")
         .get(credential.workspace_id);
       if (disconnected && Number(pending.start_sequence) <= Number(disconnected.disconnect_sequence)) {

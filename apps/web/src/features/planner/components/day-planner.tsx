@@ -59,11 +59,16 @@ export function DayPlanner() {
   );
   const taskTotal = (dayPlan?.counts.open ?? 0) + (dayPlan?.counts.completed ?? 0);
   const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
-  const writableWorkspaces = notion.status?.connections.filter((item) => item.status === "active" &&
-    notion.structures[item.workspaceId]?.state === "ready" &&
-    notion.reads[item.workspaceId]?.connectionStatus === "active" &&
-    notion.reads[item.workspaceId]?.sources.some((source) =>
-      source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) && !source.watermark?.lastError)) ?? [];
+  const writableWorkspaces = notion.status?.connections.filter((item) => {
+    const read = notion.reads[item.workspaceId];
+    const sync = notion.syncs[item.workspaceId];
+    const localWriteReady = sync?.connectionStatus === "active" ||
+      (sync?.connectionStatus === "paused" && sync.pauseReason === "preflight_read");
+    return item.status === "active" && notion.structures[item.workspaceId]?.state === "ready" &&
+      localWriteReady && read?.sources.some((source) =>
+        source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) &&
+        (!source.watermark?.lastError || ["network", "remote", "rate_limited", "local"].includes(source.watermark.lastError)));
+  }) ?? [];
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);

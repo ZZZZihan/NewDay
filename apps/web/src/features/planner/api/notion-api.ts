@@ -24,6 +24,7 @@ export type NotionStructureProgress = {
 export type NotionReadStatus = {
   workspaceId: string;
   connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
+  pauseReason: "preflight_read" | null;
   sources: Array<{
     table: "areas" | "projects" | "tasks";
     dataSourceId: string | null;
@@ -38,6 +39,7 @@ export type NotionReadStatus = {
 export type NotionSyncStatus = {
   workspaceId: string;
   connectionStatus: NotionReadStatus["connectionStatus"];
+  pauseReason: NotionReadStatus["pauseReason"];
   operations: Array<{ operationId: string; localTaskId: string;
     status: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
     attemptCount: number; createdAt: string; lastAttemptAt: string | null }>;

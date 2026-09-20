@@ -135,6 +135,9 @@ test("a failed remote preflight pauses sending but keeps later linked local chan
     await planner.commands([{ type: "updateTaskDetails", input: {
       taskId: "offline-one", title: "离线改名", now: at,
     } }], "test-client");
+    await store.putNotionScanWatermark({ workspaceId, dataSourceId: "tasks-source",
+      completedThrough: at, lastAttemptAt: at, lastSuccessAt: at,
+      lastError: "local", lastErrorAt: at });
     await planner.commands([{ type: "createTask", input: { id: "offline-two", title: "离线新任务",
       startDate: "2026-09-22", endDate: "2026-09-22", now: at,
       notionWorkspaceId: workspaceId } }], "test-client");

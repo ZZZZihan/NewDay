@@ -17,6 +17,7 @@ export class NotionSyncService {
     const operations = (await this.store.listNotionOutboxOperations()).filter((item) => item.workspaceId === workspaceId);
     const conflicts = (await this.store.listNotionConflicts()).filter((item) => item.workspaceId === workspaceId);
     return { workspaceId, connectionStatus: connection.status,
+      pauseReason: connection.pauseReason ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
       conflicts };

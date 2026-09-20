@@ -77,9 +77,9 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             {syncs[item.workspaceId]?.connectionStatus === "active" &&
               syncs[item.workspaceId].operations.some((operation) => operation.status === "pending") ?
               <button type="button" disabled={busy} onClick={() => void drain(item.workspaceId)}>发送待同步任务</button> : null}
-            {["paused", "paused_unknown"].includes(syncs[item.workspaceId]?.connectionStatus ?? "") &&
-              (syncs[item.workspaceId]?.connectionStatus !== "paused" ||
-                syncs[item.workspaceId].operations.some((operation) => operation.status === "pending" && operation.attemptCount > 0)) &&
+            {(syncs[item.workspaceId]?.connectionStatus === "paused_unknown" ||
+              (syncs[item.workspaceId]?.connectionStatus === "paused" &&
+                syncs[item.workspaceId]?.pauseReason === "preflight_read")) &&
               !syncs[item.workspaceId].operations.some((operation) => ["sending", "unknown", "quarantined"].includes(operation.status)) ?
               <button type="button" disabled={busy} onClick={() => void resume(item.workspaceId)}>恢复发送</button> : null}
             <button type="button" disabled={busy} onClick={() => {

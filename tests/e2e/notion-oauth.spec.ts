@@ -108,8 +108,9 @@ test("quick add falls back to local storage when the selected Notion workspace b
   await expect(storage).toBeVisible();
   await storage.selectOption(workspaceId);
   connectionStatus = "paused_unknown";
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(storage).toHaveCount(0);
   await page.getByRole("button", { name: "Notion 连接" }).click();
-  await page.getByRole("button", { name: "刷新状态" }).click();
   await expect(page.getByText("写入结果待核对；已暂停发送")).toBeVisible();
   await page.getByRole("button", { name: "今天", exact: true }).click();
   await expect(storage).toHaveCount(0);
@@ -121,9 +122,7 @@ test("quick add falls back to local storage when the selected Notion workspace b
   expect(commands[0].input.notionWorkspaceId).toBeUndefined();
   await expect(page.getByText("本机新任务", { exact: true })).toBeVisible();
   connectionStatus = "active";
-  await page.getByRole("button", { name: "Notion 连接" }).click();
-  await page.getByRole("button", { name: "刷新状态" }).click();
-  await page.getByRole("button", { name: "今天", exact: true }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(storage).toBeVisible();
   await expect(storage).toHaveValue("");
 });

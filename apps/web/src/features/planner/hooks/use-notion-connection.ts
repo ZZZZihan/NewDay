@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructureProgress,
   type NotionSyncStatus } from "../api/notion-api";
@@ -28,8 +28,10 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   const [syncs, setSyncs] = useState<Record<string, NotionSyncStatus>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const refreshRevision = useRef(0);
 
   const refresh = useCallback(async () => {
+    const revision = ++refreshRevision.current;
     try {
       const next = await notionApi.status();
       const entries = await Promise.all(next.connections.map(async (item) => {
@@ -47,6 +49,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
         catch { return null; }
       }));
       const nextSyncs = Object.fromEntries(syncEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null));
+      if (revision !== refreshRevision.current) return;
       setStatus(next);
       setStructures(nextStructures);
       setReads(nextReads);
@@ -54,8 +57,26 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
       onAvailabilityChanged?.(writableNotionWorkspaces(next, nextStructures, nextReads, nextSyncs)
         .map((item) => item.workspaceId));
     }
-    catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态"); }
+    catch (error) {
+      if (revision === refreshRevision.current) {
+        setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态");
+      }
+    }
   }, [onAvailabilityChanged]);
+
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const timer = window.setInterval(refreshIfVisible, 30_000);
+    window.addEventListener("focus", refreshIfVisible);
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshIfVisible);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+    };
+  }, [refresh]);
 
   useEffect(() => {
     const match = window.location.hash.match(oauthFragment);

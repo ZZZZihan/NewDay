@@ -39,7 +39,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 远端无日期任务在首次扫描时可保留远端索引，但不进入每日清单、逾期、重点或 Agent 候选。已关联任务清空日期时保留同一个本地任务 ID、远端映射、资料链接和历史；计划范围改为整体空值，清除当前重点可见性，退出所有每日投影。当前 `Task` 模型要求非空 `startDate/endDate`，因此实现必须将两端作为同时为 null 或同时有效的配对，并更新 day-plan、Agent 快照、任务总表与备份校验；不能用“今天”占位。纯本地任务仍须有日期。
 
-远端完成变更首次成功应用时记录本机观察时间作为 `completedAt`，按用户已配置时区得到 `completedOn`；这不是远端实际点击时间。重复读取相同状态不改写完成时间或 plannerRevision。重开清空两者。
+远端 `Completed` 勾选不提供实际完成时间。首次读到已完成，或由未完成变为已完成时，`completedAt` 与 `completedOn` 均保持 `null`，并将这次变化记为观察事件，不把扫描日写成完成日或 Agent 历史成果。已有可信的本地完成时间在重复读取同一完成状态时保留；重复读取不改写完成时间或 plannerRevision。重开清空两者。
 
 主线、项目、任务、规则与实例的本地 ID 与 Notion 页面 ID 分开保存，以 `(workspace_id, data_source_id, remote_page_id)` 唯一约束映射。重复规则以其远端页面 ID 派生 `logicalSeriesId`，现有规则段可以更换 `seriesId` 而不改变逻辑规则身份。实例键沿用 `logicalSeriesId:occurrenceDate`；`occurrenceDate` 是原始发生日，改期只改变实际计划日。窗口是用户时区的今天至今天＋31 天，含首尾。已完成实例和有明确例外的实例不能被规则刷新覆盖。
 

@@ -153,7 +153,10 @@ export class NotionReadService {
       .map((mapping) => [mapping.remotePageId!, mapping]));
     for (const row of rows) {
       if (row.ruleIds.length > 1) throw new NotionReadFailure("schema", `Notion task ${row.id} has multiple rules`);
-      if (row.ruleIds.length === 1 || row.occurrenceKey) {
+      if (Boolean(row.ruleIds.length) !== Boolean(row.occurrenceKey)) {
+        throw new NotionReadFailure("schema", `Notion task ${row.id} has an incomplete rule instance identity`);
+      }
+      if (row.ruleIds.length === 1) {
         if (byRemote.has(row.id)) throw new NotionReadFailure("schema", `Linked task ${row.id} became a rule instance`);
         continue; // Rule instances belong to T7, never materialize as one-off tasks.
       }

@@ -199,6 +199,28 @@ test("a scan begun before a local linked edit cannot overwrite that pending writ
   } finally { store.close(); credentials.close(); }
 });
 
+test("half-present rule identity fails the task scan without advancing its watermark", async () => {
+  for (const malformed of [
+    { ruleIds: ["rule-1"], occurrenceKey: null },
+    { ruleIds: [], occurrenceKey: "orphan-key" },
+  ]) {
+    const credentials = vault();
+    const store = new SQLitePlannerStore(":memory:");
+    const gateway = new FakeReadGateway();
+    try {
+      await store.putNotionConnection(connection());
+      gateway.rows.tasks = [{ ...task(), ...malformed }];
+      const service = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
+      await assert.rejects(service.scan(workspaceId), (error: unknown) =>
+        error instanceof NotionReadFailure && error.category === "schema");
+      assert.equal((await store.listNotionTaskMappings()).length, 0);
+      const watermark = (await service.status(workspaceId)).sources[2].watermark;
+      assert.equal(watermark?.lastSuccessAt, null);
+      assert.equal(watermark?.lastError, "schema");
+    } finally { store.close(); credentials.close(); }
+  }
+});
+
 test("installed SDK partitions incomplete queries and fails closed when a timestamp cannot advance", async () => {
   const rows = (ids: string[], createdAt: string) => ids.map((id) => ({
     object: "page" as const, id, url: url(id), created_time: createdAt,

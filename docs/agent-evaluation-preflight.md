@@ -16,6 +16,6 @@ pnpm agent:evaluation:preflight --output /tmp/newday-agent-evaluation-preflight.
 | H-P05 | fixture 的 `clarificationAnswers.priority` 是语义标签；模型生成的问题 ID 是运行时值。当前没有审计过的答案到问题 ID 映射。 | 建立有人确认的第二轮应答流程，记录问题原文、ID、所用答案和结果；不能凭标签自动猜测。 |
 | H-P07 | fixture 写明一个历史偏好已删除；当前生产快照只包含现存偏好，不向模型提供删除历史。 | 先审查此场景要验证的真实产品行为，再决定保留原场景、重新冻结替代场景，或修改产品历史合同；不悄悄丢弃该输入后宣称原场景通过。 |
 
-另有明确转换：`maximum_focus_count` → 当天 capacity，`energy` → 当天 energy，`unavailable_resource` → blocked task，`requires_task` → `other` 明文约束，过去的拒绝反馈 → Agent 已记录反馈。fixture 未指定 `learningEnabled`，预检沿用生产默认 `true` 并逐场记录该适配，不能根据是否有历史输入擅自关闭学习。`soft` 偏好进入生产的显式偏好事实，不按硬约束强制执行。日期级拒绝反馈进入生产合同时需要时刻；H-P08 预检使用合成的 `08:00Z` 并在报告中标明，评审不能据这个时分推断用户行为。`requires_task` 的依赖由模型判断，当前宿主校验不强制验证依赖；该场景的约束遵守需要人工评审。转换清单逐项留在报告中，冻结 fixture 本身未改动。
+另有明确转换：`blocked` → `blocked_task`，`maximum_focus_count` → 当天 capacity，`energy` → 当天 energy，`unavailable_resource` → blocked task，`requires_task` → `other` 明文约束，过去的拒绝反馈 → Agent 已记录反馈。fixture 未指定 `learningEnabled`，预检沿用生产默认 `true` 并逐场记录该适配，不能根据是否有历史输入擅自关闭学习。`soft` 偏好进入生产的显式偏好事实，不按硬约束强制执行。日期级拒绝反馈进入生产合同时需要时刻；H-P08 预检使用合成的 `08:00Z` 并在报告中标明，评审不能据这个时分推断用户行为。`requires_task` 的依赖由模型判断，当前宿主校验不强制验证依赖；该场景的约束遵守需要人工评审。转换清单逐项留在报告中，冻结 fixture 本身未改动。
 
 下一阶段需要冻结候选代码、provider/模型、提示词/schema、合成数据范围、总调用与费用上限、停止条件，以及人工评分人和逐次报告格式。保留场景若被用于调参，就不再是独立验收集，须另冻未见场景。G4 的人工基线和连续七天使用记录另在 COL-24 验收。

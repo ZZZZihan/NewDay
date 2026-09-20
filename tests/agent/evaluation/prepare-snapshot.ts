@@ -57,6 +57,14 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
   const store = new MemoryAgentStore();
   const gaps: string[] = [];
   const adaptations: string[] = [];
+  for (const task of input.tasks) {
+    const futureFields = (["createdAt", "updatedAt", "completedAt"] as const).filter((field) => {
+      const at = task[field];
+      return at !== null && Date.parse(at) > Date.parse(input.sampledAt);
+    });
+    if (futureFields.length)
+      gaps.push(`task ${task.id}: ${futureFields.join(", ")} are later than sampledAt; the snapshot cannot reconstruct this task's earlier state`);
+  }
   if (scenario.clarificationAnswers)
     gaps.push("clarificationAnswers: fixture keys do not identify the model's generated question IDs for a second call");
   try {
@@ -73,9 +81,12 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
 
     const preferences = new PlannerPreferencesService(store, clock);
     const beforePreferences = await preferences.getPreferences();
+    adaptations.push(`learningEnabled: unspecified by fixture -> production default ${beforePreferences.learningEnabled}`);
+    for (const preference of input.preferences)
+      adaptations.push(`preference ${preference.id}: soft -> production explicit preference fact; no hard-constraint enforcement`);
     await preferences.updatePreferences({
       expectedRevision: beforePreferences.revision, timeZone: input.timeZone,
-      learningEnabled: input.priorHistory.length > 0,
+      learningEnabled: beforePreferences.learningEnabled,
       explicitPreferences: input.preferences.map(({ id, text }) => ({ id, text, source: "user" as const })),
     });
 
@@ -139,7 +150,7 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
         ...(history.reason === null ? {} : { reason: history.reason }),
       };
       await store.putAgentRecord(AGENT_NAMESPACES.feedback, feedback.feedbackId, feedback);
-      adaptations.push(`priorHistory[${index}]: rejected -> recorded user feedback`);
+      adaptations.push(`priorHistory[${index}]: rejected on ${history.date} -> recorded user feedback at synthetic ${at}; time of day was not supplied`);
     }
 
     const snapshot = planningSnapshotSchema.parse(await contexts.createSnapshot());

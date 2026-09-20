@@ -253,7 +253,10 @@ export function DayPlanner() {
             onRetrySeries={retrySeries}
           />
 
-          <form className="quick-add" onSubmit={(event) => void handleQuickAdd(event, selectedQuickWorkspaceId || undefined)}>
+          <form className="quick-add" onSubmit={(event) => { void (async () => {
+            await handleQuickAdd(event, selectedQuickWorkspaceId || undefined);
+            if (selectedQuickWorkspaceId) await notion.refresh();
+          })(); }}>
             <Input
               ref={quickInputRef}
               id="quick-task"

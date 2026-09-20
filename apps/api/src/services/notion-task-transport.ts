@@ -68,6 +68,12 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
       properties[this.propertyId(connection, "NewDay Key")] = {
         rich_text: [{ type: "text", text: { content: mapping.clientKey } }],
       };
+      if (mapping.rulePageId && mapping.occurrenceKey) {
+        properties[this.propertyId(connection, "Rule")] = { relation: [{ id: mapping.rulePageId }] };
+        properties[this.propertyId(connection, "Occurrence Key")] = {
+          rich_text: [{ type: "text", text: { content: mapping.occurrenceKey } }],
+        };
+      }
     } catch {
       throw new NotionWritePreflightFailure("Notion create setup failed before sending HTTP");
     }
@@ -127,11 +133,15 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
       throw new NotionReadFailure("schema", "Notion task page has a different parent");
     }
     const row = await parseRow(client, raw, "tasks", connection.dataSources.tasks!.propertyIds);
-    if (row.kind !== "task" || row.ruleIds.length || row.occurrenceKey) {
-      throw new NotionReadFailure("schema", "Notion task is a rule instance, not a one-off task");
+    if (row.kind !== "task" || row.ruleIds.length !== (mapping.rulePageId ? 1 : 0) ||
+      row.ruleIds[0] !== mapping.rulePageId ||
+      (row.occurrenceKey ?? undefined) !== mapping.occurrenceKey) {
+      throw new NotionReadFailure("schema", "Notion task rule identity differs from its mapping");
     }
     return { workspaceId: connection.workspaceId, dataSourceId: mapping.dataSourceId,
       remotePageId: row.id, clientKey: row.clientKey,
+      ...(mapping.rulePageId && mapping.occurrenceKey
+        ? { rulePageId: mapping.rulePageId, occurrenceKey: mapping.occurrenceKey } : {}),
       fields: notionTaskFieldsSchema.parse({ title: row.title, date: row.date, completed: row.completed }),
       inTrash: row.inTrash };
   }

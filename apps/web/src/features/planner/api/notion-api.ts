@@ -26,7 +26,7 @@ export type NotionReadStatus = {
   connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
   pauseReason: "preflight_read" | null;
   sources: Array<{
-    table: "areas" | "projects" | "tasks";
+    table: "areas" | "projects" | "rules" | "tasks";
     dataSourceId: string | null;
     watermark: {
       completedThrough: string | null; lastAttemptAt: string | null; lastSuccessAt: string | null;

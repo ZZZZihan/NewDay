@@ -64,6 +64,7 @@ export const recurrenceSeriesSchema = z
     pattern: recurrencePatternSchema,
     end: recurrenceEndSchema,
     excludedDates: z.array(localDateSchema).default([]),
+    disabled: z.boolean().optional(),
     createdAt: instantSchema,
     updatedAt: instantSchema,
   })

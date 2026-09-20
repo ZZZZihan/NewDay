@@ -891,7 +891,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private initializeSchema() {
     const version = Number(this.database.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 6) throw new Error("This database was created by a newer version of NewDay");
+    if (version > 7) throw new Error("This database was created by a newer version of NewDay");
     if (version < 3) {
       this.database.exec("BEGIN IMMEDIATE");
       try {

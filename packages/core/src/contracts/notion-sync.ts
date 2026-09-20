@@ -121,6 +121,7 @@ export const notionRuleMappingSchema = z.object({
   remotePageId: nonEmptyId,
   logicalSeriesId: nonEmptyId,
   source: notionRuleSourceSchema,
+  generationAfter: localDateSchema.optional(),
   status: z.enum(["active", "archived"]),
   updatedAt: z.string().datetime({ offset: true }),
 }).strict();

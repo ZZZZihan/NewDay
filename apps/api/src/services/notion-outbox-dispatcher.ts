@@ -20,6 +20,8 @@ export type NotionTaskPage = {
   dataSourceId: string;
   remotePageId: string;
   clientKey: string | null;
+  rulePageId?: string;
+  occurrenceKey?: string;
   fields: NotionTaskFields;
   inTrash: boolean;
 };
@@ -154,6 +156,7 @@ export class NotionOutboxDispatcher {
       const page = await this.transport.readPage(connection, mapping);
       if (!page || page.inTrash || page.workspaceId !== mapping.workspaceId ||
         page.dataSourceId !== mapping.dataSourceId || page.remotePageId !== mapping.remotePageId ||
+        page.rulePageId !== mapping.rulePageId || page.occurrenceKey !== mapping.occurrenceKey ||
         (page.clientKey !== null && page.clientKey !== mapping.clientKey)) {
         return "uncertain";
       }
@@ -164,7 +167,8 @@ export class NotionOutboxDispatcher {
     const page = result.pages[0];
     if (!page) return null;
     if (page.inTrash || page.workspaceId !== mapping.workspaceId || page.dataSourceId !== mapping.dataSourceId ||
-      !page.remotePageId || page.clientKey !== mapping.clientKey) return "uncertain";
+      !page.remotePageId || page.clientKey !== mapping.clientKey ||
+      page.rulePageId !== mapping.rulePageId || page.occurrenceKey !== mapping.occurrenceKey) return "uncertain";
     return { ...page, fields: notionTaskFieldsSchema.parse(page.fields) };
   }
 

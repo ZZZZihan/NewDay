@@ -42,7 +42,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                     : `结构初始化：${structures[item.workspaceId].completedSteps.length}/9 步已确认`}</p>
             ) : <p>结构状态未读取；可刷新状态重试。</p>}
             {reads[item.workspaceId] ? <div className="notion-read-status" aria-label="只读同步状态">
-              {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
+              {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : source.table === "rules" ? "规则" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
             </div> : null}
             {syncs[item.workspaceId] ? <div className="notion-read-status" aria-label="写回状态">
               <p>写回：{syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"

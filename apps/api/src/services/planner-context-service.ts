@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { ensureRecurrenceOccurrences } from "@newday/core/application/recurrence-generation";
 import { shiftDate } from "@newday/core/domain/planner-date";
 import {
   AGENT_NAMESPACES, dailyContextSchema, dateInTimeZone, planningSnapshotSchema, updateContextRequestSchema,
@@ -9,6 +8,7 @@ import { AgentApiError } from "../http/agent-error.js";
 import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
 import { assertUniqueIds, invalidateReadyProposals, PlannerPreferencesService } from "./planner-preferences-service.js";
 import { recordedOutcome } from "./planner-history-service.js";
+import { ensureLocalRecurrenceOccurrences } from "./local-recurrence-service.js";
 
 const MAX_SNAPSHOT_CHARACTERS = 120_000;
 
@@ -68,7 +68,7 @@ export class PlannerContextService {
       const date = dateInTimeZone(sampledTime, timeZone);
       const sampledAt = new Date(sampledTime).toISOString();
       await this.store.withEventContext({ date, at: sampledAt, source: "system" }, () =>
-        ensureRecurrenceOccurrences(this.store, { asOfDate: date, throughDate: shiftDate(date, 31), additionallyEnsureDate: date, now: sampledAt }));
+        ensureLocalRecurrenceOccurrences(this.store, { asOfDate: date, throughDate: shiftDate(date, 31), additionallyEnsureDate: date, now: sampledAt }));
       const version = await this.store.getPlanningVersion();
       const context = await this.readOrCreateContext(version.datasetEpoch, date, timeZone);
       const allTasks = await this.store.listAllTasks();

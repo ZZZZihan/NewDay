@@ -5,7 +5,6 @@ import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday
 import { getDayPlan } from "@newday/core/application/day-plan";
 import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@newday/core/application/planner-backup";
 import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerCommand } from "@newday/core/application/planner-command";
-import { ensureRecurrenceOccurrences } from "@newday/core/application/recurrence-generation";
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
 import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 import type { Task } from "@newday/core/domain/planner-model";
@@ -13,6 +12,7 @@ import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
 import { notionAttributions } from "./notion-read-view.js";
+import { ensureLocalRecurrenceOccurrences } from "./local-recurrence-service.js";
 
 export type WireUndoReceipt = { token: string };
 type PendingUndo = { receipt: UndoReceipt; token: string; clientId: string; expiresAt: number };
@@ -36,7 +36,7 @@ export class PlannerService {
       const asOfDate = today?.date ?? input.asOfDate;
       const at = new Date(this.clock()).toISOString();
       return this.store.withEventContext({ date: asOfDate, at, source: "system" }, async () => {
-        await ensureRecurrenceOccurrences(this.store, {
+        await ensureLocalRecurrenceOccurrences(this.store, {
           asOfDate, throughDate: shiftDate(asOfDate, 31), additionallyEnsureDate: input.selectedDate, now: at,
         });
         const plan = await getDayPlan(this.store, { ...input, asOfDate });
@@ -67,7 +67,15 @@ export class PlannerService {
       const linked = new Map<string, NotionTaskMapping>();
       const newLinks = new Map<string, { workspaceId: string; dataSourceId: string; installationId: string }>();
       const before = new Map<string, NotionTaskFields>();
+      const notionSeries = new Set((await this.store.listNotionRuleMappings())
+        .map((mapping) => mapping.logicalSeriesId));
       for (const command of normalized) {
+        if (command.type === "updateRecurrenceSeries" || command.type === "stopRecurrenceSeries") {
+          const series = await this.store.getRecurrenceSeries(command.input.seriesId);
+          if (series && notionSeries.has(series.logicalSeriesId)) {
+            throw new ApiError(409, "Notion 重复规则请在 Notion 编辑；这里只能编辑单个实例");
+          }
+        }
         if (command.type === "createTask" && command.input.notionWorkspaceId) {
           const workspaceId = command.input.notionWorkspaceId;
           const connection = await this.store.getNotionConnection(workspaceId);
@@ -204,7 +212,14 @@ export class PlannerService {
   }
 
   stopPreview(input: { seriesId: string; endDate: string }) {
-    return this.run(() => previewStopRecurrenceSeries(this.store, input));
+    return this.run(async () => {
+      const series = await this.store.getRecurrenceSeries(input.seriesId);
+      if (series && (await this.store.listNotionRuleMappings()).some((mapping) =>
+        mapping.logicalSeriesId === series.logicalSeriesId)) {
+        throw new ApiError(409, "Notion 重复规则请在 Notion 编辑");
+      }
+      return previewStopRecurrenceSeries(this.store, input);
+    });
   }
 
   migrate(source: string) {

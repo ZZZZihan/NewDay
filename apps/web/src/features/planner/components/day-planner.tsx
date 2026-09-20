@@ -69,6 +69,8 @@ export function DayPlanner() {
         source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) &&
         (!source.watermark?.lastError || ["network", "remote", "rate_limited", "local"].includes(source.watermark.lastError)));
   }) ?? [];
+  const selectedQuickWorkspaceId = writableWorkspaces.some((item) => item.workspaceId === quickWorkspaceId)
+    ? quickWorkspaceId : "";
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);
@@ -257,7 +259,7 @@ export function DayPlanner() {
             onRetrySeries={retrySeries}
           />
 
-          <form className="quick-add" onSubmit={(event) => void handleQuickAdd(event, quickWorkspaceId || undefined)}>
+          <form className="quick-add" onSubmit={(event) => void handleQuickAdd(event, selectedQuickWorkspaceId || undefined)}>
             <Input
               ref={quickInputRef}
               id="quick-task"
@@ -275,7 +277,7 @@ export function DayPlanner() {
             </Button>
             {writableWorkspaces.length ? <label className="editor-select-field">
               <span>保存位置</span>
-              <select aria-label="保存位置" value={quickWorkspaceId} onChange={(event) => setQuickWorkspaceId(event.target.value)}>
+              <select aria-label="保存位置" value={selectedQuickWorkspaceId} onChange={(event) => setQuickWorkspaceId(event.target.value)}>
                 <option value="">仅本机</option>
                 {writableWorkspaces.map((item) => <option key={item.workspaceId} value={item.workspaceId}>
                   Notion：{item.workspaceName || item.workspaceId}</option>)}

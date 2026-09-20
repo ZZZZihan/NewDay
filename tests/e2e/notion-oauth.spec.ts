@@ -83,3 +83,41 @@ test("preflight pause keeps local Notion save and resume controls available", as
   await page.getByRole("button", { name: "Notion 连接" }).click();
   await expect(page.getByRole("button", { name: "恢复发送" })).toBeVisible();
 });
+
+test("quick add falls back to local storage when the selected Notion workspace becomes unavailable", async ({ page }) => {
+  const workspaceId = "workspace-test";
+  const connection = { workspaceId, workspaceName: "隔离测试空间", botId: "bot-test",
+    status: "active", updatedAt: "2026-09-21T00:00:00.000Z" };
+  let connectionStatus: "active" | "paused_unknown" = "active";
+  await page.route("**/api/notion/status", (route) =>
+    route.fulfill({ json: { configured: true, connections: [connection] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "ready", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
+      sources: [{ table: "tasks", dataSourceId: "tasks-source", watermark: {
+        completedThrough: "2026-09-21T00:00:00.000Z", lastAttemptAt: "2026-09-21T00:00:00.000Z",
+        lastSuccessAt: "2026-09-21T00:00:00.000Z", lastError: null, lastErrorAt: null,
+      } }] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus, pauseReason: null,
+      operations: [], conflicts: [] } }));
+  await page.goto("/");
+  const storage = page.getByRole("combobox", { name: "保存位置" });
+  await expect(storage).toBeVisible();
+  await storage.selectOption(workspaceId);
+  connectionStatus = "paused_unknown";
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await page.getByRole("button", { name: "刷新状态" }).click();
+  await expect(page.getByText("写入结果待核对；已暂停发送")).toBeVisible();
+  await page.getByRole("button", { name: "今天", exact: true }).click();
+  await expect(storage).toHaveCount(0);
+  await page.getByRole("textbox", { name: "添加一件要做的事" }).fill("本机新任务");
+  const request = page.waitForRequest((candidate) => candidate.url().endsWith("/api/planner/commands") &&
+    candidate.method() === "POST");
+  await page.getByRole("button", { name: "添加任务" }).click();
+  const commands = (await (await request).postDataJSON()).commands;
+  expect(commands[0].input.notionWorkspaceId).toBeUndefined();
+  await expect(page.getByText("本机新任务", { exact: true })).toBeVisible();
+});

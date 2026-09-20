@@ -57,6 +57,10 @@ export function DayPlanner() {
     return saved;
   }
 
+  async function undoAndRefreshLife() {
+    if (await handleUndo()) await life.refresh();
+  }
+
   return (
     <main className="day-page" aria-busy={isSaving || isUndoing || migration.checking}>
       <div className="workspace-shell">
@@ -388,7 +392,7 @@ export function DayPlanner() {
         <div className="app-notice" role="status" data-testid="app-notice">
           <span>{notice.message}</span>
           {notice.receipt ? (
-            <Button type="button" variant="ghost" size="sm" isDisabled={isUndoing || isSaving} onPress={() => void handleUndo()}>
+            <Button type="button" variant="ghost" size="sm" isDisabled={isUndoing || isSaving} onPress={() => void undoAndRefreshLife()}>
               撤销
             </Button>
           ) : null}

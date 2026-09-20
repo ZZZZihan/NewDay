@@ -121,8 +121,8 @@ export function useDayPlanner() {
     }
   }
 
-  async function handleUndo() {
-    if (!notice?.receipt || mutationPending.current || migration.checking) return;
+  async function handleUndo(): Promise<boolean> {
+    if (!notice?.receipt || mutationPending.current || migration.checking) return false;
     mutationPending.current = true;
     setIsUndoing(true);
 
@@ -130,6 +130,7 @@ export function useDayPlanner() {
       await plannerApi.undo(notice.receipt);
       await refresh();
       showNotice("已撤销");
+      return true;
     } catch (error) {
       setNotice((current) =>
         current
@@ -139,6 +140,7 @@ export function useDayPlanner() {
             }
           : current,
       );
+      return false;
     } finally {
       mutationPending.current = false;
       setIsUndoing(false);

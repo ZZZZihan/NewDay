@@ -108,3 +108,18 @@ test("restoring a backup refreshes the active library view", async ({ page, requ
   expect((await (await request.get("/api/life/workspace")).json()).resources).toHaveLength(0);
   await expect(page.getByText("这里还没有资料")).toBeVisible();
 });
+
+test("undo refreshes the active task table", async ({ page, request }) => {
+  await page.goto("/");
+  await page.getByTestId("quick-task-input").fill("核对撤销状态");
+  await page.getByRole("button", { name: "添加任务" }).click();
+  await page.getByRole("button", { name: "任务总表", exact: true }).click();
+  await page.getByRole("button", { name: /核对撤销状态/ }).click();
+  await page.getByRole("button", { name: "标为完成" }).click();
+  await expect(page.getByRole("button", { name: "恢复任务", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect(page.getByText("已撤销")).toBeVisible();
+  expect((await (await request.get("/api/life/workspace")).json()).tasks[0].status).toBe("open");
+  await expect(page.getByRole("button", { name: "标为完成" })).toBeVisible();
+});

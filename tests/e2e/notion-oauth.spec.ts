@@ -149,6 +149,41 @@ test("Notion panel shows pre-restore sends that are absent from the current outb
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
+test("manual drain stays hidden until the API confirms an empty restore quarantine", async ({ page }) => {
+  const workspaceId = "workspace-version-skew";
+  let restoreQuarantine: object[] | undefined;
+  await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
+    workspaceId, workspaceName: "版本错配空间", botId: "bot-test", status: "active",
+    updatedAt: "2026-09-21T00:00:00.000Z",
+  }] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "ready", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null, sources: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
+      operations: [{ operationId: "pending-operation", localTaskId: "task-1", status: "pending",
+        attemptCount: 0, createdAt: "2026-09-21T00:00:00.000Z", lastAttemptAt: null }],
+      ...(restoreQuarantine === undefined ? {} : { restoreQuarantine }), conflicts: [] } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await expect(page.getByText("恢复隔离明细未返回")).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送待同步任务" })).toHaveCount(0);
+
+  restoreQuarantine = [{ sourceEpoch: "old-epoch", operationId: "old-operation", localTaskId: "old-task",
+    originalStatus: "sending", attemptCount: 1, lastAttemptAt: "2026-09-21T00:00:00.000Z",
+    dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:old-task",
+    quarantinedAt: "2026-09-21T00:05:00.000Z" }];
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送待同步任务" })).toHaveCount(0);
+
+  restoreQuarantine = [];
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("button", { name: "发送待同步任务" })).toBeVisible();
+});
+
 test("preflight pause keeps local Notion save and resume controls available", async ({ page }) => {
   const workspaceId = "workspace-offline";
   const connection = { workspaceId, workspaceName: "离线测试空间", botId: "bot-test",

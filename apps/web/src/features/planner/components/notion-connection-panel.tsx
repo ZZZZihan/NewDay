@@ -100,6 +100,8 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               reads[item.workspaceId]?.connectionStatus === "active" ?
               <button type="button" disabled={busy} onClick={() => void scan(item.workspaceId)}>立即读取 Notion</button> : null}
             {syncs[item.workspaceId]?.connectionStatus === "active" &&
+              syncs[item.workspaceId].restoreQuarantine?.length === 0 &&
+              !syncs[item.workspaceId].operations.some((operation) => operation.status === "quarantined") &&
               syncs[item.workspaceId].operations.some((operation) => operation.status === "pending") ?
               <button type="button" disabled={busy} onClick={() => void drain(item.workspaceId)}>发送待同步任务</button> : null}
             {syncs[item.workspaceId]?.connectionStatus === "active" ?

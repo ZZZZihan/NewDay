@@ -240,3 +240,38 @@ test("HTTP command and sync status routes expose a confirmed write across the SQ
     assert.deepEqual(remote.getPage()?.fields, initial);
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("HTTP pause persists a send fence until explicit resume", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-pause-"));
+  const databasePath = join(directory, "planner.sqlite");
+  const seed = new SQLitePlannerStore(databasePath);
+  await seedReady(seed);
+  seed.close();
+  const remote = transport();
+  const app = createApp({ databasePath, planningModel: null, notionTaskTransport: remote.fake,
+    notionOAuth: { workerOrigin: "https://worker.example", workerApiKey: "test-key",
+      vaultPath: join(directory, "vault.sqlite"), encryptionKey: Buffer.alloc(32, 18) } });
+  try {
+    await app.ready();
+    const created = await app.inject({ method: "POST", url: "/api/planner/commands",
+      headers: { "x-newday-client": "test-browser" }, payload: { commands: [{ type: "createTask",
+        input: { id: "paused-task", title: "待暂停", startDate: "2026-09-21", endDate: "2026-09-21",
+          now: at, notionWorkspaceId: workspaceId } }] } });
+    assert.equal(created.statusCode, 200, created.body);
+    const pause = await app.inject({ method: "POST", url: `/api/notion/connections/${workspaceId}/sync/pause`, payload: {} });
+    assert.equal(pause.statusCode, 200, pause.body);
+    assert.equal(pause.json().pauseReason, "manual");
+    const blocked = await app.inject({ method: "POST", url: `/api/notion/connections/${workspaceId}/sync/drain`, payload: {} });
+    assert.equal(blocked.statusCode, 409, blocked.body);
+    assert.equal(pause.json().operations.find((item: { localTaskId: string }) => item.localTaskId === "paused-task")?.status,
+      "pending");
+    assert.deepEqual(remote.writes, []);
+    const observer = new SQLitePlannerStore(databasePath);
+    try { assert.equal((await observer.getNotionConnection(workspaceId))?.pauseReason, "manual"); }
+    finally { observer.close(); }
+    const resume = await app.inject({ method: "POST", url: `/api/notion/connections/${workspaceId}/sync/resume`, payload: {} });
+    assert.equal(resume.statusCode, 200, resume.body);
+    assert.equal(resume.json().connectionStatus, "active");
+    assert.equal(resume.json().pauseReason, null);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

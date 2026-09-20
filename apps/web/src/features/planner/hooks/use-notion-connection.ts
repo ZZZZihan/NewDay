@@ -141,7 +141,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     } finally { setBusy(false); }
   }
 
-  async function initializeStructure(workspaceId: string) {
+  async function initializeStructure(workspaceId: string, reviewOnly = false) {
     if (busy) return;
     setBusy(true);
     setMessage(null);
@@ -159,6 +159,10 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
         }
         if (result.state === "needs_review") {
           setMessage("Notion 创建结果需要核对；系统不会自动再次创建。检查该工作区后可点击重新核对。");
+          return;
+        }
+        if (reviewOnly) {
+          setMessage("本次只核对了已有结构尝试；如需继续建立后续结构，请另行点击建立或继续结构。");
           return;
         }
       }
@@ -201,6 +205,20 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     finally { setBusy(false); await refresh(); }
   }
 
+  async function pause(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await notionApi.pause(workspaceId);
+      refreshRevision.current += 1;
+      setSyncs((current) => ({ ...current, [workspaceId]: result }));
+      setMessage(result.operations.some((item) => item.status === "sending")
+        ? "已暂停新的同步请求；已有发送仍在进行，须等待读回或按操作 ID 核对。"
+        : "已暂停此工作区的新一轮自动读取与待发送队列；已开始的读取可能仍在进行。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "暂停同步失败"); }
+    finally { setBusy(false); await refresh(); }
+  }
+
   async function reconcile(workspaceId: string, operationId: string) {
     if (busy) return;
     setBusy(true);
@@ -228,5 +246,5 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   }
 
   return { status, structures, reads, syncs, message, busy, refresh, start, disconnect, retryRefresh,
-    initializeStructure, scan, drain, reconcile, resume };
+    initializeStructure, scan, drain, pause, reconcile, resume };
 }

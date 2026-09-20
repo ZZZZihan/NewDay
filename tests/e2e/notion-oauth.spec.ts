@@ -58,6 +58,63 @@ test("authorized workspace shows explicit structure creation and readback progre
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
+test("structure review stops after one read-only advance before the next creation step", async ({ page }) => {
+  const workspaceId = "workspace-review";
+  await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
+    workspaceId, workspaceName: "结构复核空间", botId: "bot-test", status: "active",
+    updatedAt: "2026-09-21T00:00:00.000Z",
+  }] } }));
+  const progress = (state: string, completedSteps: string[], nextStep: string, reviewReason: string | null) => ({
+    workspaceId, state, nextStep, reviewReason, retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps,
+  });
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: progress("needs_review", ["root"], "areas", "request_unknown") }));
+  let advances = 0;
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/advance`, (route) => {
+    advances += 1;
+    return route.fulfill({ json: progress("in_progress", ["root", "areas"], "projects", null) });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "重新核对" }).click();
+  await expect(page.getByText("本次只核对了已有结构尝试")).toBeVisible();
+  expect(advances).toBe(1);
+});
+
+test("Notion panel exposes a manual pause and explicit resume", async ({ page }) => {
+  const workspaceId = "workspace-pause";
+  let connectionStatus: "active" | "paused" = "active";
+  let pauseReason: "manual" | null = null;
+  await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
+    workspaceId, workspaceName: "暂停测试空间", botId: "bot-test", status: "active",
+    updatedAt: "2026-09-21T00:00:00.000Z",
+  }] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "ready", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus, pauseReason, sources: [] } }));
+  const syncStatus = () => ({ workspaceId, connectionStatus, pauseReason, operations: [], conflicts: [] });
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) => route.fulfill({ json: syncStatus() }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync/pause`, (route) => {
+    connectionStatus = "paused";
+    pauseReason = "manual";
+    return route.fulfill({ json: syncStatus() });
+  });
+  await page.route(`**/api/notion/connections/${workspaceId}/sync/resume`, (route) => {
+    connectionStatus = "active";
+    pauseReason = null;
+    return route.fulfill({ json: syncStatus() });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await page.getByRole("button", { name: "暂停同步" }).click();
+  await expect(page.getByText("已手动暂停；不再启动新一轮读取或发送")).toBeVisible();
+  await page.getByRole("button", { name: "恢复发送" }).click();
+  await expect(page.getByText("写回：可发送")).toBeVisible();
+});
+
 test("preflight pause keeps local Notion save and resume controls available", async ({ page }) => {
   const workspaceId = "workspace-offline";
   const connection = { workspaceId, workspaceName: "离线测试空间", botId: "bot-test",

@@ -77,7 +77,7 @@ export class NotionOutboxDispatcher {
 
     let before: Awaited<ReturnType<NotionOutboxDispatcher["readTarget"]>>;
     try { before = await this.readTarget(connection, mapping); }
-    catch { return this.pauseBeforeWrite(operation); }
+    catch (error) { return this.pauseBeforeWrite(operation, error); }
     if (before === "uncertain") return this.markUnknownOrQuarantined(operation);
     if (before && sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
     try {
@@ -86,11 +86,12 @@ export class NotionOutboxDispatcher {
 
     if (mapping.remotePageId === null) {
       if (before !== null || !this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
+        if (before === null && await this.store.deferNotionUnsentAfterManualPause(operation.operationId, operation.datasetEpoch)) return "paused";
         return this.markUnknownOrQuarantined(operation);
       }
       try { await this.transport.createPage(connection, mapping, operation.desired); }
       catch (error) {
-        if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+        if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation, error);
         // The page write may have committed before its response was lost.
       }
       return this.readBackAndConfirm(operation, connection, mapping);
@@ -111,6 +112,7 @@ export class NotionOutboxDispatcher {
     }
     if (sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
     if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
+      if (await this.store.deferNotionUnsentAfterManualPause(operation.operationId, operation.datasetEpoch)) return "paused";
       return this.markUnknownOrQuarantined(operation);
     }
     const patch = reconcileNotionTask({
@@ -119,7 +121,7 @@ export class NotionOutboxDispatcher {
     if (Object.keys(patch).length === 0) return this.markUnknownOrQuarantined(operation);
     try { await this.transport.updatePage(connection, mapping, patch); }
     catch (error) {
-      if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+      if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation, error);
       // Read back before treating an attempted write as failed.
     }
     return this.readBackAndConfirm(operation, connection, mapping);
@@ -245,9 +247,10 @@ export class NotionOutboxDispatcher {
     }
   }
 
-  private async pauseBeforeWrite(operation: NotionOutboxOperation): Promise<DispatchResult> {
+  private async pauseBeforeWrite(operation: NotionOutboxOperation, error: unknown): Promise<DispatchResult> {
     try {
-      if (await this.store.pauseNotionUnsent(operation.operationId, this.now())) return "paused";
+      const at = this.now();
+      if (await this.store.pauseNotionUnsent(operation.operationId, at, retryAfterAt(error, at))) return "paused";
       return this.quarantineIfRestored(operation);
     } catch { return this.markUnknownOrQuarantined(operation); }
   }
@@ -258,6 +261,23 @@ export class NotionOutboxDispatcher {
     if (old) return "quarantined";
     throw new Error("Notion operation changed during dispatch; manual reconciliation required");
   }
+}
+
+/** Rate-limit responses received before a page write have not changed the
+ * remote page. Keep their Retry-After deadline durable across API restarts. */
+function retryAfterAt(error: unknown, at: string): string | undefined {
+  const response = error && typeof error === "object" ? error : null;
+  const status = response && "status" in response ? Number(response.status) : NaN;
+  if (status !== 429 && status !== 529) return undefined;
+  const headers = response && "headers" in response ? response.headers : null;
+  const raw = headers && typeof headers === "object" && "get" in headers && typeof headers.get === "function"
+    ? String(headers.get("retry-after") ?? "").trim() : "";
+  const now = Date.parse(at);
+  const seconds = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  const parsed = Number.isFinite(seconds) ? now + seconds * 1000 : Date.parse(raw);
+  const deadline = Number.isFinite(parsed) && parsed > now && parsed <= 8_640_000_000_000_000
+    ? parsed : now + 5000;
+  return new Date(deadline).toISOString();
 }
 
 function sameFields(left: NotionTaskFields, right: NotionTaskFields) {

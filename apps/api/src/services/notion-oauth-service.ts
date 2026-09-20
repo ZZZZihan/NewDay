@@ -19,6 +19,9 @@ export class NotionOAuthService {
   async start(): Promise<{ authorizationUrl: string }> {
     const verifier = randomBytes(32).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("hex");
+    // Reserve order before waiting for the Worker. A workspace can be
+    // disconnected while /oauth/start is still in flight.
+    const startSequence = this.vault.beginAuthorization();
     const response = await this.request("/oauth/start", { challenge });
     if (typeof response.state !== "string" || !opaqueToken.test(response.state) ||
       typeof response.authorizationUrl !== "string") throw new ApiError(502, "Notion 授权服务返回无效会话");
@@ -31,7 +34,7 @@ export class NotionOAuthService {
       throw new ApiError(502, "Notion 授权服务返回无效地址");
     }
     const now = this.now();
-    this.vault.putPending(response.state, verifier, now + 10 * 60_000, now);
+    this.vault.putPending(response.state, verifier, now + 10 * 60_000, now, startSequence);
     return { authorizationUrl: authorizationUrl.href };
   }
 

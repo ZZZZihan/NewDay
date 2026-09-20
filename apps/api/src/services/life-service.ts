@@ -3,6 +3,7 @@ import { executePlannerCommands } from "@newday/core/application/planner-command
 import type { InboxItem, LifeFolder, LifeResource, LifeWorkspace } from "@newday/core/domain/life-model";
 import { ApiError } from "../http/api-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
+import { notionAttributions } from "./notion-read-view.js";
 
 export class LifeService {
   constructor(private readonly store: SQLitePlannerStore, private readonly clock: () => number = Date.now) {}
@@ -13,7 +14,8 @@ export class LifeService {
         this.store.listAllInboxItems(), this.store.listAllFolders(), this.store.listAllResources(),
         this.store.listAllResourceTaskLinks(), this.store.listAllTasks(),
       ]);
-      return { inboxItems, folders, resources, resourceTaskLinks, tasks };
+      return { inboxItems, folders, resources, resourceTaskLinks, tasks,
+        notionByTaskId: await notionAttributions(this.store) };
     });
   }
 

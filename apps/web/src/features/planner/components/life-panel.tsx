@@ -42,6 +42,7 @@ export function LifePanel(props: Props) {
   const folders = data?.folders ?? [];
   const resources = data?.resources ?? [];
   const tasks = data?.tasks ?? [];
+  const notionByTaskId = data?.notionByTaskId ?? {};
   const links = data?.resourceTaskLinks ?? [];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
   const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
@@ -53,7 +54,7 @@ export function LifePanel(props: Props) {
     if (taskStatus !== "all" && task.status !== taskStatus) return false;
     const query = taskQuery.trim().toLocaleLowerCase();
     return !query || `${task.title} ${task.notes}`.toLocaleLowerCase().includes(query);
-  }).sort((a, b) => a.startDate.localeCompare(b.startDate) || a.createdAt.localeCompare(b.createdAt));
+  }).sort((a, b) => (a.startDate ?? "9999-12-31").localeCompare(b.startDate ?? "9999-12-31") || a.createdAt.localeCompare(b.createdAt));
 
   const filteredResources = resources.filter((resource) => {
     if (folderFilter === "uncategorized" && resource.folderId !== null) return false;
@@ -136,11 +137,11 @@ export function LifePanel(props: Props) {
         <div className="life-toolbar"><label className="life-search"><Search size={16} /><input aria-label="搜索任务" value={taskQuery} placeholder="搜索标题或备注" onChange={(event) => setTaskQuery(event.target.value)} /></label>
           <select aria-label="任务状态" value={taskStatus} onChange={(event) => setTaskStatus(event.target.value as typeof taskStatus)}><option value="all">全部状态</option><option value="open">待办</option><option value="completed">已完成</option></select></div>
         <div className="life-list">{filteredTasks.length === 0 ? <Empty icon={<Check size={22} />} text="没有符合条件的任务" /> : filteredTasks.map((task) => <article key={task.id} className={`life-item life-task ${task.status === "completed" ? "life-task--done" : ""}`}>
-          <button type="button" className="life-task-main" onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)} aria-expanded={selectedTaskId === task.id}><strong>{task.title}</strong><small>{task.startDate}{task.endDate !== task.startDate ? ` → ${task.endDate}` : ""} · {task.status === "completed" ? "已完成" : "待办"}{links.some((link) => link.taskId === task.id) ? " · 有关联资料" : ""}</small></button>
-          {selectedTaskId === task.id ? <div className="life-detail"><p>{task.notes || "暂无备注"}</p><h3>关联资料</h3>
+          <button type="button" className="life-task-main" onClick={() => setSelectedTaskId(selectedTaskId === task.id ? null : task.id)} aria-expanded={selectedTaskId === task.id}><strong>{task.title}</strong><small>{task.startDate ?? "未安排日期"}{task.endDate && task.endDate !== task.startDate ? ` → ${task.endDate}` : ""} · {task.archived ? "Notion 已归档" : task.status === "completed" ? "已完成" : "待办"}{notionByTaskId[task.id] ? " · Notion 只读" : ""}{links.some((link) => link.taskId === task.id) ? " · 有关联资料" : ""}</small></button>
+          {selectedTaskId === task.id ? <div className="life-detail"><p>{task.notes || "暂无备注"}</p>{notionByTaskId[task.id] ? <p>归属：{[notionByTaskId[task.id].areaName, notionByTaskId[task.id].projectName].filter(Boolean).join(" / ") || "未设置"}{notionByTaskId[task.id].url ? <> · <a href={notionByTaskId[task.id].url!} target="_blank" rel="noopener noreferrer">在 Notion 查看任务</a></> : null}{notionByTaskId[task.id].projectUrl ? <> · <a href={notionByTaskId[task.id].projectUrl!} target="_blank" rel="noopener noreferrer">查看项目</a></> : null}</p> : null}<h3>关联资料</h3>
             <div className="life-chips">{links.filter((link) => link.taskId === task.id).map((link) => resourceById.get(link.resourceId)).filter((value): value is LifeResource => Boolean(value)).map((resource) => <button type="button" key={resource.id} onClick={() => { setSelectedResourceId(resource.id); setFolderFilter("all"); props.onViewChange("library"); }}>{resource.title}</button>)}{!links.some((link) => link.taskId === task.id) ? <span>暂无关联资料</span> : null}</div>
             <LinkSelector resources={resources.filter((resource) => !links.some((link) => link.taskId === task.id && link.resourceId === resource.id))} onChoose={(resourceId) => void props.mutate(() => lifeApi.link(resourceId, task.id))} />
-            <div className="life-actions"><button type="button" disabled={props.busy} onClick={() => void (async () => { if (await props.onCompleteTask(task)) await props.refresh(); })()}>{task.status === "completed" ? "恢复任务" : "标为完成"}</button><button type="button" className="life-primary" onClick={() => props.onOpenTask(task)}>编辑任务</button></div>
+            <div className="life-actions"><button type="button" disabled={props.busy || Boolean(notionByTaskId[task.id])} onClick={() => void (async () => { if (await props.onCompleteTask(task)) await props.refresh(); })()}>{task.status === "completed" ? "恢复任务" : "标为完成"}</button><button type="button" className="life-primary" disabled={Boolean(notionByTaskId[task.id]) || task.startDate === null} onClick={() => props.onOpenTask(task)}>编辑任务</button></div>
           </div> : null}
         </article>)}</div>
         {selectedTask && links.some((link) => link.taskId === selectedTask.id) ? <p className="life-hint">在资料库中可查看和编辑关联资料。</p> : null}

@@ -11,7 +11,7 @@ export class InvalidPlanningOutputError extends AgentApiError {
 export function executableCandidates(snapshot: PlanningSnapshot) {
   const blocked = new Set(snapshot.context.constraints.filter((value) => value.kind === "blocked_task").map((value) => value.taskId));
   return snapshot.candidates.filter((candidate) => candidate.executable && !candidate.blocked &&
-    candidate.task.status === "open" && candidate.task.startDate <= snapshot.date && !blocked.has(candidate.task.id));
+    candidate.task.status === "open" && !candidate.task.archived && candidate.task.startDate !== null && candidate.task.startDate <= snapshot.date && !blocked.has(candidate.task.id));
 }
 
 /** Host-determined no-action cases avoid sending needless model requests. */

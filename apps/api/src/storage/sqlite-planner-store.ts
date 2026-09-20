@@ -16,6 +16,8 @@ import {
   notionTaskMappingSchema,
   notionConflictRecordSchema,
   notionScanWatermarkSchema,
+  notionReadNodeSchema,
+  notionReadTaskContextSchema,
   notionRestoreQuarantineSchema,
   notionSyncArchiveSchema,
   emptyNotionSyncArchive,
@@ -28,6 +30,8 @@ import {
   type NotionTaskFields,
   type NotionTaskMapping,
   type NotionScanWatermark,
+  type NotionReadNode,
+  type NotionReadTaskContext,
   type NotionRestoreQuarantine,
   type NotionSyncArchive,
 } from "@newday/core/contracts/notion-sync";
@@ -526,6 +530,41 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.many<NotionScanWatermark>("SELECT payload FROM notion_scan_watermarks ORDER BY workspace_id,data_source_id");
   }
 
+  async listNotionReadNodes(workspaceId?: string): Promise<NotionReadNode[]> {
+    return workspaceId
+      ? this.many<NotionReadNode>("SELECT payload FROM notion_read_nodes WHERE workspace_id=? ORDER BY data_source_id,remote_page_id", workspaceId)
+      : this.many<NotionReadNode>("SELECT payload FROM notion_read_nodes ORDER BY workspace_id,data_source_id,remote_page_id");
+  }
+
+  async replaceNotionReadNodes(workspaceId: string, dataSourceId: string, values: NotionReadNode[]): Promise<void> {
+    const nodes = values.map((value) => notionReadNodeSchema.parse(value));
+    if (nodes.some((node) => node.workspaceId !== workspaceId || node.dataSourceId !== dataSourceId)) {
+      throw new Error("Notion read nodes have a different namespace");
+    }
+    await this.transaction(async () => {
+      this.database.prepare("DELETE FROM notion_read_nodes WHERE workspace_id=? AND data_source_id=?").run(workspaceId, dataSourceId);
+      const insert = this.database.prepare("INSERT INTO notion_read_nodes(workspace_id,data_source_id,remote_page_id,payload) VALUES(?,?,?,?)");
+      for (const node of nodes) insert.run(node.workspaceId, node.dataSourceId, node.remotePageId, JSON.stringify(node));
+    });
+  }
+
+  async listNotionReadTaskContexts(): Promise<NotionReadTaskContext[]> {
+    return this.many<NotionReadTaskContext>("SELECT payload FROM notion_read_task_contexts ORDER BY local_task_id");
+  }
+
+  async putNotionReadTaskContext(value: NotionReadTaskContext): Promise<void> {
+    const context = notionReadTaskContextSchema.parse(value);
+    await this.transaction(async () => {
+      const mapping = await this.getNotionTaskMapping(context.localTaskId);
+      if (!mapping || mapping.workspaceId !== context.workspaceId || mapping.remotePageId !== context.remotePageId) {
+        throw new Error("Notion task context has no matching mapping");
+      }
+      this.database.prepare(`INSERT INTO notion_read_task_contexts(local_task_id,workspace_id,payload) VALUES(?,?,?)
+        ON CONFLICT(local_task_id) DO UPDATE SET payload=excluded.payload`)
+        .run(context.localTaskId, context.workspaceId, JSON.stringify(context));
+    });
+  }
+
   async listNotionRestoreQuarantine(): Promise<NotionRestoreQuarantine[]> {
     return this.many<NotionRestoreQuarantine>("SELECT payload FROM notion_restore_quarantine ORDER BY source_epoch,operation_id");
   }
@@ -549,6 +588,8 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       outbox: await this.listNotionOutboxOperations(),
       conflicts: await this.listNotionConflicts(),
       watermarks: await this.listNotionScanWatermarks(),
+      readNodes: await this.listNotionReadNodes(),
+      readTaskContexts: await this.listNotionReadTaskContexts(),
       restoreQuarantine: await this.listNotionRestoreQuarantine(),
     };
   }
@@ -650,7 +691,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
       }
       await this.rotateDatasetEpoch();
-      this.database.exec("DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
+      this.database.exec("DELETE FROM notion_read_task_contexts; DELETE FROM notion_read_nodes; DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
       this.database.exec("DELETE FROM life_resource_tasks; DELETE FROM life_inbox; DELETE FROM life_resources; DELETE FROM life_folders WHERE parent_id IS NOT NULL; DELETE FROM life_folders WHERE parent_id IS NULL; DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
       for (const series of data.recurrenceSeries ?? []) await this.putRecurrenceSeries(series);
       for (const task of data.tasks) await this.putTask(task);
@@ -675,6 +716,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       }
       for (const conflict of sync.conflicts) await this.appendNotionConflict(conflict);
       for (const watermark of sync.watermarks) await this.putNotionScanWatermark(watermark);
+      for (const node of sync.readNodes ?? []) {
+        this.database.prepare("INSERT INTO notion_read_nodes(workspace_id,data_source_id,remote_page_id,payload) VALUES(?,?,?,?)")
+          .run(node.workspaceId, node.dataSourceId, node.remotePageId, JSON.stringify(node));
+      }
+      for (const context of sync.readTaskContexts ?? []) await this.putNotionReadTaskContext(context);
       for (const item of sync.restoreQuarantine) this.putNotionRestoreQuarantine(item);
       await this.recordMutation("dataset_replaced");
     });
@@ -772,7 +818,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private initializeSchema() {
     const version = Number(this.database.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 5) throw new Error("This database was created by a newer version of NewDay");
+    if (version > 6) throw new Error("This database was created by a newer version of NewDay");
     if (version < 3) {
       this.database.exec("BEGIN IMMEDIATE");
       try {
@@ -876,6 +922,27 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
             PRIMARY KEY(workspace_id,step)
           ) STRICT;
           PRAGMA user_version=5;
+          COMMIT;
+        `);
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    }
+    if (version < 6) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(`
+          CREATE TABLE notion_read_nodes (
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            data_source_id TEXT NOT NULL,
+            remote_page_id TEXT NOT NULL,
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            PRIMARY KEY(workspace_id,data_source_id,remote_page_id)
+          ) STRICT;
+          CREATE TABLE notion_read_task_contexts (
+            local_task_id TEXT PRIMARY KEY NOT NULL REFERENCES notion_task_mappings(local_task_id) ON DELETE RESTRICT,
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            payload TEXT NOT NULL CHECK(json_valid(payload))
+          ) STRICT;
+          PRAGMA user_version=6;
           COMMIT;
         `);
       } catch (error) { this.database.exec("ROLLBACK"); throw error; }

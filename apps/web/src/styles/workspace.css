@@ -468,6 +468,14 @@
   height: 3.2rem;
 }
 
+.task-notion-link {
+  align-self: center;
+  padding: 0.25rem 0.35rem;
+  color: var(--accent);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+
 .completed-section {
   margin-top: 0.85rem;
   padding-top: 0.35rem;

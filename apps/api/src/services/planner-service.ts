@@ -10,6 +10,7 @@ import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
+import { notionAttributions } from "./notion-read-view.js";
 
 export type WireUndoReceipt = { token: string };
 type PendingUndo = { receipt: UndoReceipt; token: string; clientId: string; expiresAt: number };
@@ -36,7 +37,12 @@ export class PlannerService {
         await ensureRecurrenceOccurrences(this.store, {
           asOfDate, throughDate: shiftDate(asOfDate, 31), additionallyEnsureDate: input.selectedDate, now: at,
         });
-        return getDayPlan(this.store, { ...input, asOfDate });
+        const plan = await getDayPlan(this.store, { ...input, asOfDate });
+        const byTask = await notionAttributions(this.store);
+        const annotate = (items: typeof plan.open) => items.map((item) => ({ ...item,
+          ...(byTask[item.task.id] ? { notion: byTask[item.task.id] } : {}) }));
+        return { ...plan, focus: annotate(plan.focus), overdue: annotate(plan.overdue),
+          open: annotate(plan.open), completed: annotate(plan.completed) };
       });
     });
   }
@@ -56,6 +62,12 @@ export class PlannerService {
         if (command.type === "completeTask") return { ...command, input: { ...command.input, now: at, completedOn: today.date, asOfDate: today.date } };
         return command;
       }) : commands;
+      for (const command of normalized) {
+        if (command.type === "setTodayFocus" || command.type === "removeTodayFocus") continue;
+        if ("taskId" in command.input && await this.store.getNotionTaskMapping(command.input.taskId)) {
+          throw new ApiError(409, "Notion 联动任务当前只读；请在 Notion 修改，等待同步");
+        }
+      }
       const receipt = today
         ? await this.store.withEventContext({ date: today.date, at, source: "manual" }, () => executePlannerCommands(this.store, normalized))
         : await executePlannerCommands(this.store, normalized);

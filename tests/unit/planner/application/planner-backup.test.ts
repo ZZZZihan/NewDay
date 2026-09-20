@@ -103,7 +103,7 @@ describe("planner backup", () => {
       folders: [],
       resources: [],
       resourceTaskLinks: [],
-      notionSync: { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [] },
+      notionSync: { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], readNodes: [], readTaskContexts: [], restoreQuarantine: [] },
     });
   });
 

@@ -41,6 +41,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
     notionSync: {
       version: 1,
       connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [],
+      readNodes: [], readTaskContexts: [],
     },
   });
 

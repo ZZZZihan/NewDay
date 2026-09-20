@@ -2,7 +2,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import { parsePlannerBackup } from "@newday/core/contracts/planner-backup";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
 import { shiftDate, todayKey } from "@newday/core/domain/planner-date";
-import type { RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
+import { hasTaskDates, type DatedTask, type RecurrenceSeries, type Task } from "@newday/core/domain/planner-model";
 import { plannerApi, type CommandReceipt } from "../api/planner-api";
 import type { TaskEditorValues } from "../components/task-editor";
 import { downloadBackup } from "../lib/backup-download";
@@ -59,7 +59,7 @@ export function useDayPlanner() {
     return new Map(items.map(({ task }) => [task.id, task]));
   }, [dayPlan]);
   const editingTask = editingTaskId ? taskById.get(editingTaskId) ??
-    (externalEditingTask?.id === editingTaskId ? externalEditingTask : undefined) : undefined;
+    (externalEditingTask?.id === editingTaskId && hasTaskDates(externalEditingTask) ? externalEditingTask : undefined) : undefined;
   const editingSeriesId = editingTask?.seriesId;
   const { series: editingSeries, error: seriesError, loading: seriesLoading, retry: retrySeries } = usePlannerSeries(
     editingSeriesId, editingTask?.updatedAt, dayPlan,
@@ -246,7 +246,7 @@ export function useDayPlanner() {
   }
 
   async function saveEditor(
-    task: Task,
+    task: DatedTask,
     series: RecurrenceSeries | undefined,
     values: TaskEditorValues,
   ) {

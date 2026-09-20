@@ -109,8 +109,8 @@ export const taskSchema = z
     id: z.string().min(1),
     title: z.string().trim().min(1).max(200),
     notes: z.string().max(10_000).default(""),
-    startDate: localDateSchema,
-    endDate: localDateSchema,
+    startDate: localDateSchema.nullable(),
+    endDate: localDateSchema.nullable(),
     status: z.enum(["open", "completed"]),
     createdAt: instantSchema,
     updatedAt: instantSchema,
@@ -121,9 +121,17 @@ export const taskSchema = z
     occurrenceDate: localDateSchema.optional(),
     occurrenceKey: z.string().min(1).optional(),
     isSeriesException: z.boolean().optional(),
+    archived: z.boolean().optional(),
   })
   .superRefine((task, context) => {
-    if (task.endDate < task.startDate) {
+    if ((task.startDate === null) !== (task.endDate === null)) {
+      context.addIssue({
+        code: "custom",
+        message: "任务的开始和结束日期必须同时为空或同时填写",
+        path: ["endDate"],
+      });
+    }
+    if (task.startDate !== null && task.endDate !== null && task.endDate < task.startDate) {
       context.addIssue({
         code: "custom",
         message: "截止日期不能早于开始日期",
@@ -184,7 +192,7 @@ export const taskSchema = z
         });
       }
 
-      if (task.startDate !== task.endDate) {
+      if (task.startDate === null || task.endDate === null || task.startDate !== task.endDate) {
         context.addIssue({
           code: "custom",
           message: "重复任务实例必须是单日任务",
@@ -210,10 +218,22 @@ export type RecurrenceEnd = z.infer<typeof recurrenceEndSchema>;
 export type RecurrenceSeries = z.infer<typeof recurrenceSeriesSchema>;
 export type FocusRecord = z.infer<typeof focusRecordSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type DatedTask = Task & { startDate: LocalDate; endDate: LocalDate };
+export function hasTaskDates(task: Task): task is DatedTask {
+  return task.startDate !== null && task.endDate !== null;
+}
+export type NotionTaskAttribution = {
+  workspaceId: string;
+  url: string | null;
+  areaName: string | null;
+  projectName: string | null;
+  projectUrl: string | null;
+};
 
 export type DayPlanItem = {
-  task: Task;
+  task: DatedTask;
   isOverdue: boolean;
+  notion?: NotionTaskAttribution;
 };
 
 export type DayPlan = {

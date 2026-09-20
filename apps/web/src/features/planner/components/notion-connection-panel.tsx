@@ -4,7 +4,7 @@ import type { NotionStructureProgress } from "../api/notion-api";
 type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
-  const { status, structures, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure } = connection;
+  const { status, structures, reads, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure, scan } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
@@ -31,13 +31,16 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
         <article className="life-item notion-panel__connection" key={item.workspaceId}>
           <div>
             <strong>{item.workspaceName || "未命名工作区"}</strong>
-            <p>{item.status === "active" ? "已授权；任务同步尚未启用" : item.status === "refresh_pending" ? "刷新结果待确认；旧令牌暂停使用" : "需要重新授权；任务同步不可用"}</p>
+            <p>{item.status === "active" ? "已授权；结构就绪后可只读同步" : item.status === "refresh_pending" ? "刷新结果待确认；旧令牌暂停使用" : "需要重新授权；任务同步不可用"}</p>
             {structures[item.workspaceId] ? (
               <p>{structures[item.workspaceId].state === "ready" ? "私有根页面和四张关联表已确认"
                 : structures[item.workspaceId].state === "needs_review" ? reviewDescription(structures[item.workspaceId])
                   : structures[item.workspaceId].state === "paused_after_restore" ? "备份恢复后结构和授权需要重新核对"
                     : `结构初始化：${structures[item.workspaceId].completedSteps.length}/9 步已确认`}</p>
             ) : <p>结构状态未读取；可刷新状态重试。</p>}
+            {reads[item.workspaceId] ? <div className="notion-read-status" aria-label="只读同步状态">
+              {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
+            </div> : null}
             <small>工作区 ID：{item.workspaceId}</small>
           </div>
           <div className="notion-panel__connection-actions">
@@ -50,6 +53,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                 }}>{structures[item.workspaceId]?.state === "needs_review" ? "重新核对" : "建立或继续结构"}</button>
               ) : null}
             {item.status === "refresh_pending" ? <button type="button" disabled={busy} onClick={() => void retryRefresh(item.workspaceId)}>重试确认</button> : null}
+            {item.status === "active" && structures[item.workspaceId]?.state === "ready" ? <button type="button" disabled={busy} onClick={() => void scan(item.workspaceId)}>立即只读同步</button> : null}
             <button type="button" disabled={busy} onClick={() => {
               if (window.confirm("删除此工作区保存在本机的 Notion 凭据？")) void disconnect(item.workspaceId);
             }}>断开</button>

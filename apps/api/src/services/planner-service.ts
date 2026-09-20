@@ -81,7 +81,7 @@ export class PlannerService {
             watermark.workspaceId === workspaceId && watermark.dataSourceId === taskSourceId &&
             watermark.lastSuccessAt !== null &&
             (watermark.lastError === null || watermark.lastError === undefined ||
-              ["network", "remote", "rate_limited"].includes(watermark.lastError)));
+              ["network", "remote", "rate_limited", "local"].includes(watermark.lastError)));
           if (!scanned) throw new ApiError(409, "Notion 任务尚未完成首次成功扫描");
           if (newLinks.has(command.input.id) || await this.store.getNotionTaskMapping(command.input.id)) {
             throw new ApiError(409, "联动任务标识已存在");

@@ -17,6 +17,7 @@ import { NotionReadFailure, type AreaRow, type NotionReadGateway, type ProjectRo
 const tables: ReadTable[] = ["areas", "projects", "tasks"];
 type ReadStatus = {
   workspaceId: string; connectionStatus: NotionConnection["status"] | "not_initialized";
+  pauseReason: NotionConnection["pauseReason"] | null;
   sources: Array<{ table: ReadTable; dataSourceId: string | null; watermark: NotionScanWatermark | null }>;
 };
 
@@ -33,6 +34,7 @@ export class NotionReadService {
     const connection = await this.store.getNotionConnection(workspaceId);
     const watermarks = await this.store.listNotionScanWatermarks();
     return { workspaceId, connectionStatus: connection?.status ?? "not_initialized",
+      pauseReason: connection?.pauseReason ?? null,
       sources: tables.map((table) => {
         const dataSourceId = connection?.dataSources[table]?.dataSourceId ?? null;
         return { table, dataSourceId, watermark: dataSourceId

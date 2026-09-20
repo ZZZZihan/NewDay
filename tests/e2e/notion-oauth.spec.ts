@@ -57,3 +57,29 @@ test("authorized workspace shows explicit structure creation and readback progre
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
+
+test("preflight pause keeps local Notion save and resume controls available", async ({ page }) => {
+  const workspaceId = "workspace-offline";
+  const connection = { workspaceId, workspaceName: "离线测试空间", botId: "bot-test",
+    status: "active", updatedAt: "2026-09-21T00:00:00.000Z" };
+  await page.route("**/api/notion/status", (route) =>
+    route.fulfill({ json: { configured: true, connections: [connection] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "ready", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "paused", pauseReason: "preflight_read",
+      sources: [{ table: "tasks", dataSourceId: "tasks-source", watermark: {
+        completedThrough: "2026-09-21T00:00:00.000Z", lastAttemptAt: "2026-09-21T00:00:00.000Z",
+        lastSuccessAt: "2026-09-21T00:00:00.000Z", lastError: "local", lastErrorAt: "2026-09-21T00:00:00.000Z",
+      } }] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "paused", pauseReason: "preflight_read",
+      operations: [{ operationId: "newer-intent", localTaskId: "local-task", status: "pending",
+        attemptCount: 0, createdAt: "2026-09-21T00:00:00.000Z", lastAttemptAt: null }], conflicts: [] } }));
+  await page.goto("/");
+  await expect(page.getByRole("combobox", { name: "保存位置" })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Notion：离线测试空间" })).toBeAttached();
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await expect(page.getByRole("button", { name: "恢复发送" })).toBeVisible();
+});

@@ -168,6 +168,45 @@ test("changing a monthly rule does not add a second occurrence inside its materi
   } finally { store.close(); credentials.close(); }
 });
 
+test("a rule edit waits for the Tasks scan to include a newly added old-pattern instance, even after interruption", async () => {
+  const store = new SQLitePlannerStore(":memory:");
+  const credentials = vault();
+  const gateway = new Gateway();
+  const monthly = (dayOfMonth: number) => {
+    const row = rule(dayOfMonth);
+    return { ...row, source: { ...row.source, startDate: "2026-11-01" } };
+  };
+  const occurrence = (date: string, id: string): TaskRow => ({ ...instance(date), id,
+    url: `https://www.notion.so/${id}`, occurrenceKey: `${logicalSeriesId}:${date}` });
+  const november = occurrence("2026-11-30", "remote-november");
+  const december = occurrence("2026-12-31", "remote-december");
+  gateway.rows.rules = [monthly(31)];
+  gateway.rows.tasks = [november];
+  try {
+    await seed(store);
+    const read = new NotionReadService(store, credentials, gateway,
+      () => Date.parse("2026-11-29T04:00:00.000Z"));
+    await read.scan(workspaceId);
+    assert.equal((await store.listAllTasks()).length, 1);
+
+    gateway.rows.rules = [monthly(30)];
+    gateway.rows.tasks = [{ id: "wrong-source", url: "", createdAt: at, editedAt: at,
+      inTrash: false, kind: "area", title: "wrong" }];
+    await assert.rejects(read.scan(workspaceId),
+      (error: unknown) => error instanceof NotionReadFailure && error.category === "schema");
+    assert.equal((await store.listNotionRuleMappings(workspaceId))[0]?.generationReconcilePending, true);
+
+    gateway.rows.tasks = [november, december];
+    await read.scan(workspaceId);
+    const [mapping] = await store.listNotionRuleMappings(workspaceId);
+    assert.equal(mapping.generationAfter, "2026-12-31");
+    assert.equal(mapping.generationReconcilePending, false);
+    assert.equal(await store.getTaskByOccurrenceKey(`${logicalSeriesId}:2026-12-30`), undefined);
+    assert.equal((await store.listAllTasks()).length, 2);
+    assert.deepEqual(await store.listNotionOutboxOperations(), []);
+  } finally { store.close(); credentials.close(); }
+});
+
 test("a generated month-end instance and outbound key survive restart without duplicate creation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-rules-"));
   const databasePath = join(directory, "planner.sqlite");

@@ -49,7 +49,8 @@ export async function applyNotionRules(store: SQLitePlannerStore, connection: No
       await store.putRecurrenceSeries(next);
       await store.putNotionRuleMapping({ workspaceId: connection.workspaceId,
         dataSourceId: sourceId, remotePageId: row.id, logicalSeriesId,
-        source, ...(generationAfter ? { generationAfter } : {}), status: "active", updatedAt: at });
+        source, ...(generationAfter ? { generationAfter } : {}),
+        generationReconcilePending: true, status: "active", updatedAt: at });
       changed = true;
     }
   }
@@ -76,9 +77,23 @@ export async function enqueueNotionRuleInstances(store: SQLitePlannerStore, conn
   const rules = new Map((await store.listNotionRuleMappings(connection.workspaceId))
     .filter((rule) => rule.status === "active")
     .map((rule) => [rule.logicalSeriesId, rule]));
+  const tasks = await store.listAllTasks();
   const mapped = new Set((await store.listNotionTaskMappings()).map((item) => item.localTaskId));
   const through = shiftDate(today, 31);
   const activeSeries: RecurrenceSeries[] = [];
+  for (const rule of rules.values()) {
+    if (rule.generationReconcilePending) {
+      const latestOccurrence = tasks.filter((task) => task.logicalSeriesId === rule.logicalSeriesId)
+        .map((task) => task.occurrenceDate)
+        .filter((date): date is LocalDate => date !== undefined).sort().at(-1);
+      const generationAfter = [rule.generationAfter, latestOccurrence]
+        .filter((date): date is LocalDate => date !== undefined).sort().at(-1);
+      const updated = { ...rule, ...(generationAfter ? { generationAfter } : {}),
+        generationReconcilePending: false, updatedAt: at };
+      await store.putNotionRuleMapping(updated);
+      rules.set(rule.logicalSeriesId, updated);
+    }
+  }
   for (const rule of rules.values()) {
     const series = await store.getRecurrenceSeries(rule.logicalSeriesId);
     if (!series || series.disabled) throw new NotionReadFailure("schema", `Notion rule ${rule.remotePageId} lost its active series`);

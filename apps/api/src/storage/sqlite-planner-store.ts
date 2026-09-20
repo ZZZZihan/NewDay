@@ -33,6 +33,7 @@ type Row = Record<string, SQLOutputValue>;
 export type StorageFailurePoint = "before_commit" | "after_commit" | "before_event" | "before_receipt";
 export type PlannerEventContext = Pick<PlannerEvent, "date" | "at" | "source"> & Partial<Pick<PlannerEvent, "operationId" | "proposalId">> & { kind?: string };
 type TransactionState = { callbacks: Array<() => void>; mutated: boolean; eventContext?: PlannerEventContext; active: boolean };
+const activeNotionSenderInstances = new Set<string>();
 export type ExecutionLedgerRecord = {
   operationId: string; requestDigest: string; proposalId: string; datasetEpoch: string;
   terminalStatus: "applied" | "no_change"; receipt: ExecutionReceipt | null;
@@ -42,6 +43,7 @@ export type ExecutionLedgerRecord = {
  * The separate execution ledger survives deletion of display history. */
 export class SQLitePlannerStore implements PlannerArchiveStore {
   private readonly database: DatabaseSync;
+  private readonly senderInstanceId = randomUUID();
   private readonly transactionContext = new AsyncLocalStorage<TransactionState>();
   private readonly transactionFrames = new AsyncLocalStorage<{ queue: Promise<unknown> }>();
   private transactionQueue: Promise<unknown> = Promise.resolve();
@@ -52,14 +54,15 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     this.failureInjector = options.failureInjector;
     if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath, { timeout: 5_000 });
+    activeNotionSenderInstances.add(this.senderInstanceId);
     try {
       this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
       this.initializeSchema();
       this.recoverNotionSendingAfterRestart();
-    } catch (error) { this.database.close(); throw error; }
+    } catch (error) { activeNotionSenderInstances.delete(this.senderInstanceId); this.database.close(); throw error; }
   }
 
-  close() { this.database.close(); }
+  close() { activeNotionSenderInstances.delete(this.senderInstanceId); this.database.close(); }
   setFailureInjector(injector?: (point: StorageFailurePoint) => void) { this.failureInjector = injector; }
 
   transaction<T>(operation: () => Promise<T>): Promise<T> {
@@ -304,8 +307,13 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     });
   }
 
-  /** Persist the send attempt before HTTP. A restart moves it to unknown. */
+  /** Persist the send attempt before HTTP. An absent sender is unknown; a
+   * second live API process must not reclaim its in-flight request. */
   async markNotionOutboxSending(operationId: string, at: string): Promise<NotionOutboxOperation> {
+    if (this.transactionContext.getStore()?.active) throw new Error("Notion send claim must run outside a business transaction");
+    // Recovery must commit separately. A later claim rejection must not roll
+    // an orphaned attempt back to sending or reopen its workspace.
+    await this.transaction(async () => { this.recoverOrphanedNotionSends(); });
     return this.transaction(async () => {
       const operation = await this.getNotionOutboxOperation(operationId);
       if (!operation || operation.status !== "pending") throw new Error("Notion operation is not pending");
@@ -327,6 +335,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       }
       const sending = notionOutboxOperationSchema.parse({
         ...operation, status: "sending", attemptCount: operation.attemptCount + 1, lastAttemptAt: at,
+        sendingOwner: { pid: process.pid, instanceId: this.senderInstanceId },
       });
       this.updateNotionOutbox(sending);
       return sending;
@@ -804,17 +813,37 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
   private recoverNotionSendingAfterRestart() {
     const hasSending = this.database.prepare("SELECT 1 FROM notion_outbox WHERE status='sending' LIMIT 1").get();
     if (!hasSending) return;
-    const at = new Date().toISOString();
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      this.database.prepare(`UPDATE notion_connections SET status='paused_unknown',
-        payload=json_set(payload,'$.status','paused_unknown','$.updatedAt',?)
-        WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM notion_outbox WHERE status='sending')`).run(at);
-      this.database.exec(`UPDATE notion_outbox SET status='unknown',
-        payload=json_set(payload,'$.status','unknown') WHERE status='sending'`);
+      this.recoverOrphanedNotionSends();
       this.database.exec("COMMIT");
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
+
+  /** Caller holds a SQLite write transaction. A live process owns its HTTP
+   * attempt; an absent owner is an ambiguous result that blocks later sends. */
+  private recoverOrphanedNotionSends() {
+    const at = new Date().toISOString();
+    const orphanedWorkspaces = new Set<string>();
+    for (const raw of this.many<unknown>("SELECT payload FROM notion_outbox WHERE status='sending'")) {
+      const operation = notionOutboxOperationSchema.parse(raw);
+      if (isNotionSenderLive(operation.sendingOwner)) continue;
+      this.updateNotionOutbox({ ...operation, status: "unknown" });
+      orphanedWorkspaces.add(operation.workspaceId);
+    }
+    for (const workspaceId of orphanedWorkspaces) {
+      this.database.prepare(`UPDATE notion_connections SET status='paused_unknown',
+        payload=json_set(payload,'$.status','paused_unknown','$.updatedAt',?)
+        WHERE workspace_id=? AND status IN ('active','paused')`).run(at, workspaceId);
+    }
+  }
+}
+
+function isNotionSenderLive(owner: NotionOutboxOperation["sendingOwner"]): boolean {
+  if (!owner) return false;
+  if (owner.pid === process.pid) return activeNotionSenderInstances.has(owner.instanceId);
+  try { process.kill(owner.pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
 /** In-memory SQLite retains exactly the transaction semantics of the file store. */

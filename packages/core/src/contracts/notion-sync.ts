@@ -71,6 +71,9 @@ export const notionOutboxOperationSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
   lastAttemptAt: z.string().datetime({ offset: true }).nullable(),
   confirmedAt: z.string().datetime({ offset: true }).nullable(),
+  // Runtime ownership distinguishes a live second API process from a crash.
+  // Earlier v6 exports have no owner and remain valid imports.
+  sendingOwner: z.object({ pid: z.number().int().positive(), instanceId: nonEmptyId }).strict().optional(),
 }).strict();
 export type NotionOutboxOperation = z.infer<typeof notionOutboxOperationSchema>;
 

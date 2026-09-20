@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { notionClientKey, type NotionConnection, type NotionOutboxOperation, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@newday/core/application/planner-backup";
@@ -79,6 +82,82 @@ test("a restarted send becomes unknown and pauses its workspace", async () => {
     assert.equal((await second.getNotionConnection("workspace-1"))?.status, "paused_unknown");
     await assert.rejects(second.markNotionOutboxSending("operation-1", at), /not pending/);
     second.close();
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("opening another store does not recover a live sender as an unknown attempt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-live-sender-"));
+  const path = join(directory, "planner.sqlite");
+  try {
+    const sender = new SQLitePlannerStore(path);
+    try {
+      await sender.putTask(task());
+      await sender.putNotionConnection(connection());
+      await sender.putNotionTaskMapping(mapping());
+      await sender.enqueueNotionOutbox(await operation(sender));
+      const sending = await sender.markNotionOutboxSending("operation-1", at);
+      assert.equal(sending.sendingOwner?.pid, process.pid);
+
+      const observer = new SQLitePlannerStore(path);
+      try {
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "sending");
+        assert.equal((await observer.getNotionConnection("workspace-1"))?.status, "active");
+        assert.equal(await sender.confirmNotionOutbox("operation-1", "remote-1", fields, at), "confirmed");
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "confirmed");
+      } finally { observer.close(); }
+    } finally { sender.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a second process leaves a live sender alone and recovers it after exit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-process-sender-"));
+  const path = join(directory, "planner.sqlite");
+  try {
+    const seed = new SQLitePlannerStore(path);
+    try {
+      await seed.putTask(task());
+      await seed.putNotionConnection(connection());
+      await seed.putNotionTaskMapping(mapping());
+      await seed.enqueueNotionOutbox(await operation(seed));
+    } finally { seed.close(); }
+
+    const moduleUrl = new URL("../src/storage/sqlite-planner-store.ts", import.meta.url).href;
+    const childCode = `import { SQLitePlannerStore } from ${JSON.stringify(moduleUrl)};
+      const store = new SQLitePlannerStore(process.argv[1]);
+      await store.markNotionOutboxSending("operation-1", ${JSON.stringify(at)});
+      process.stdout.write("READY\\n");
+      process.stdin.resume();
+      await new Promise((resolve) => process.stdin.once("end", resolve));
+      store.close();`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", childCode, path], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)), stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    try {
+      const [ready] = await once(child.stdout, "data", { signal: AbortSignal.timeout(5_000) });
+      assert.equal((ready as Buffer).toString(), "READY\n", stderr);
+      const observer = new SQLitePlannerStore(path);
+      try {
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "sending");
+        assert.equal((await observer.getNotionConnection("workspace-1"))?.status, "active");
+        await observer.enqueueNotionOutbox(await operation(observer, "operation-2"));
+        child.stdin.end();
+        if (child.exitCode === null) await once(child, "exit", { signal: AbortSignal.timeout(5_000) });
+        assert.equal(child.exitCode, 0, stderr);
+        await assert.rejects(observer.markNotionOutboxSending("operation-2", at), /connection is paused/);
+        assert.equal((await observer.getNotionOutboxOperation("operation-1"))?.status, "unknown");
+        assert.equal((await observer.getNotionOutboxOperation("operation-2"))?.status, "pending");
+        assert.equal((await observer.getNotionConnection("workspace-1"))?.status, "paused_unknown");
+      } finally { observer.close(); }
+      const recovered = new SQLitePlannerStore(path);
+      try {
+        assert.equal((await recovered.getNotionOutboxOperation("operation-1"))?.status, "unknown");
+        assert.equal((await recovered.getNotionConnection("workspace-1"))?.status, "paused_unknown");
+      } finally { recovered.close(); }
+    } finally {
+      if (child.exitCode === null) { child.kill(); await once(child, "exit"); }
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

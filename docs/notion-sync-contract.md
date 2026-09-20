@@ -10,7 +10,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 ## 2. 远端版本、权限和结构
 
-- 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.12.0`，创建连接时显式传 `notionVersion`。2026-09-20 读取该版本的 npm 包：`ClientOptions` 支持 `notionVersion` 与 `retry: false`，`Client.defaultNotionVersion` 仍为 `2025-09-03`；类型含 `initial_data_source`、`data_source_id` 和 `in_trash`。因此不能依赖 SDK 默认版本。正式同步客户端禁用 SDK 自动重试，由应用按本契约记录尝试、读取 `Retry-After` 并做有界重试。上线前仍须用项目安装后的 SDK 类型检查及真实隔离工作区读写再次验证。
+- 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.23.0`，创建连接时显式传 `notionVersion`。2026-09-20 检查了已发布 npm 包：`ClientOptions` 支持 `notionVersion` 与 `retry: false`，`Client.defaultNotionVersion` 仍为 `2025-09-03`；类型含 `initial_data_source`、`data_source_id`、`in_trash` 与查询响应的 `request_status`。原候选 5.12.0 的查询响应类型没有 `request_status`，不足以类型安全地识别已到结果上限的不完整扫描。因此不能依赖 SDK 默认版本，也不能只检查 `has_more`。正式同步客户端禁用 SDK 自动重试，由应用按本契约记录尝试、读取 `Retry-After` 并做有界重试。上线前仍须用项目安装后的 SDK 类型检查及真实隔离工作区读写再次验证。
 - 公共 OAuth 的 client secret 只在 Worker；浏览器不接收长期 access/refresh token。Worker 只处理回调、code 交换、刷新和一次性安全领取，本机 API 存储凭据且与业务备份隔离。每次授权绑定不可重放的 `state`、本机安装会话和明确的回调目标；令牌轮换须原子替换。
 - 公共连接可在用户的 Private 区域创建 workspace 级根页面。根页面保存随机安装标记；创建响应丢失时按标记查询并读回，无法确认则暂停，不能盲目再建。结构顺序：根页面、Areas、Projects、Tasks、Rules 基础结构、关系属性、逐项读回。每步只在读回确认后推进本地初始化状态。
 - 每张表同时保存 `database_id` 与 `data_source_id`。创建表使用 database API 的 `initial_data_source.properties`；查询行、创建行的父级和关系指向具体 data source。保存每个实际属性 ID，后续按 ID 读写；重命名属性不靠名称猜测。字段类型或关系目标改变时暂停相关行处理并报错。
@@ -27,6 +27,8 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 | Rules | `Name`（title）、`Active Dates`（date）、`Pattern`（select: `daily`/`weekdays`/`weekly`/`monthly`）、`Weekdays`（multi_select: ISO 1～7）、`Month Day`（number）、`Excluded Dates`（rich_text，JSON 日期数组） | Notion 编辑。`Active Dates.start` 必填，`end` 可空；不同模式只读取对应参数。排除日期必须是有效且去重的 date-only 值。 |
 
 `NewDay Key` 是安装 ID 与本地任务 UUID 派生的稳定标识；远端不强制唯一，所以写入响应丢失时须扫描并核对：恰好一条可用则绑定，多条或查询不完整则暂停并呈现待核对。重复实例的 `Occurrence Key` 由规则页面 ID 与原始发生日期生成，改期不改变该键。`Rule` 关系用于区分实例与一次性任务；不允许把实例字段误写成规则变更。
+
+对 `Area`、`Project`、`Direct Area` 与 `Rule` 关系，先确认属性类型和关系目标；`has_more: true` 时通过页面属性接口读完全部关系，读不全就暂停该行，不能根据截断的前 25 项判断唯一性。关系意外为空时先检查目标数据源的读取权限；不能把不可访问的主线或项目解释成“没有归属”。标题及稳定键若含可能被截断的页面/用户引用，同样读完整属性后再解释。
 
 ## 3. 日期、可见性和身份
 
@@ -46,13 +48,13 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 以**最后一次已成功核对的逐字段值**为共同基准，`Name`、完整 `Plan Date` 区间、`Completed` 分别比较。两端只改不同字段时合并；同一字段两端都改时 Notion 值优先，记录共同基准、两端值、决议和时间，用户可见。日期区间是一个原子字段，绝不拼接两端。尚未验证 Notion 对本接口提供适用的条件写入能力；T5/T6 在真实隔离工作区实测前不得宣称任意并发下零覆盖。若不能条件写入，采用写前读、只发送目标属性、写后读及冲突审计；有无法判断的竞态则暂停该操作，产品文案明确为“可检测范围内冲突处理与最终收敛”。
 
-只有明确读取到目标页面 `in_trash: true` 才自动归档对应本地关联任务，保留映射、资料关联和历史，不硬删。单次查询缺失、404、403、schema 改动、分页失败和网络错误都进入待核对；不批量归档。v1 从 NewDay 删除联动任务时只提供去 Notion 处理的说明，不能复用本地永久删除命令静默删远端；恢复/取消归档需重新核对远端。
+只有明确读取到目标页面 `in_trash: true` 才自动归档对应本地关联任务，保留映射、资料关联和历史，不硬删。普通数据源查询默认不返回已归档页面，所以要对已知映射逐页核对或明确查询回收站，不能把它从普通扫描中消失视为删除。单次查询缺失、404、403、schema 改动、分页失败和网络错误都进入待核对；不批量归档。v1 从 NewDay 删除联动任务时只提供去 Notion 处理的说明，不能复用本地永久删除命令静默删远端；恢复/取消归档需重新核对远端。
 
 备份恢复期间暂停拉取和发送。业务备份应包含必要的关联与冲突历史但不含 token、client secret 或领取凭证；恢复后先核对安装/工作区、schema、映射、远端当前值及 outbox。所有恢复来的 outbox 默认隔离，逐项对账后才能重新发送。缺凭据时重新授权；换工作区必须新建命名空间，不按同名主线、项目或任务复用旧 ID。
 
 ## 5. 扫描、水位和可见故障
 
-每张 data source 分页扫描，每页先校验类型、属性和关系；只有整个扫描窗口成功后推进应用自己的完成水位。`next_cursor` 只在本次分页调用中使用，不作为永久增量日志位置。重启或中断从上次完成水位的重叠窗口重新扫描，以远端页面 ID 去重；主线和项目独立刷新。应用远端变更时不产生回写回环。显示最后尝试、最后成功、失败类别和手动重试；“尚未成功同步”不能显示为“没有任务”。
+每张 data source 分页扫描，每页先校验类型、属性和关系；只有整个扫描窗口成功后推进应用自己的完成水位。`next_cursor` 只在本次分页调用中使用，不作为永久增量日志位置。查询还须检查每页 `request_status`：单次查询达到 10,000 行上限时，即使 `has_more` 为 `false` 也可能标记 `incomplete`。此时用稳定的 `created_time` 排序与重叠窗口分段读全、按页面 ID 去重；若同一时间片无法继续拆分，暂停并显示不完整，绝不推进水位。`last_edited_time` 可用于增量候选筛选，但不能作为全量分页的稳定分段键；增量扫描保留重叠窗口，定期以 `created_time` 分段做完整对账，防止编辑中的行移动造成永久漏读。重启或中断重新扫描未完成窗口；主线和项目独立刷新。应用远端变更时不产生回写回环。显示最后尝试、最后成功、失败类别和手动重试；“尚未成功同步”不能显示为“没有任务”。
 
 429、529 遵守 `Retry-After` 秒数，并在再次失败时做有上限的退避和抖动；401/403、schema 错误、404 与可重试网络/服务错误分开。只有授权有效、API 运行、固定测试规模且无持续限流时才验收 5 分钟内反映变更。API 关闭、备份恢复和暂停状态明确告知用户。
 
@@ -62,6 +64,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 | --- | --- |
 | 同日/跨日/空日期/清空日期/带时间日期 | 区间语义、无日期不进入今日、清空不失历史、带时间不静默转换 |
 | 同页重复扫描、重启、部分分页失败 | 一条映射；失败不推进水位或触发批量归档 |
+| 查询结果达到 10,000 行上限、关系 `has_more: true` | 不把截断结果当完整；分段或读完整属性，无法读全则暂停且水位不变 |
 | POST/PATCH 成功但响应丢失 | 用稳定键和读回对账；不盲目创建第二页 |
 | 本地改日期而 Notion 改标题、双方改同一字段 | 分字段合并；同字段 Notion 优先并显示三方值 |
 | 日期区间两端并发修改 | 原子解决，不能组成无效范围 |
@@ -74,7 +77,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 ## 7. 证据入口
 
-- [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)、[@notionhq/client 5.12.0 包](https://www.npmjs.com/package/@notionhq/client/v/5.12.0)。SDK 包核对命令为 `npm view @notionhq/client@5.12.0 version --json` 与 `npm pack @notionhq/client@5.12.0`；只做本地包内容检查，没有发起 Notion API 请求。
+- [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)、[@notionhq/client 5.23.0 包](https://www.npmjs.com/package/@notionhq/client/v/5.23.0)。SDK 包核对命令为 `npm view @notionhq/client@5.23.0 version --json` 与 `npm pack @notionhq/client@5.23.0`；同时对照检查了 5.12.0。只做本地包内容检查，没有发起 Notion API 请求。
 - [公共 OAuth 与令牌刷新](https://developers.notion.com/guides/get-started/authorization)、[Private 区域结构创建](https://developers.notion.com/guides/get-started/preparing-for-users)。
-- [database/data source 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)、[分页](https://developers.notion.com/reference/intro)、[更新页面](https://developers.notion.com/reference/patch-page)、[请求限制](https://developers.notion.com/reference/request-limits)。
+- [database/data source 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)、[大数据源查询上限与分段](https://developers.notion.com/guides/data-apis/query-large-data-sources)、[页面属性截断](https://developers.notion.com/reference/page-property-values)、[数据源查询与归档过滤](https://developers.notion.com/reference/filter-data-source-entries)、[更新页面](https://developers.notion.com/reference/patch-page)、[请求限制](https://developers.notion.com/reference/request-limits)。
 - 本地代码：`packages/core/src/domain/planner-model.ts`、`packages/core/src/application/day-plan.ts`、`packages/core/src/application/recurrence-generation.ts`、`apps/api/src/storage/sqlite-planner-store.ts`、`apps/api/src/services/planner-service.ts`、`packages/core/src/contracts/planner-backup.ts`。

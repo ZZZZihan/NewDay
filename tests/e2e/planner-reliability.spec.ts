@@ -40,7 +40,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
     resourceTaskLinks: [],
     notionSync: {
       version: 1,
-      connections: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [],
+      connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [],
     },
   });
 

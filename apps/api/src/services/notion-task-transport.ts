@@ -3,7 +3,7 @@ import { notionTaskFieldsSchema, type NotionConnection, type NotionTaskFields, t
 
 import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
 import type { NotionTaskPage, NotionTaskTransport } from "./notion-outbox-dispatcher.js";
-import { NotionReadFailure, parseRow } from "./notion-read-gateway.js";
+import { NotionReadFailure, assertRuleSourceReadable, parseRow } from "./notion-read-gateway.js";
 
 type Properties = NonNullable<CreatePageParameters["properties"]>;
 
@@ -17,6 +17,7 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
 
   async findByClientKey(connection: NotionConnection, mapping: NotionTaskMapping) {
     const client = this.client(connection, mapping);
+    await assertRuleSourceReadable(client, connection);
     const propertyId = this.propertyId(connection, "NewDay Key");
     const pages: NotionTaskPage[] = [];
     const cursors = new Set<string>();
@@ -49,6 +50,7 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
   async readPage(connection: NotionConnection, mapping: NotionTaskMapping) {
     if (!mapping.remotePageId) return null;
     const client = this.client(connection, mapping);
+    await assertRuleSourceReadable(client, connection);
     const raw = await client.pages.retrieve({ page_id: mapping.remotePageId });
     if (!("properties" in raw) || !("parent" in raw)) {
       throw new NotionReadFailure("incomplete", "Notion returned a partial task page");
@@ -59,6 +61,7 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
   async createPage(connection: NotionConnection, mapping: NotionTaskMapping, fields: NotionTaskFields) {
     if (mapping.remotePageId) throw new Error("Notion mapping already has a page");
     const client = this.client(connection, mapping);
+    await assertRuleSourceReadable(client, connection);
     const properties = this.sharedProperties(connection, notionTaskFieldsSchema.parse(fields));
     properties[this.propertyId(connection, "NewDay Key")] = {
       rich_text: [{ type: "text", text: { content: mapping.clientKey } }],
@@ -68,9 +71,11 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
 
   async updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>) {
     if (!mapping.remotePageId) throw new Error("Notion mapping has no page");
+    const client = this.client(connection, mapping);
+    await assertRuleSourceReadable(client, connection);
     const properties = this.sharedProperties(connection, patch);
     if (!Object.keys(properties).length) throw new Error("Notion update has no shared fields");
-    await this.client(connection, mapping).pages.update({ page_id: mapping.remotePageId,
+    await client.pages.update({ page_id: mapping.remotePageId,
       properties: properties as NonNullable<UpdatePageParameters["properties"]> });
   }
 

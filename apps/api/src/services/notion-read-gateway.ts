@@ -107,7 +107,7 @@ export class NotionSdkReadGateway implements NotionReadGateway {
   }
 }
 
-async function assertRuleSourceReadable(client: Client, connection: NotionConnection): Promise<void> {
+export async function assertRuleSourceReadable(client: Client, connection: NotionConnection): Promise<void> {
   const ruleId = connection.dataSources.rules?.dataSourceId;
   if (!ruleId) throw new NotionReadFailure("schema", "Notion Rules data source is not initialized");
   const response = await client.dataSources.retrieve({ data_source_id: ruleId });

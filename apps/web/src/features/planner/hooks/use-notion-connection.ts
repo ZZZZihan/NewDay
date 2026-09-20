@@ -14,7 +14,9 @@ export function writableNotionWorkspaces(status: NotionStatus | null,
     const localWriteReady = sync?.connectionStatus === "active" ||
       (sync?.connectionStatus === "paused" && sync.pauseReason === "preflight_read");
     return item.status === "active" && structures[item.workspaceId]?.state === "ready" &&
-      localWriteReady && read?.sources.some((source) =>
+      localWriteReady && sync?.restoreQuarantine?.length === 0 &&
+      !sync.operations.some((operation) => operation.status === "quarantined") &&
+      read?.sources.some((source) =>
         source.table === "tasks" && Boolean(source.watermark?.lastSuccessAt) &&
         (!source.watermark?.lastError || ["network", "remote", "rate_limited", "local"].includes(source.watermark.lastError)));
   }) ?? [];

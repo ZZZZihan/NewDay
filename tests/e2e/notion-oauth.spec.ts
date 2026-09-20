@@ -100,7 +100,7 @@ test("Notion panel exposes a manual pause and explicit resume", async ({ page })
       retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
   await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus, pauseReason, sources: [] } }));
-  const syncStatus = () => ({ workspaceId, connectionStatus, pauseReason, operations: [], conflicts: [] });
+  const syncStatus = () => ({ workspaceId, connectionStatus, pauseReason, operations: [], restoreQuarantine: [], conflicts: [] });
   await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) => route.fulfill({ json: syncStatus() }));
   await page.route(`**/api/notion/connections/${workspaceId}/sync/pause`, (route) => {
     connectionStatus = "paused";
@@ -118,6 +118,35 @@ test("Notion panel exposes a manual pause and explicit resume", async ({ page })
   await expect(page.getByText("已手动暂停；不再启动新一轮读取或发送")).toBeVisible();
   await page.getByRole("button", { name: "恢复发送" }).click();
   await expect(page.getByText("写回：可发送")).toBeVisible();
+});
+
+test("Notion panel shows pre-restore sends that are absent from the current outbox", async ({ page }) => {
+  const workspaceId = "workspace-restored";
+  await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
+    workspaceId, workspaceName: "恢复测试空间", botId: "bot-test", status: "active",
+    updatedAt: "2026-09-21T00:00:00.000Z",
+  }] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "paused_after_restore", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null, sources: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
+    route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null,
+      retryAfterAt: null, operations: [], restoreQuarantine: [{
+        sourceEpoch: "old-epoch", operationId: "old-operation", localTaskId: "old-task",
+        originalStatus: "sending", attemptCount: 1, lastAttemptAt: "2026-09-21T00:00:00.000Z",
+        dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:old-task",
+        quarantinedAt: "2026-09-21T00:05:00.000Z",
+      }], conflicts: [] } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
+  await expect(page.getByText(/操作 old-operation · 原状态 sending/)).toBeVisible();
+  await expect(page.getByText(/稳定键 newday:old-install:old-task/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
 test("preflight pause keeps local Notion save and resume controls available", async ({ page }) => {
@@ -138,7 +167,8 @@ test("preflight pause keeps local Notion save and resume controls available", as
   await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus: "paused", pauseReason: "preflight_read",
       operations: [{ operationId: "newer-intent", localTaskId: "local-task", status: "pending",
-        attemptCount: 0, createdAt: "2026-09-21T00:00:00.000Z", lastAttemptAt: null }], conflicts: [] } }));
+        attemptCount: 0, createdAt: "2026-09-21T00:00:00.000Z", lastAttemptAt: null }],
+      restoreQuarantine: [], conflicts: [] } }));
   await page.goto("/");
   await expect(page.getByRole("combobox", { name: "保存位置" })).toBeVisible();
   await expect(page.getByRole("option", { name: "Notion：离线测试空间" })).toBeAttached();
@@ -164,7 +194,7 @@ test("quick add falls back to local storage when the selected Notion workspace b
       } }] } }));
   await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus, pauseReason: null,
-      operations: [], conflicts: [] } }));
+      operations: [], restoreQuarantine: [], conflicts: [] } }));
   await page.goto("/");
   const storage = page.getByRole("combobox", { name: "保存位置" });
   await expect(storage).toBeVisible();
@@ -221,10 +251,10 @@ test("an older status refresh cannot hide a successful manual scan", async ({ pa
       syncHeld();
       await released;
       await route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
-        operations: [], conflicts: [] } });
+        operations: [], restoreQuarantine: [], conflicts: [] } });
       oldRefreshReturned();
     } else await route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
-      operations: [], conflicts: [] } });
+      operations: [], restoreQuarantine: [], conflicts: [] } });
   });
   await page.route(`**/api/notion/connections/${workspaceId}/read/scan`, (route) => {
     scanned = true;

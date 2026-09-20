@@ -62,6 +62,20 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                   {operation.status === "unknown" ? <button type="button" disabled={busy}
                     onClick={() => void reconcile(item.workspaceId, operation.operationId)}>只读核对</button> : null}</p>
               ))}
+              {!syncs[item.workspaceId].restoreQuarantine ? (
+                <p>恢复隔离明细未返回；请更新本机 API 并刷新状态，当前不能恢复发送。</p>
+              ) : syncs[item.workspaceId].restoreQuarantine.length ? (
+                <div aria-label="恢复前隔离操作">
+                  <p>恢复前隔离 {syncs[item.workspaceId].restoreQuarantine.length} 项；须核对原工作区与远端结果，当前不能恢复发送。</p>
+                  {syncs[item.workspaceId].restoreQuarantine.map((entry) => (
+                    <p key={`${entry.sourceEpoch}:${entry.operationId}`}>
+                      任务 {entry.localTaskId} · 操作 {entry.operationId} · 原状态 {entry.originalStatus} · 尝试 {entry.attemptCount} 次；
+                      远端页面 {entry.remotePageId ?? "未确认"} · 稳定键 {entry.clientKey} · 数据源 {entry.dataSourceId}；
+                      隔离于 {new Date(entry.quarantinedAt).toLocaleString("zh-CN")}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               {syncs[item.workspaceId].conflicts.slice(-10).map((conflict) => (
                 <p key={conflict.id}>冲突：任务 {conflict.localTaskId} 的 {conflict.field}，Notion 值优先。
                   基准 {JSON.stringify(conflict.baseline)}；本机 {JSON.stringify(conflict.local)}；Notion {JSON.stringify(conflict.remote)}</p>
@@ -93,6 +107,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             {(syncs[item.workspaceId]?.connectionStatus === "paused_unknown" ||
               (syncs[item.workspaceId]?.connectionStatus === "paused" &&
                 ["preflight_read", "manual"].includes(syncs[item.workspaceId]?.pauseReason ?? ""))) &&
+              syncs[item.workspaceId].restoreQuarantine?.length === 0 &&
               !syncs[item.workspaceId].operations.some((operation) => ["sending", "unknown", "quarantined"].includes(operation.status)) ?
               <button type="button" disabled={busy} onClick={() => void resume(item.workspaceId)}>恢复发送</button> : null}
             <button type="button" disabled={busy} onClick={() => {

@@ -45,6 +45,10 @@ export type NotionSyncStatus = {
   operations: Array<{ operationId: string; localTaskId: string;
     status: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
     attemptCount: number; createdAt: string; lastAttemptAt: string | null }>;
+  restoreQuarantine: Array<{ sourceEpoch: string; operationId: string; localTaskId: string;
+    originalStatus: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
+    attemptCount: number; lastAttemptAt: string | null; dataSourceId: string;
+    remotePageId: string | null; clientKey: string; quarantinedAt: string }>;
   conflicts: Array<{ id: string; localTaskId: string; field: "title" | "date" | "completed";
     baseline: unknown; local: unknown; remote: unknown; winner: "notion"; recordedAt: string }>;
 };

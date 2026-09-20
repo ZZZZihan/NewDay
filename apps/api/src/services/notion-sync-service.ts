@@ -16,11 +16,20 @@ export class NotionSyncService {
     if (!connection) throw new ApiError(404, "Notion 工作区不存在");
     const operations = (await this.store.listNotionOutboxOperations()).filter((item) => item.workspaceId === workspaceId);
     const conflicts = (await this.store.listNotionConflicts()).filter((item) => item.workspaceId === workspaceId);
+    const restoreQuarantine = (await this.store.listNotionRestoreQuarantine())
+      .filter((item) => item.operation.workspaceId === workspaceId);
     return { workspaceId, connectionStatus: connection.status,
       pauseReason: connection.pauseReason ?? null,
       retryAfterAt: connection.retryAfterAt ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
+      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt }) => ({
+        sourceEpoch: operation.datasetEpoch, operationId: operation.operationId,
+        localTaskId: operation.localTaskId, originalStatus: operation.status,
+        attemptCount: operation.attemptCount, lastAttemptAt: operation.lastAttemptAt,
+        dataSourceId: mapping.dataSourceId, remotePageId: mapping.remotePageId,
+        clientKey: mapping.clientKey, quarantinedAt,
+      })),
       conflicts };
   }
 

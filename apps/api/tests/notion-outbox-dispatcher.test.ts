@@ -481,7 +481,10 @@ test("a restore during an in-flight send keeps the late result out of the new da
     await create(...args);
   };
   try {
-    const dispatch = new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1");
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    const sync = new NotionSyncService(store, dispatcher);
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    const dispatch = dispatcher.dispatch("operation-1");
     await enteredPromise;
     await store.pauseNotionForRestore();
     await store.replaceAllData({ tasks: [task()] });
@@ -490,6 +493,19 @@ test("a restore during an in-flight send keeps the late result out of the new da
     assert.equal((await store.listNotionRestoreQuarantine()).length, 1);
     assert.equal(await store.getNotionTaskMapping("task-1"), undefined);
     assert.deepEqual(await store.listNotionOutboxOperations(), []);
+    const status = await sync.status("workspace-1");
+    assert.deepEqual(status.operations, []);
+    const quarantinedAt = status.restoreQuarantine[0]?.quarantinedAt;
+    assert.ok(quarantinedAt && !Number.isNaN(Date.parse(quarantinedAt)));
+    assert.deepEqual(status.restoreQuarantine, [{
+      sourceEpoch, operationId: "operation-1", localTaskId: "task-1",
+      originalStatus: "sending", attemptCount: 1, lastAttemptAt: at,
+      dataSourceId: "tasks-source-1", remotePageId: null,
+      clientKey: notionClientKey("install-1", "task-1"),
+      quarantinedAt,
+    }]);
+    await store.putNotionConnection({ ...connection(), workspaceId: "workspace-2" });
+    assert.deepEqual((await sync.status("workspace-2")).restoreQuarantine, []);
   } finally { store.close(); }
 });
 

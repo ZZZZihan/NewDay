@@ -55,7 +55,7 @@ export class NotionOAuthService {
       // result when possible; its TTL is the fallback if ACK is unavailable.
       try { await this.request("/oauth/ack", { state, ticket, verifier }); }
       catch { /* The rejected token remains unusable locally. */ }
-      throw new ApiError(409, "该工作区已断开，请重新开始授权");
+      throw new ApiError(409, "授权会话已取消、过期或该工作区已断开，请重新开始授权");
     }
     // The Worker can safely redeliver the same claim until this ACK. If the
     // ACK is lost, the temporary copy expires; local storage is authoritative.

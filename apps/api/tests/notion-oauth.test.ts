@@ -7,6 +7,7 @@ import test from "node:test";
 
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { ApiError } from "../src/http/api-error.js";
 import { NotionOAuthService } from "../src/services/notion-oauth-service.js";
 import { NotionCredentialVault, type NotionCredential } from "../src/storage/notion-credential-vault.js";
 
@@ -177,6 +178,61 @@ test("disconnect rejects an authorization whose Worker start response arrives af
     releaseWorker();
     assert.equal(new URL((await starting).authorizationUrl).searchParams.get("state"), delayedState);
     await assert.rejects(service.claim(delayedState, ticket), /已断开/);
+    assert.equal(vault.getCredential("workspace-one"), null);
+  } finally { vault.close(); }
+});
+
+test("cancel while a Worker claim is in flight returns conflict without saving a credential", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const pendingState = "x".repeat(43);
+  const now = Date.parse("2026-09-21T00:00:00.000Z");
+  let entered!: () => void;
+  let release!: () => void;
+  const workerEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const workerGate = new Promise<void>((resolve) => { release = resolve; });
+  let acknowledgements = 0;
+  const fetcher: typeof fetch = async (input) => {
+    const endpoint = new URL(String(input)).pathname;
+    if (endpoint === "/oauth/claim") { entered(); await workerGate; return Response.json(credential); }
+    assert.equal(endpoint, "/oauth/ack");
+    acknowledgements += 1;
+    return Response.json({ status: "acknowledged" });
+  };
+  try {
+    vault.putPending(pendingState, "verifier", now + 60_000, now);
+    const service = new NotionOAuthService(origin, workerApiKey, vault, fetcher, () => now);
+    const claiming = service.claim(pendingState, ticket);
+    await workerEntered;
+    service.cancel(pendingState);
+    release();
+    await assert.rejects(claiming, (error: unknown) =>
+      error instanceof ApiError && error.statusCode === 409);
+    assert.equal(vault.getCredential("workspace-one"), null);
+    assert.equal(acknowledgements, 1);
+  } finally { vault.close(); }
+});
+
+test("claim expiry during the Worker round trip cannot save a late credential", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const pendingState = "y".repeat(43);
+  let now = Date.parse("2026-09-21T00:00:00.000Z");
+  let entered!: () => void;
+  let release!: () => void;
+  const workerEntered = new Promise<void>((resolve) => { entered = resolve; });
+  const workerGate = new Promise<void>((resolve) => { release = resolve; });
+  const fetcher: typeof fetch = async (input) => {
+    if (new URL(String(input)).pathname === "/oauth/claim") { entered(); await workerGate; return Response.json(credential); }
+    return Response.json({ status: "acknowledged" });
+  };
+  try {
+    vault.putPending(pendingState, "verifier", now + 1000, now);
+    const service = new NotionOAuthService(origin, workerApiKey, vault, fetcher, () => now);
+    const claiming = service.claim(pendingState, ticket);
+    await workerEntered;
+    now += 1001;
+    release();
+    await assert.rejects(claiming, (error: unknown) =>
+      error instanceof ApiError && error.statusCode === 409);
     assert.equal(vault.getCredential("workspace-one"), null);
   } finally { vault.close(); }
 });

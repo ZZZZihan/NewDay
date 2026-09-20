@@ -27,5 +27,6 @@ describe("frozen corpus to production snapshot preflight", () => {
     expect(prepared.find(({ id }) => id === "H-P09")?.adaptations).toContain(
       "preference p1: soft -> production explicit preference fact; no hard-constraint enforcement",
     );
+    expect(prepared.find(({ id }) => id === "H-C03")?.adaptations).toContain("f-wait: blocked -> blocked_task");
   });
 });

@@ -100,6 +100,7 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
           if (fact.value !== true || !fact.taskId) throw new Error(`${scenario.id}: malformed blocked fact ${fact.id}`);
           constraints.push({ id: fact.id, kind: "blocked_task", taskId: fact.taskId,
             value: `评测输入明确标记任务 ${fact.taskId} 当前不可执行`, source: "user", sourceText: `结构化输入：${fact.id}=blocked` });
+          adaptations.push(`${fact.id}: blocked -> blocked_task`);
           break;
         case "maximum_focus_count":
           if (!Number.isInteger(fact.value) || typeof fact.value !== "number" || fact.value < 1 || fact.value > 3)

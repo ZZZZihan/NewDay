@@ -10,7 +10,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 ## 2. 远端版本、权限和结构
 
-- 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.12.0`，创建连接时显式传 `notionVersion`。上线前用安装后的 SDK 类型检查及真实隔离工作区读写再次验证。该 API 版本用 `in_trash` 判断回收站状态。
+- 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.12.0`，创建连接时显式传 `notionVersion`。2026-09-20 读取该版本的 npm 包：`ClientOptions` 支持 `notionVersion` 与 `retry: false`，`Client.defaultNotionVersion` 仍为 `2025-09-03`；类型含 `initial_data_source`、`data_source_id` 和 `in_trash`。因此不能依赖 SDK 默认版本。正式同步客户端禁用 SDK 自动重试，由应用按本契约记录尝试、读取 `Retry-After` 并做有界重试。上线前仍须用项目安装后的 SDK 类型检查及真实隔离工作区读写再次验证。
 - 公共 OAuth 的 client secret 只在 Worker；浏览器不接收长期 access/refresh token。Worker 只处理回调、code 交换、刷新和一次性安全领取，本机 API 存储凭据且与业务备份隔离。每次授权绑定不可重放的 `state`、本机安装会话和明确的回调目标；令牌轮换须原子替换。
 - 公共连接可在用户的 Private 区域创建 workspace 级根页面。根页面保存随机安装标记；创建响应丢失时按标记查询并读回，无法确认则暂停，不能盲目再建。结构顺序：根页面、Areas、Projects、Tasks、Rules 基础结构、关系属性、逐项读回。每步只在读回确认后推进本地初始化状态。
 - 每张表同时保存 `database_id` 与 `data_source_id`。创建表使用 database API 的 `initial_data_source.properties`；查询行、创建行的父级和关系指向具体 data source。保存每个实际属性 ID，后续按 ID 读写；重命名属性不靠名称猜测。字段类型或关系目标改变时暂停相关行处理并报错。
@@ -74,7 +74,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 ## 7. 证据入口
 
-- [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)。
+- [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)、[@notionhq/client 5.12.0 包](https://www.npmjs.com/package/@notionhq/client/v/5.12.0)。SDK 包核对命令为 `npm view @notionhq/client@5.12.0 version --json` 与 `npm pack @notionhq/client@5.12.0`；只做本地包内容检查，没有发起 Notion API 请求。
 - [公共 OAuth 与令牌刷新](https://developers.notion.com/guides/get-started/authorization)、[Private 区域结构创建](https://developers.notion.com/guides/get-started/preparing-for-users)。
 - [database/data source 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)、[分页](https://developers.notion.com/reference/intro)、[更新页面](https://developers.notion.com/reference/patch-page)、[请求限制](https://developers.notion.com/reference/request-limits)。
 - 本地代码：`packages/core/src/domain/planner-model.ts`、`packages/core/src/application/day-plan.ts`、`packages/core/src/application/recurrence-generation.ts`、`apps/api/src/storage/sqlite-planner-store.ts`、`apps/api/src/services/planner-service.ts`、`packages/core/src/contracts/planner-backup.ts`。

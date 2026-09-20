@@ -441,6 +441,21 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     });
   }
 
+  /** A provider read failed before any create or update request was sent.
+   * Keep the intent retryable but pause the workspace for an explicit retry. */
+  async pauseNotionUnsent(operationId: string, at: string): Promise<boolean> {
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "sending") return false;
+      const connection = await this.getNotionConnection(operation.workspaceId);
+      if (!connection || connection.status !== "active" ||
+        (await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) return false;
+      this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
+      await this.putNotionConnection({ ...connection, status: "paused", updatedAt: at });
+      return true;
+    });
+  }
+
   /** Rebase one claimed intent after remote fields and the local business
    * merge have been committed in the same outer transaction. */
   async rebaseNotionSending(
@@ -625,8 +640,8 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private async assertNotionOperationTaskState(operation: NotionOutboxOperation) {
     const task = await this.getTask(operation.localTaskId);
-    if (!task || task.title !== operation.desired.title || task.startDate !== operation.desired.date?.[0] ||
-      task.endDate !== operation.desired.date?.[1] || (task.status === "completed") !== operation.desired.completed) {
+    if (!task || task.title !== operation.desired.title || task.startDate !== (operation.desired.date?.[0] ?? null) ||
+      task.endDate !== (operation.desired.date?.[1] ?? null) || (task.status === "completed") !== operation.desired.completed) {
       throw new Error("Notion operation does not match the committed task");
     }
   }

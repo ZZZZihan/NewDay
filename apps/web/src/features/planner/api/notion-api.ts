@@ -35,6 +35,16 @@ export type NotionReadStatus = {
   }>;
 };
 
+export type NotionSyncStatus = {
+  workspaceId: string;
+  connectionStatus: NotionReadStatus["connectionStatus"];
+  operations: Array<{ operationId: string; localTaskId: string;
+    status: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
+    attemptCount: number; createdAt: string; lastAttemptAt: string | null }>;
+  conflicts: Array<{ id: string; localTaskId: string; field: "title" | "date" | "completed";
+    baseline: unknown; local: unknown; remote: unknown; winner: "notion"; recordedAt: string }>;
+};
+
 function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(`/api/notion${path}`, { method: "POST", body: JSON.stringify(body) });
 }
@@ -50,4 +60,9 @@ export const notionApi = {
   advanceStructure: (workspaceId: string) => post<NotionStructureProgress>(`/connections/${encodeURIComponent(workspaceId)}/structure/advance`, {}),
   readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
   scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
+  syncStatus: (workspaceId: string) => request<NotionSyncStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/sync`),
+  drain: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/drain`, {}),
+  reconcile: (workspaceId: string, operationId: string) => post<NotionSyncStatus>(
+    `/connections/${encodeURIComponent(workspaceId)}/sync/operations/${encodeURIComponent(operationId)}/reconcile`, {}),
+  resume: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/resume`, {}),
 };

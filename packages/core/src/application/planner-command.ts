@@ -36,6 +36,8 @@ export type CreateTaskInput = {
   startDate: string;
   endDate: string;
   now: string;
+  /** Opt-in write target. Core creates the task; the API owns the mapping and outbox. */
+  notionWorkspaceId?: string;
 };
 
 export type CreateRecurrenceSeriesInput = {

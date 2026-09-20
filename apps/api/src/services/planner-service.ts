@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { shiftDate } from "@newday/core/domain/planner-date";
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
@@ -7,6 +7,8 @@ import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@
 import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerCommand } from "@newday/core/application/planner-command";
 import { ensureRecurrenceOccurrences } from "@newday/core/application/recurrence-generation";
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
+import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
+import type { Task } from "@newday/core/domain/planner-model";
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
@@ -62,15 +64,69 @@ export class PlannerService {
         if (command.type === "completeTask") return { ...command, input: { ...command.input, now: at, completedOn: today.date, asOfDate: today.date } };
         return command;
       }) : commands;
+      const linked = new Map<string, NotionTaskMapping>();
+      const newLinks = new Map<string, { workspaceId: string; dataSourceId: string; installationId: string }>();
+      const before = new Map<string, NotionTaskFields>();
       for (const command of normalized) {
-        if (command.type === "setTodayFocus" || command.type === "removeTodayFocus") continue;
-        if ("taskId" in command.input && await this.store.getNotionTaskMapping(command.input.taskId)) {
-          throw new ApiError(409, "Notion 联动任务当前只读；请在 Notion 修改，等待同步");
+        if (command.type === "createTask" && command.input.notionWorkspaceId) {
+          const workspaceId = command.input.notionWorkspaceId;
+          const connection = await this.store.getNotionConnection(workspaceId);
+          if (!connection || connection.status !== "active" || !connection.dataSources.tasks) {
+            throw new ApiError(409, "Notion 工作区尚未准备好，无法创建联动任务");
+          }
+          if (newLinks.has(command.input.id) || await this.store.getNotionTaskMapping(command.input.id)) {
+            throw new ApiError(409, "联动任务标识已存在");
+          }
+          newLinks.set(command.input.id, { workspaceId, dataSourceId: connection.dataSources.tasks.dataSourceId,
+            installationId: connection.installationId });
+        }
+        if (command.type === "setTodayFocus" || command.type === "removeTodayFocus" || !("taskId" in command.input)) continue;
+        if (newLinks.has(command.input.taskId) &&
+          !["updateTask", "updateTaskDetails", "rescheduleTask", "completeTask", "reopenTask"].includes(command.type)) {
+          throw new ApiError(409, "新建的 Notion 联动任务只支持一次性任务操作");
+        }
+        const mapping = await this.store.getNotionTaskMapping(command.input.taskId);
+        if (!mapping) continue;
+        if (!["updateTask", "updateTaskDetails", "rescheduleTask", "completeTask", "reopenTask"].includes(command.type) ||
+          !["active", "pending_create"].includes(mapping.status)) {
+          throw new ApiError(409, "此 Notion 任务不能在 NewDay 执行该操作");
+        }
+        const connection = await this.store.getNotionConnection(mapping.workspaceId);
+        if (!connection || !["active", "paused_unknown"].includes(connection.status)) {
+          throw new ApiError(409, "Notion 联动已暂停；先核对连接状态");
+        }
+        linked.set(command.input.taskId, mapping);
+        if (!before.has(command.input.taskId)) {
+          const task = await this.store.getTask(command.input.taskId);
+          if (!task) throw new ApiError(409, "联动任务不存在");
+          before.set(task.id, sharedFields(task));
         }
       }
       const receipt = today
         ? await this.store.withEventContext({ date: today.date, at, source: "manual" }, () => executePlannerCommands(this.store, normalized))
         : await executePlannerCommands(this.store, normalized);
+      for (const [taskId, target] of newLinks) {
+        await this.store.putNotionTaskMapping({ localTaskId: taskId, workspaceId: target.workspaceId,
+          dataSourceId: target.dataSourceId, remotePageId: null,
+          clientKey: notionClientKey(target.installationId, taskId), baseline: null,
+          status: "pending_create", updatedAt: at });
+      }
+      for (const taskId of new Set([...linked.keys(), ...newLinks.keys()])) {
+        const task = await this.store.getTask(taskId);
+        const mapping = await this.store.getNotionTaskMapping(taskId);
+        if (!task || !mapping) throw new ApiError(409, "联动任务在提交期间改变");
+        const desired = sharedFields(task);
+        if (newLinks.has(taskId) || JSON.stringify(before.get(taskId)) !== JSON.stringify(desired)) {
+          await this.enqueueLinkedIntent(mapping, desired, at);
+        }
+      }
+      // Removing a newly linked page is outside the one-off write contract.
+      // Do not publish a local-only undo that would orphan a remote create.
+      if (newLinks.size) {
+        clearUndoReceipts(this.store);
+        this.store.afterCommit(() => { this.pendingUndo = undefined; });
+        return { receipt: null };
+      }
       // The core invalidates the previous receipt after a successful mutation.
       // A no-op does not disturb a pending receipt owned by another request.
       if (receipt) {
@@ -94,9 +150,25 @@ export class PlannerService {
         throw new ApiError(409, "撤销操作已失效");
       }
       const today = await this.configuredToday();
+      const linkedBefore = new Map<string, NotionTaskFields>();
+      for (const mapping of await this.store.listNotionTaskMappings()) {
+        const task = await this.store.getTask(mapping.localTaskId);
+        if (task) linkedBefore.set(task.id, sharedFields(task));
+      }
       if (today) {
         await this.store.withEventContext({ date: today.date, at: new Date(this.clock()).toISOString(), source: "manual", kind: "undo" }, () => undoPlannerCommand(this.store, pending.receipt));
       } else await undoPlannerCommand(this.store, pending.receipt);
+      const at = new Date(this.clock()).toISOString();
+      for (const [taskId, old] of linkedBefore) {
+        const task = await this.store.getTask(taskId);
+        if (!task) throw new ApiError(409, "不能在 NewDay 删除 Notion 联动任务");
+        const desired = sharedFields(task);
+        if (JSON.stringify(old) !== JSON.stringify(desired)) {
+          const mapping = await this.store.getNotionTaskMapping(taskId);
+          if (!mapping) throw new ApiError(409, "Notion 映射在撤销期间改变");
+          await this.enqueueLinkedIntent(mapping, desired, at);
+        }
+      }
       this.store.afterCommit(() => { this.pendingUndo = undefined; });
       return { ok: true as const };
     });
@@ -150,6 +222,13 @@ export class PlannerService {
     return { date: dateInTimeZone(this.clock(), preferences.timeZone), timeZone: preferences.timeZone };
   }
 
+  private async enqueueLinkedIntent(mapping: NotionTaskMapping, desired: NotionTaskFields, at: string) {
+    await this.store.enqueueNotionOutbox({ operationId: randomUUID(), localTaskId: mapping.localTaskId,
+      workspaceId: mapping.workspaceId, datasetEpoch: (await this.store.getPlanningVersion()).datasetEpoch,
+      desired, baseline: mapping.baseline, status: "pending", attemptCount: 0,
+      createdAt: at, lastAttemptAt: null, confirmedAt: null });
+  }
+
   private parseBackup(source: string) {
     try {
       return parsePlannerBackup(source);
@@ -175,4 +254,10 @@ export class PlannerService {
     this.queue = result.catch(() => undefined);
     return result;
   }
+}
+
+function sharedFields(task: Task): NotionTaskFields {
+  return notionTaskFieldsSchema.parse({ title: task.title,
+    date: task.startDate === null || task.endDate === null ? null : [task.startDate, task.endDate],
+    completed: task.status === "completed" });
 }

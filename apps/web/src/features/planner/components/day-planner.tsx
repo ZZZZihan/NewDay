@@ -25,6 +25,7 @@ const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"] as cons
 
 export function DayPlanner() {
   const [view, setView] = useState<"today" | LifeView | "notion">("today");
+  const [quickWorkspaceId, setQuickWorkspaceId] = useState("");
   const life = useLifeWorkspace(view !== "today" && view !== "notion");
   const onNotionReturn = useCallback(() => setView("notion"), []);
   const {
@@ -32,7 +33,7 @@ export function DayPlanner() {
     setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
     notice, isSaving, isUndoing, quickInputRef, importInputRef,
     dayPlan, dataError, refreshing, refresh, migration, seriesError, seriesLoading, retrySeries,
-    handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,
+    handleUndo, handleQuickAdd, handleComplete, handleSchedule, handleFocus, handleExport,
     handleImport, saveEditor, moveDate, deleteEditingTask, stopEditingRecurrence,
   } = useDayPlanner();
   const refreshLife = life.refresh;
@@ -58,6 +59,9 @@ export function DayPlanner() {
   );
   const taskTotal = (dayPlan?.counts.open ?? 0) + (dayPlan?.counts.completed ?? 0);
   const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
+  const writableWorkspaces = notion.status?.connections.filter((item) => item.status === "active" &&
+    notion.structures[item.workspaceId]?.state === "ready" &&
+    notion.reads[item.workspaceId]?.connectionStatus === "active") ?? [];
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);
@@ -246,7 +250,7 @@ export function DayPlanner() {
             onRetrySeries={retrySeries}
           />
 
-          <form className="quick-add" onSubmit={handleQuickAdd}>
+          <form className="quick-add" onSubmit={(event) => void handleQuickAdd(event, quickWorkspaceId || undefined)}>
             <Input
               ref={quickInputRef}
               id="quick-task"
@@ -262,6 +266,14 @@ export function DayPlanner() {
             <Button type="submit" variant="primary" size="lg" isIconOnly aria-label="添加任务" isDisabled={!quickTitle.trim() || isSaving || isUndoing || migration.checking}>
               <Plus size={20} />
             </Button>
+            {writableWorkspaces.length ? <label className="editor-select-field">
+              <span>保存位置</span>
+              <select aria-label="保存位置" value={quickWorkspaceId} onChange={(event) => setQuickWorkspaceId(event.target.value)}>
+                <option value="">仅本机</option>
+                {writableWorkspaces.map((item) => <option key={item.workspaceId} value={item.workspaceId}>
+                  Notion：{item.workspaceName || item.workspaceId}</option>)}
+              </select>
+            </label> : null}
           </form>
 
           <div className="daily-task-list" data-testid="daily-task-list">
@@ -359,7 +371,7 @@ export function DayPlanner() {
               </details>
             ) : null}
           </div>
-        </section> : view === "notion" ? <NotionConnectionPanel connection={notion} /> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onViewChange={setView} />}
+        </section> : view === "notion" ? <NotionConnectionPanel connection={notion} /> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onScheduleTask={handleSchedule} onViewChange={setView} />}
         <aside className="assistant-panel" aria-label="规划助手">
           <AgentPlanner
             selectedDate={selectedDate}
@@ -377,6 +389,9 @@ export function DayPlanner() {
         <TaskEditor
           key={`${editingTask.id}:${editingSeries?.updatedAt ?? "one-off"}`}
           task={editingTask}
+          linked={Boolean(dayPlan && [...dayPlan.focus, ...dayPlan.overdue, ...dayPlan.open, ...dayPlan.completed]
+            .some((item) => item.task.id === editingTask.id && item.notion)) ||
+            Boolean(life.workspace?.notionByTaskId?.[editingTask.id])}
           series={editingSeries}
           allowSeriesActions={editingSeriesActionsAllowed}
           busy={isSaving || isUndoing || seriesLoading || Boolean(seriesError)}

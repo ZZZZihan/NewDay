@@ -112,6 +112,9 @@ export class NotionReadService {
                 areaPageId: row.areaIds[0], updatedAt: row.editedAt };
             }));
           } else {
+            const pendingWrite = (await this.store.listNotionOutboxOperations()).some((operation) =>
+              operation.workspaceId === workspaceId && ["pending", "sending", "unknown", "quarantined"].includes(operation.status));
+            if (pendingWrite) throw new ApiError(409, "Notion 扫描期间有新的待发送操作；先完成写回再重试读取");
             const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
             const apply = () => this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects);
             const changed = preferences?.timeZone
@@ -163,6 +166,9 @@ export class NotionReadService {
       if (areaId && !areaIds.has(areaId)) throw new NotionReadFailure("schema", `Notion task ${row.id} area is inaccessible`);
       const fields = notionTaskFieldsSchema.parse({ title: row.title, date: row.date, completed: row.completed });
       const previousMapping = byRemote.get(row.id);
+      if (previousMapping && row.clientKey !== null && row.clientKey !== previousMapping.clientKey) {
+        throw new NotionReadFailure("schema", `Linked task ${row.id} has a different NewDay Key`);
+      }
       let localId = previousMapping?.localTaskId ?? randomUUID();
       while (!previousMapping && await this.store.getTask(localId)) localId = randomUUID();
       const previous = await this.store.getTask(localId);

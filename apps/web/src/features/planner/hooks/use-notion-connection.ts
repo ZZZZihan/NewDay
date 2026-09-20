@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructureProgress } from "../api/notion-api";
+import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructureProgress,
+  type NotionSyncStatus } from "../api/notion-api";
 
 const oauthFragment = /^#notion-oauth=(ready|cancelled|error):([A-Za-z0-9_-]{43})(?::([A-Za-z0-9_-]{43}))?$/;
 
@@ -8,6 +9,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [structures, setStructures] = useState<Record<string, NotionStructureProgress>>({});
   const [reads, setReads] = useState<Record<string, NotionReadStatus>>({});
+  const [syncs, setSyncs] = useState<Record<string, NotionSyncStatus>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -25,6 +27,11 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
         catch { return null; }
       }));
       setReads(Object.fromEntries(readEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+      const syncEntries = await Promise.all(next.connections.map(async (item) => {
+        try { return [item.workspaceId, await notionApi.syncStatus(item.workspaceId)] as const; }
+        catch { return null; }
+      }));
+      setSyncs(Object.fromEntries(syncEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
     }
     catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态"); }
   }, []);
@@ -127,12 +134,52 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
       const result = await notionApi.scan(workspaceId);
       setReads((current) => ({ ...current, [workspaceId]: result }));
       await onScanComplete();
-      setMessage("只读扫描已完成；联动任务会显示在对应日期，修改仍请前往 Notion。");
+      setMessage("Notion 扫描已完成；联动任务会显示在对应日期。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Notion 扫描失败；已有本地任务保持原样，可检查状态后重试");
       await refresh();
     } finally { setBusy(false); }
   }
 
-  return { status, structures, reads, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure, scan };
+  async function drain(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await notionApi.drain(workspaceId);
+      setSyncs((current) => ({ ...current, [workspaceId]: result }));
+      setMessage(result.operations.some((item) => item.status === "unknown")
+        ? "写入结果待核对；系统已暂停后续发送，不会重复创建。"
+        : result.operations.some((item) => item.status === "pending")
+          ? "仍有待发送操作；请刷新状态后继续核对。"
+          : "待发送操作已读回确认；可刷新 Notion 扫描。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Notion 写回未完成"); }
+    finally { setBusy(false); await refresh(); }
+  }
+
+  async function reconcile(workspaceId: string, operationId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await notionApi.reconcile(workspaceId, operationId);
+      setSyncs((current) => ({ ...current, [workspaceId]: result }));
+      setMessage(result.operations.find((item) => item.operationId === operationId)?.status === "confirmed"
+        ? "远端结果已按原操作确认；核对所有待确认项后可恢复发送。"
+        : "远端结果仍无法确认；继续暂停发送并人工核对。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "无法确认远端操作结果"); }
+    finally { setBusy(false); await refresh(); }
+  }
+
+  async function resume(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await notionApi.resume(workspaceId);
+      setSyncs((current) => ({ ...current, [workspaceId]: result }));
+      setMessage("已恢复此工作区的待发送队列；发送前仍会逐项预读远端。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "仍有待核对操作，不能恢复发送"); }
+    finally { setBusy(false); await refresh(); }
+  }
+
+  return { status, structures, reads, syncs, message, busy, refresh, start, disconnect, retryRefresh,
+    initializeStructure, scan, drain, reconcile, resume };
 }

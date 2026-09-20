@@ -126,3 +126,60 @@ test("quick add falls back to local storage when the selected Notion workspace b
   await expect(storage).toBeVisible();
   await expect(storage).toHaveValue("");
 });
+
+test("an older status refresh cannot hide a successful manual scan", async ({ page }) => {
+  const workspaceId = "workspace-scan";
+  const connection = { workspaceId, workspaceName: "扫描测试空间", botId: "bot-test",
+    status: "active", updatedAt: "2026-09-21T00:00:00.000Z" };
+  let scanned = false;
+  let holdSync = false;
+  let releaseSync!: () => void;
+  let syncHeld!: () => void;
+  const held = new Promise<void>((resolve) => { syncHeld = resolve; });
+  const released = new Promise<void>((resolve) => { releaseSync = resolve; });
+  let oldRefreshReturned!: () => void;
+  const oldRefresh = new Promise<void>((resolve) => { oldRefreshReturned = resolve; });
+  const readStatus = (success: boolean) => ({ workspaceId, connectionStatus: "active", pauseReason: null,
+    sources: [{ table: "tasks", dataSourceId: "tasks-source", watermark: {
+      completedThrough: success ? "2026-09-21T00:00:00.000Z" : null,
+      lastAttemptAt: "2026-09-21T00:00:00.000Z",
+      lastSuccessAt: success ? "2026-09-21T00:00:00.000Z" : null,
+      lastError: null, lastErrorAt: null,
+    } }] });
+  await page.route("**/api/notion/status", (route) =>
+    route.fulfill({ json: { configured: true, connections: [connection] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
+    route.fulfill({ json: { workspaceId, state: "ready", nextStep: null, reviewReason: null,
+      retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
+    route.fulfill({ json: readStatus(scanned) }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, async (route) => {
+    if (holdSync) {
+      holdSync = false;
+      syncHeld();
+      await released;
+      await route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
+        operations: [], conflicts: [] } });
+      oldRefreshReturned();
+    } else await route.fulfill({ json: { workspaceId, connectionStatus: "active", pauseReason: null,
+      operations: [], conflicts: [] } });
+  });
+  await page.route(`**/api/notion/connections/${workspaceId}/read/scan`, (route) => {
+    scanned = true;
+    return route.fulfill({ json: readStatus(true) });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  await expect(page.getByText("任务：尚未成功同步")).toBeVisible();
+  holdSync = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await held;
+  await page.getByRole("button", { name: "立即读取 Notion" }).click();
+  await expect(page.getByText(/任务：上次成功/)).toBeVisible();
+  releaseSync();
+  await oldRefresh;
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByText(/任务：上次成功/)).toBeVisible();
+  await page.getByRole("button", { name: "今天", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "保存位置" })).toBeVisible();
+});

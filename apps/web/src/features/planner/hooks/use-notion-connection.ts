@@ -151,6 +151,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
       for (let index = 0; index < 9; index += 1) {
         if (index > 0) await new Promise((resolve) => setTimeout(resolve, 400));
         const result = await notionApi.advanceStructure(workspaceId);
+        refreshRevision.current += 1;
         setStructures((current) => ({ ...current, [workspaceId]: result }));
         if (result.state === "ready") {
           setMessage("Notion 私有根页面、四张表和关联字段已读回确认；可开始只读扫描。");
@@ -174,6 +175,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     setMessage("正在读取 Notion 主线、项目和一次性任务…");
     try {
       const result = await notionApi.scan(workspaceId);
+      refreshRevision.current += 1;
       setReads((current) => ({ ...current, [workspaceId]: result }));
       await onScanComplete();
       setMessage("Notion 扫描已完成；联动任务会显示在对应日期。");
@@ -188,6 +190,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     setBusy(true);
     try {
       const result = await notionApi.drain(workspaceId);
+      refreshRevision.current += 1;
       setSyncs((current) => ({ ...current, [workspaceId]: result }));
       setMessage(result.operations.some((item) => item.status === "unknown")
         ? "写入结果待核对；系统已暂停后续发送，不会重复创建。"
@@ -203,6 +206,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     setBusy(true);
     try {
       const result = await notionApi.reconcile(workspaceId, operationId);
+      refreshRevision.current += 1;
       setSyncs((current) => ({ ...current, [workspaceId]: result }));
       setMessage(result.operations.find((item) => item.operationId === operationId)?.status === "confirmed"
         ? "远端结果已按原操作确认；核对所有待确认项后可恢复发送。"
@@ -216,6 +220,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     setBusy(true);
     try {
       const result = await notionApi.resume(workspaceId);
+      refreshRevision.current += 1;
       setSyncs((current) => ({ ...current, [workspaceId]: result }));
       setMessage("已恢复此工作区的待发送队列；发送前仍会逐项预读远端。");
     } catch (error) { setMessage(error instanceof Error ? error.message : "仍有待核对操作，不能恢复发送"); }

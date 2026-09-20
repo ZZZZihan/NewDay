@@ -22,6 +22,7 @@ import {
 } from "./recurrence-generation";
 import type { PlannerStore } from "./planner-store";
 import {
+  clearUndoReceipts,
   createUndoChangeSet,
   publishUndoReceipt,
   type UndoChangeSet,
@@ -183,6 +184,23 @@ export async function executePlannerCommands(
   store: PlannerStore,
   commands: readonly PlannerCommand[],
 ): Promise<UndoReceipt | undefined> {
+  return runPlannerCommands(store, commands, true);
+}
+
+/** Remote synchronization uses the same validated business commands, but
+ * cannot offer a local-only undo receipt for a change observed in Notion. */
+export async function executePlannerCommandsWithoutUndo(
+  store: PlannerStore,
+  commands: readonly PlannerCommand[],
+): Promise<void> {
+  await runPlannerCommands(store, commands, false);
+}
+
+async function runPlannerCommands(
+  store: PlannerStore,
+  commands: readonly PlannerCommand[],
+  publishUndo: boolean,
+): Promise<UndoReceipt | undefined> {
   if (commands.length === 0) {
     return undefined;
   }
@@ -208,7 +226,10 @@ export async function executePlannerCommands(
         )) || didMutate;
     }
 
-    return didMutate ? publishUndoReceipt(store, undoChanges) : undefined;
+    if (!didMutate) return undefined;
+    if (publishUndo) return publishUndoReceipt(store, undoChanges);
+    clearUndoReceipts(store);
+    return undefined;
   });
 }
 

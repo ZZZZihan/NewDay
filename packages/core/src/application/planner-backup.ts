@@ -5,6 +5,7 @@ import {
 } from "../contracts/planner-backup";
 import type { PlannerArchiveStore } from "./planner-archive-store";
 import { clearUndoReceipts } from "./planner-undo";
+import { emptyNotionSyncArchive } from "../contracts/notion-sync";
 
 export { parsePlannerBackup, plannerBackupSchema, type PlannerBackup } from "../contracts/planner-backup";
 
@@ -13,7 +14,7 @@ export async function createPlannerBackup(
   exportedAt = new Date().toISOString(),
 ): Promise<PlannerBackup> {
   return store.transaction(async () => {
-    const [tasks, recurrenceSeries, focusRecords, inboxItems, folders, resources, resourceTaskLinks] = await Promise.all([
+    const [tasks, recurrenceSeries, focusRecords, inboxItems, folders, resources, resourceTaskLinks, notionSync] = await Promise.all([
       store.listAllTasks(),
       store.listAllRecurrenceSeries(),
       store.listAllFocusRecords(),
@@ -21,11 +22,12 @@ export async function createPlannerBackup(
       store.listAllFolders?.() ?? [],
       store.listAllResources?.() ?? [],
       store.listAllResourceTaskLinks?.() ?? [],
+      store.listNotionSyncData?.() ?? emptyNotionSyncArchive(),
     ]);
 
     return parseAndValidateCurrentBackup({
       format: "newday-backup",
-      version: 5,
+      version: 6,
       exportedAt,
       tasks,
       recurrenceSeries,
@@ -34,6 +36,7 @@ export async function createPlannerBackup(
       folders,
       resources,
       resourceTaskLinks,
+      notionSync,
     });
   });
 }
@@ -52,6 +55,7 @@ export async function restorePlannerBackup(
       folders: backup.folders,
       resources: backup.resources,
       resourceTaskLinks: backup.resourceTaskLinks,
+      notionSync: backup.version === 6 ? backup.notionSync : emptyNotionSyncArchive(),
     });
     clearUndoReceipts(store);
   });

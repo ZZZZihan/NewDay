@@ -17,8 +17,9 @@ import {
   type LocalDate,
   type Task,
 } from "../domain/planner-model";
+import { notionClientKey, notionSyncArchiveSchema } from "./notion-sync";
 
-export const plannerBackupSchema = z.object({
+const versionFivePlannerBackupSchema = z.object({
   format: z.literal("newday-backup"),
   version: z.literal(5),
   exportedAt: instantSchema,
@@ -31,7 +32,17 @@ export const plannerBackupSchema = z.object({
   resourceTaskLinks: z.array(resourceTaskLinkSchema),
 });
 
-const versionFourBackupSchema = plannerBackupSchema.omit({
+const versionSixPlannerBackupSchema = versionFivePlannerBackupSchema.extend({
+  version: z.literal(6),
+  notionSync: notionSyncArchiveSchema,
+}).strict();
+
+export const plannerBackupSchema = z.discriminatedUnion("version", [
+  versionFivePlannerBackupSchema,
+  versionSixPlannerBackupSchema,
+]);
+
+const versionFourBackupSchema = versionFivePlannerBackupSchema.omit({
   inboxItems: true, folders: true, resources: true, resourceTaskLinks: true,
 }).extend({ version: z.literal(4) });
 
@@ -130,7 +141,7 @@ export function parsePlannerBackup(source: string): PlannerBackup {
 
   const version = Reflect.get(candidate, "version");
 
-  if (version === 5) {
+  if (version === 6 || version === 5) {
     return parseAndValidateCurrentBackup(candidate);
   }
 
@@ -386,6 +397,64 @@ function validatePlannerBackup(backup: PlannerBackup) {
   for (const [date, records] of focusByDate) {
     if (records.length > 3) {
       throw new Error(`每日重点不能超过 3 项：${date}`);
+    }
+  }
+
+  if (backup.version === 6) validateNotionSyncBackup(backup);
+}
+
+function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>) {
+  const sync = backup.notionSync;
+  const taskIds = new Set(backup.tasks.map((task) => task.id));
+  assertUnique(sync.connections, (value) => value.workspaceId, "Notion 工作区 ID");
+  assertUnique(sync.taskMappings, (value) => value.localTaskId, "Notion 本地任务映射");
+  assertUnique(sync.outbox, (value) => value.operationId, "Notion 待发送操作 ID");
+  assertUnique(sync.conflicts, (value) => value.id, "Notion 冲突 ID");
+  assertUnique(sync.watermarks, (value) => JSON.stringify([value.workspaceId, value.dataSourceId]), "Notion 扫描水位");
+  assertUnique(sync.restoreQuarantine, (value) => JSON.stringify([value.operation.datasetEpoch, value.operation.operationId]), "Notion 恢复隔离操作");
+
+  const connections = new Map(sync.connections.map((value) => [value.workspaceId, value]));
+  const mappings = new Map(sync.taskMappings.map((value) => [value.localTaskId, value]));
+  const remoteKeys = new Set<string>();
+  const clientKeys = new Set<string>();
+  for (const mapping of sync.taskMappings) {
+    const connection = connections.get(mapping.workspaceId);
+    if (!connection || !taskIds.has(mapping.localTaskId)) {
+      throw new Error(`Notion 映射引用了不存在的任务或工作区：${mapping.localTaskId}`);
+    }
+    if (mapping.clientKey !== notionClientKey(connection.installationId, mapping.localTaskId)) {
+      throw new Error(`Notion 映射客户端键不匹配：${mapping.localTaskId}`);
+    }
+    const clientKey = JSON.stringify([mapping.workspaceId, mapping.clientKey]);
+    if (clientKeys.has(clientKey)) throw new Error(`Notion 客户端键重复：${mapping.clientKey}`);
+    clientKeys.add(clientKey);
+    if (mapping.remotePageId !== null) {
+      const remoteKey = JSON.stringify([mapping.workspaceId, mapping.dataSourceId, mapping.remotePageId]);
+      if (remoteKeys.has(remoteKey)) throw new Error(`Notion 远端映射重复：${mapping.remotePageId}`);
+      remoteKeys.add(remoteKey);
+    }
+  }
+  for (const operation of sync.outbox) {
+    const mapping = mappings.get(operation.localTaskId);
+    if (!mapping || mapping.workspaceId !== operation.workspaceId) {
+      throw new Error(`Notion 操作引用了不存在的映射：${operation.operationId}`);
+    }
+  }
+  for (const conflict of sync.conflicts) {
+    const mapping = mappings.get(conflict.localTaskId);
+    if (!mapping || mapping.workspaceId !== conflict.workspaceId) {
+      throw new Error(`Notion 冲突引用了不存在的映射：${conflict.id}`);
+    }
+  }
+  for (const watermark of sync.watermarks) {
+    if (!connections.has(watermark.workspaceId)) {
+      throw new Error(`Notion 水位引用了不存在的工作区：${watermark.workspaceId}`);
+    }
+  }
+  for (const quarantined of sync.restoreQuarantine) {
+    if (quarantined.operation.localTaskId !== quarantined.mapping.localTaskId ||
+      quarantined.operation.workspaceId !== quarantined.mapping.workspaceId) {
+      throw new Error(`Notion 恢复隔离操作与原映射不匹配：${quarantined.operation.operationId}`);
     }
   }
 }

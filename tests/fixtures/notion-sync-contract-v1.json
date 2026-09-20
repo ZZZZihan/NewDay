@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "syntheticOnly": true,
+  "notionVersion": "2026-03-11",
+  "cases": [
+    {
+      "id": "inclusive-range",
+      "kind": "date",
+      "remote": { "start": "2026-09-20", "end": "2026-09-22" },
+      "expected": { "startDate": "2026-09-20", "endDate": "2026-09-22", "visibleOn": ["2026-09-20", "2026-09-21", "2026-09-22"] }
+    },
+    {
+      "id": "single-day-null-end",
+      "kind": "date",
+      "remote": { "start": "2026-09-20", "end": null },
+      "expected": { "startDate": "2026-09-20", "endDate": "2026-09-20" }
+    },
+    {
+      "id": "remove-date-keeps-identity",
+      "kind": "date",
+      "localTaskId": "synthetic-task-1",
+      "remotePageId": "11111111-1111-4111-8111-111111111111",
+      "remote": null,
+      "expected": { "localTaskId": "synthetic-task-1", "startDate": null, "endDate": null, "visibleInToday": false, "keepResourceLinks": true }
+    },
+    {
+      "id": "reject-timed-date",
+      "kind": "date",
+      "remote": { "start": "2026-09-20T09:00:00+08:00", "end": null },
+      "expected": { "decision": "pause_row", "reason": "date_has_time", "localMutation": false }
+    },
+    {
+      "id": "merge-different-fields",
+      "kind": "conflict",
+      "baseline": { "title": "A", "date": ["2026-09-20", "2026-09-20"], "completed": false },
+      "local": { "title": "A", "date": ["2026-09-21", "2026-09-21"], "completed": false },
+      "remote": { "title": "B", "date": ["2026-09-20", "2026-09-20"], "completed": false },
+      "expected": { "title": "B", "date": ["2026-09-21", "2026-09-21"], "completed": false, "conflict": false }
+    },
+    {
+      "id": "notion-wins-same-field",
+      "kind": "conflict",
+      "baseline": { "title": "A", "date": ["2026-09-20", "2026-09-21"], "completed": false },
+      "local": { "title": "A", "date": ["2026-09-21", "2026-09-22"], "completed": false },
+      "remote": { "title": "A", "date": ["2026-09-19", "2026-09-23"], "completed": false },
+      "expected": { "title": "A", "date": ["2026-09-19", "2026-09-23"], "completed": false, "conflict": true }
+    },
+    {
+      "id": "response-lost-create",
+      "kind": "outbox",
+      "clientKey": "synthetic-install:synthetic-task-2",
+      "createResponse": "lost",
+      "queryMatches": ["22222222-2222-4222-8222-222222222222"],
+      "expected": { "decision": "bind_existing", "remotePageId": "22222222-2222-4222-8222-222222222222", "newCreateCalls": 0 }
+    },
+    {
+      "id": "ambiguous-create",
+      "kind": "outbox",
+      "clientKey": "synthetic-install:synthetic-task-3",
+      "createResponse": "lost",
+      "queryMatches": ["33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "trash-is-evidence",
+      "kind": "deletion",
+      "remote": { "id": "55555555-5555-4555-8555-555555555555", "in_trash": true },
+      "expected": { "decision": "archive_one_linked_task", "preserveHistory": true }
+    },
+    {
+      "id": "missing-is-not-deletion",
+      "kind": "deletion",
+      "remote": { "status": 404, "code": "object_not_found" },
+      "expected": { "decision": "needs_reconciliation", "archiveCount": 0 }
+    },
+    {
+      "id": "monthly-clamps-to-february",
+      "kind": "recurrence",
+      "rule": { "id": "66666666-6666-4666-8666-666666666666", "pattern": "monthly", "monthDay": 31 },
+      "nominalDate": "2027-02-28",
+      "rescheduledDate": "2027-03-01",
+      "expected": { "occurrenceKey": "notion:66666666-6666-4666-8666-666666666666:2027-02-28", "identityChangesOnReschedule": false }
+    }
+  ]
+}

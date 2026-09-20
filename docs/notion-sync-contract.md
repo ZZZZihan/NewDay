@@ -1,0 +1,80 @@
+# Notion 联动契约 v1（COL-32 候选）
+
+审阅基线：PR #1 `61be91776160e2aa6028f75840d2cd26bea39df0`、PR #2 `1a64aed1e9928d4491ef92eb439a0352081879bc`。本文件定义待实现行为；这两个 PR 都不含 Notion 联动。2026-09-20 的官方文档核对与代码基线测试见文末。真实 Notion 工作区、OAuth、条件写入及数据恢复尚未验收。
+
+## 1. 数据归属和阶段
+
+NewDay 继续以本机 API/SQLite 执行任务命令。Notion 管理主线、项目和新增的联动重复规则；NewDay 读取其名称、关系与链接。已关联的一次性任务和重复实例只共享标题、计划日期范围及完成状态。备注、今日重点、偏好、Agent 记录和本地资料留在 NewDay。已有本地任务与重复规则不自动迁移，也不因连接成功回传。
+
+M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过故障验收的双向写回。用户在 NewDay 新建的联动一次性任务先有本地 UUID，即使离线且本机 API 仍运行，也可以在同一 SQLite 事务中保存待发送操作。API 停止时浏览器不能假装保存成功。断开连接后新建任务为纯本地任务。
+
+## 2. 远端版本、权限和结构
+
+- 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.12.0`，创建连接时显式传 `notionVersion`。上线前用安装后的 SDK 类型检查及真实隔离工作区读写再次验证。该 API 版本用 `in_trash` 判断回收站状态。
+- 公共 OAuth 的 client secret 只在 Worker；浏览器不接收长期 access/refresh token。Worker 只处理回调、code 交换、刷新和一次性安全领取，本机 API 存储凭据且与业务备份隔离。每次授权绑定不可重放的 `state`、本机安装会话和明确的回调目标；令牌轮换须原子替换。
+- 公共连接可在用户的 Private 区域创建 workspace 级根页面。根页面保存随机安装标记；创建响应丢失时按标记查询并读回，无法确认则暂停，不能盲目再建。结构顺序：根页面、Areas、Projects、Tasks、Rules 基础结构、关系属性、逐项读回。每步只在读回确认后推进本地初始化状态。
+- 每张表同时保存 `database_id` 与 `data_source_id`。创建表使用 database API 的 `initial_data_source.properties`；查询行、创建行的父级和关系指向具体 data source。保存每个实际属性 ID，后续按 ID 读写；重命名属性不靠名称猜测。字段类型或关系目标改变时暂停相关行处理并报错。
+
+### 四张表的 v1 属性
+
+表中名称是首次创建时的显示名；运行时使用创建后读回的属性 ID。
+
+| 表 | 属性（Notion 类型） | 规则 |
+| --- | --- | --- |
+| Areas | `Name`（title） | Notion 页面 ID 是主线身份；NewDay 只读名称和页面链接。 |
+| Projects | `Name`（title）、`Area`（relation → Areas） | 恰好一个可访问主线；异常关系不取第一项，标记待核对。 |
+| Tasks | `Name`（title）、`Plan Date`（date）、`Completed`（checkbox）、`Project`（relation → Projects）、`Direct Area`（relation → Areas）、`NewDay Key`（rich_text）、`Rule`（relation → Rules）、`Occurrence Key`（rich_text） | `Plan Date` 可空；项目至多一个。有项目时从项目派生主线，否则使用至多一个直接主线。`NewDay Key` 仅由 NewDay 创建的页填写；`Rule`/`Occurrence Key` 仅重复实例填写。 |
+| Rules | `Name`（title）、`Active Dates`（date）、`Pattern`（select: `daily`/`weekdays`/`weekly`/`monthly`）、`Weekdays`（multi_select: ISO 1～7）、`Month Day`（number）、`Excluded Dates`（rich_text，JSON 日期数组） | Notion 编辑。`Active Dates.start` 必填，`end` 可空；不同模式只读取对应参数。排除日期必须是有效且去重的 date-only 值。 |
+
+`NewDay Key` 是安装 ID 与本地任务 UUID 派生的稳定标识；远端不强制唯一，所以写入响应丢失时须扫描并核对：恰好一条可用则绑定，多条或查询不完整则暂停并呈现待核对。重复实例的 `Occurrence Key` 由规则页面 ID 与原始发生日期生成，改期不改变该键。`Rule` 关系用于区分实例与一次性任务；不允许把实例字段误写成规则变更。
+
+## 3. 日期、可见性和身份
+
+`Plan Date` 的 `start`/`end` 都必须是 `YYYY-MM-DD`，单日为相同值；空 `end` 按单日解释。区间首尾均包含，且结束不早于开始。带时间或时区的输入不按服务器 UTC 偷换日期：该行暂停同步并显示字段错误，等待用户在 Notion 修正。仅用于实例的日期必须是单日。
+
+远端无日期任务在首次扫描时可保留远端索引，但不进入每日清单、逾期、重点或 Agent 候选。已关联任务清空日期时保留同一个本地任务 ID、远端映射、资料链接和历史；计划范围改为整体空值，清除当前重点可见性，退出所有每日投影。当前 `Task` 模型要求非空 `startDate/endDate`，因此实现必须将两端作为同时为 null 或同时有效的配对，并更新 day-plan、Agent 快照、任务总表与备份校验；不能用“今天”占位。纯本地任务仍须有日期。
+
+远端完成变更首次成功应用时记录本机观察时间作为 `completedAt`，按用户已配置时区得到 `completedOn`；这不是远端实际点击时间。重复读取相同状态不改写完成时间或 plannerRevision。重开清空两者。
+
+主线、项目、任务、规则与实例的本地 ID 与 Notion 页面 ID 分开保存，以 `(workspace_id, data_source_id, remote_page_id)` 唯一约束映射。重复规则以其远端页面 ID 派生 `logicalSeriesId`，现有规则段可以更换 `seriesId` 而不改变逻辑规则身份。实例键沿用 `logicalSeriesId:occurrenceDate`；`occurrenceDate` 是原始发生日，改期只改变实际计划日。窗口是用户时区的今天至今天＋31 天，含首尾。已完成实例和有明确例外的实例不能被规则刷新覆盖。
+
+## 4. 原子写入、冲突和恢复
+
+业务任务变更走 core 命令或经过等价校验的服务事务，不能只改 `tasks.payload`。本地任务变更、映射状态及 outbox 记录同一 SQLite 事务提交；外部 HTTP 在事务外。真正改变任务内容时，同一事务推进一次 `plannerRevision`，使旧 Agent 提案在采纳时返回版本冲突；仅水位、令牌或同步时间变化不推进该版本。整库替换沿用 `datasetEpoch`，旧提案和旧 outbox 不能跨 epoch 执行。
+
+每个关联任务按安装/工作区/任务串行发送。outbox 保存稳定操作 ID、目标字段、期望共同基准、业务版本、重试状态；同一任务较早的待发送日期变更被后续日期意图合并或废止，不能晚到覆盖新值。远端拉取不得再生成相同待发送操作。发送后读回并核对实际属性、页面 ID 与当前意图，未知结果保持待核对。撤销须新增相反业务意图并经过同一队列，不能只撤销本地数据库。
+
+以**最后一次已成功核对的逐字段值**为共同基准，`Name`、完整 `Plan Date` 区间、`Completed` 分别比较。两端只改不同字段时合并；同一字段两端都改时 Notion 值优先，记录共同基准、两端值、决议和时间，用户可见。日期区间是一个原子字段，绝不拼接两端。尚未验证 Notion 对本接口提供适用的条件写入能力；T5/T6 在真实隔离工作区实测前不得宣称任意并发下零覆盖。若不能条件写入，采用写前读、只发送目标属性、写后读及冲突审计；有无法判断的竞态则暂停该操作，产品文案明确为“可检测范围内冲突处理与最终收敛”。
+
+只有明确读取到目标页面 `in_trash: true` 才自动归档对应本地关联任务，保留映射、资料关联和历史，不硬删。单次查询缺失、404、403、schema 改动、分页失败和网络错误都进入待核对；不批量归档。v1 从 NewDay 删除联动任务时只提供去 Notion 处理的说明，不能复用本地永久删除命令静默删远端；恢复/取消归档需重新核对远端。
+
+备份恢复期间暂停拉取和发送。业务备份应包含必要的关联与冲突历史但不含 token、client secret 或领取凭证；恢复后先核对安装/工作区、schema、映射、远端当前值及 outbox。所有恢复来的 outbox 默认隔离，逐项对账后才能重新发送。缺凭据时重新授权；换工作区必须新建命名空间，不按同名主线、项目或任务复用旧 ID。
+
+## 5. 扫描、水位和可见故障
+
+每张 data source 分页扫描，每页先校验类型、属性和关系；只有整个扫描窗口成功后推进应用自己的完成水位。`next_cursor` 只在本次分页调用中使用，不作为永久增量日志位置。重启或中断从上次完成水位的重叠窗口重新扫描，以远端页面 ID 去重；主线和项目独立刷新。应用远端变更时不产生回写回环。显示最后尝试、最后成功、失败类别和手动重试；“尚未成功同步”不能显示为“没有任务”。
+
+429、529 遵守 `Retry-After` 秒数，并在再次失败时做有上限的退避和抖动；401/403、schema 错误、404 与可重试网络/服务错误分开。只有授权有效、API 运行、固定测试规模且无持续限流时才验收 5 分钟内反映变更。API 关闭、备份恢复和暂停状态明确告知用户。
+
+## 6. 验收矩阵与未关闭问题
+
+| 场景 | 必须证明 |
+| --- | --- |
+| 同日/跨日/空日期/清空日期/带时间日期 | 区间语义、无日期不进入今日、清空不失历史、带时间不静默转换 |
+| 同页重复扫描、重启、部分分页失败 | 一条映射；失败不推进水位或触发批量归档 |
+| POST/PATCH 成功但响应丢失 | 用稳定键和读回对账；不盲目创建第二页 |
+| 本地改日期而 Notion 改标题、双方改同一字段 | 分字段合并；同字段 Notion 优先并显示三方值 |
+| 日期区间两端并发修改 | 原子解决，不能组成无效范围 |
+| 429/529、401/403、404、网络中断 | 正确退避/待核对/暂停，无误归档、无无限重试 |
+| Agent 建议生成后同步修改候选任务 | 旧建议返回版本冲突，重点不变 |
+| 备份恢复、换工作区、旧 outbox | 恢复暂停，校验命名空间，旧操作不覆盖远端 |
+| 规则月末/改期/停止/恢复 | 实例键稳定，不重复生成，不覆盖已完成历史 |
+
+当前仍需在 T5/T6 用真实隔离 Notion 工作区确定条件写入是否可用，并验证以上日期、关系及回收站响应。规则变更后，已发送到 Notion 的未来未完成实例如何收敛须在 T7 的故障测试中冻结处理；在此之前不可自动删除或重建这些远端页。上述项目未验收前，COL-32 只可标记契约候选，不可把整条 COL-31 标为完成。
+
+## 7. 证据入口
+
+- [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)。
+- [公共 OAuth 与令牌刷新](https://developers.notion.com/guides/get-started/authorization)、[Private 区域结构创建](https://developers.notion.com/guides/get-started/preparing-for-users)。
+- [database/data source 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)、[分页](https://developers.notion.com/reference/intro)、[更新页面](https://developers.notion.com/reference/patch-page)、[请求限制](https://developers.notion.com/reference/request-limits)。
+- 本地代码：`packages/core/src/domain/planner-model.ts`、`packages/core/src/application/day-plan.ts`、`packages/core/src/application/recurrence-generation.ts`、`apps/api/src/storage/sqlite-planner-store.ts`、`apps/api/src/services/planner-service.ts`、`packages/core/src/contracts/planner-backup.ts`。

@@ -2,10 +2,25 @@ import { describe, expect, it } from "vitest";
 import { dateInTimeZone, timeZoneSchema } from "@newday/core/contracts/agent-planning";
 import { taskSchema } from "@newday/core/domain/planner-model";
 import development from "../fixtures/development-v1.json";
-import heldout from "../fixtures/heldout-v1.json";
-import manifest from "../fixtures/manifest-v1.json";
+import heldout from "../fixtures/heldout-v2.json";
+import originalHeldout from "../fixtures/heldout-v1.json";
+import manifest from "../fixtures/manifest-v2.json";
 
 describe("frozen evaluation input specifications (not model quality)", () => {
+  it("keeps the original heldout criteria and only repairs H-C08 task timestamps before provider trials", () => {
+    expect(heldout.scenarios.map(({ id, family, expected }) => ({ id, family, expected })))
+      .toEqual(originalHeldout.scenarios.map(({ id, family, expected }) => ({ id, family, expected })));
+    const repaired = structuredClone(heldout.scenarios);
+    const originalHc08 = originalHeldout.scenarios.find(({ id }) => id === "H-C08");
+    const repairedHc08 = repaired.find(({ id }) => id === "H-C08");
+    expect(originalHc08).toBeDefined();
+    expect(repairedHc08).toBeDefined();
+    for (const [index, task] of repairedHc08!.input.tasks.entries()) {
+      task.createdAt = originalHc08!.input.tasks[index].createdAt;
+      task.updatedAt = originalHc08!.input.tasks[index].updatedAt;
+    }
+    expect(repaired).toEqual(originalHeldout.scenarios);
+  });
   it("reserves forty cases across four categories and keeps development families separate", () => {
     expect(heldout.scenarios).toHaveLength(40);
     expect(development.scenarios).toHaveLength(12);
@@ -29,6 +44,8 @@ describe("frozen evaluation input specifications (not model quality)", () => {
       expect(taskIds.size, scenario.id).toBe(scenario.input.tasks.length);
       for (const task of scenario.input.tasks) {
         expect(taskSchema.safeParse(task).success, `${scenario.id}/${task.id}`).toBe(true);
+        expect(Date.parse(task.createdAt), `${scenario.id}/${task.id}`).toBeLessThanOrEqual(Date.parse(scenario.input.sampledAt));
+        expect(Date.parse(task.updatedAt), `${scenario.id}/${task.id}`).toBeLessThanOrEqual(Date.parse(scenario.input.sampledAt));
       }
     }
   });

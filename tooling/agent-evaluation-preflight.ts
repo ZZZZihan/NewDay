@@ -11,16 +11,19 @@ import { prepareEvaluationScenario } from "../tests/agent/evaluation/prepare-sna
 // It never reads .env and cannot start the 40 x 3 paid evaluation.
 const { values } = parseArgs({ options: { output: { type: "string" } } });
 const fixtureDirectory = fileURLToPath(new URL("../tests/agent/fixtures/", import.meta.url));
-const manifest = JSON.parse(await readFile(resolve(fixtureDirectory, "manifest-v1.json"), "utf8")) as {
+const manifestSource = await readFile(resolve(fixtureDirectory, "manifest-v2.json"));
+const manifest = JSON.parse(manifestSource.toString("utf8")) as {
+  version: number;
   files: Record<string, { sha256: string }>;
   heldoutCases: number;
   developmentCases: number;
 };
+if (manifest.version !== 2) throw new Error("manifest-v2.json: expected version 2");
 const cases: Array<{ split: string; id: string; candidateCount: number; factCount: number; gaps: string[]; adaptations: string[] }> = [];
 const corpusSha256: Record<string, string> = {};
 for (const [split, filename, expectedCount] of [
   ["development", "development-v1.json", manifest.developmentCases],
-  ["heldout", "heldout-v1.json", manifest.heldoutCases],
+  ["heldout", "heldout-v2.json", manifest.heldoutCases],
 ] as const) {
   const source = await readFile(resolve(fixtureDirectory, filename));
   const digest = sha256(source);
@@ -40,6 +43,7 @@ const report = {
   format: "newday-agent-evaluation-preflight", version: 1, createdAt: new Date().toISOString(),
   status: blockedCases.length ? "blocked" : "ready_for_review",
   realProviderCalls: 0,
+  manifestVersion: manifest.version, manifestSha256: sha256(manifestSource),
   promptVersion: AGENT_PROMPT_VERSION, schemaVersion: AGENT_SCHEMA_VERSION,
   systemPromptSha256: sha256(PLANNING_SYSTEM_PROMPT),
   providerSchemaSha256: sha256(JSON.stringify(planningProviderJsonSchema)),

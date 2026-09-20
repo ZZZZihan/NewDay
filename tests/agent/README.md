@@ -31,6 +31,8 @@ The files are repository visible. They are operationally reserved, not blinded o
 
 The reserved model evaluation is 40 cases × 3 trials = 120 real provider trials with a fixed model ID, prompt version, schema version, and snapshot provenance. None of those trials has run. These cases have not yet been adapted into live provider requests. No provider credentials or paid requests are needed for the current engineering tests.
 
+Run `pnpm agent:evaluation:preflight --output /tmp/newday-agent-evaluation-preflight.json` to check the frozen fixture digests and convert all 52 inputs through the production snapshot builder without a provider call. The current result and the two input-representation gaps are documented in [the COL-23 preflight note](../../docs/agent-evaluation-preflight.md). Exit code 2 means at least one scenario cannot yet be represented without losing information; do not start the heldout trial batch while it is blocked.
+
 Provider 429, timeout, malformed response, cancellation, and restart faults belong to the separate engineering suite. Injected faults must not be counted as 120 real model-quality trials. A runtime guard rejecting an invalid proposal must be reported separately from the model producing a valid proposal. Human grounding, goal-alignment, burden, and hard-constraint assessments require actual review; fixture validation and scripted output cannot supply those scores.
 
 Seven-day personal-use evidence and the prior manual baseline are separate acceptance stages and have not been collected by these tests.

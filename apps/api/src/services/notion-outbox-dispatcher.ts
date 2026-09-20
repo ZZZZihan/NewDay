@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 
+import { executePlannerCommandsWithoutUndo, type PlannerCommand } from "@newday/core/application/planner-command";
 import { reconcileNotionTask } from "@newday/core/application/notion-sync-reconcile";
+import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
 import {
   notionTaskFieldsSchema,
+  type NotionFieldConflict,
   type NotionConnection,
   type NotionOutboxOperation,
   type NotionTaskFields,
@@ -28,7 +31,8 @@ export interface NotionTaskTransport {
   }>;
   readPage(connection: NotionConnection, mapping: NotionTaskMapping): Promise<NotionTaskPage | null>;
   createPage(connection: NotionConnection, mapping: NotionTaskMapping, fields: NotionTaskFields): Promise<void>;
-  updatePage(connection: NotionConnection, mapping: NotionTaskMapping, fields: NotionTaskFields): Promise<void>;
+  /** Only the locally changed properties may be sent in one PATCH. */
+  updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>): Promise<void>;
 }
 
 type DispatchResult = "confirmed" | "unknown" | "quarantined";
@@ -61,33 +65,47 @@ export class NotionOutboxDispatcher {
   }
 
   private async dispatchOne(operationId: string): Promise<DispatchResult> {
-    const operation = await this.store.markNotionOutboxSending(operationId, this.now());
+    let operation = await this.store.markNotionOutboxSending(operationId, this.now());
     const connection = await this.store.getNotionConnection(operation.workspaceId);
-    const mapping = await this.store.getNotionTaskMapping(operation.localTaskId);
+    let mapping = await this.store.getNotionTaskMapping(operation.localTaskId);
     if (!connection || !mapping) return this.markUnknownOrQuarantined(operation);
 
-    try {
-      const before = await this.readTarget(connection, mapping);
-      if (before === "uncertain") return this.markUnknownOrQuarantined(operation);
-      if (before && sameFields(before.fields, operation.desired)) {
-        return this.confirmOrQuarantine(operation, before);
-      }
-      if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
+    let before: Awaited<ReturnType<NotionOutboxDispatcher["readTarget"]>>;
+    try { before = await this.readTarget(connection, mapping); }
+    catch { return this.markUnknownOrQuarantined(operation); }
+    if (before === "uncertain") return this.markUnknownOrQuarantined(operation);
+    if (before && sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
+
+    if (mapping.remotePageId === null) {
+      if (before !== null || !this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
         return this.markUnknownOrQuarantined(operation);
       }
-      if (mapping.remotePageId === null) {
-        if (before !== null) return this.markUnknownOrQuarantined(operation);
-        await this.transport.createPage(connection, mapping, operation.desired);
-      } else {
-        if (!before || !mapping.baseline || !sameFields(before.fields, mapping.baseline)) {
-          if (before && mapping.baseline) await this.recordConflicts(operation, mapping, before.fields);
-          return this.markUnknownOrQuarantined(operation);
-        }
-        await this.transport.updatePage(connection, mapping, operation.desired);
-      }
-    } catch {
-      // A throw may be a lost response after the remote write. Read back below.
+      try { await this.transport.createPage(connection, mapping, operation.desired); }
+      catch { /* The write may have committed before its response was lost. */ }
+      return this.readBackAndConfirm(operation, connection, mapping);
     }
+
+    if (!before || !mapping.baseline) return this.markUnknownOrQuarantined(operation);
+    if (!sameFields(before.fields, mapping.baseline)) {
+      const resolution = reconcileNotionTask({
+        baseline: mapping.baseline, local: operation.desired, remote: before.fields,
+      });
+      try {
+        operation = await this.applyPreflightMerge(operation, mapping, before.fields,
+          resolution.merged, resolution.conflicts);
+        mapping = (await this.store.getNotionTaskMapping(operation.localTaskId))!;
+      } catch { return this.markUnknownOrQuarantined(operation); }
+    }
+    if (sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
+    if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
+      return this.markUnknownOrQuarantined(operation);
+    }
+    const patch = reconcileNotionTask({
+      baseline: before.fields, local: operation.desired, remote: before.fields,
+    }).remotePatch;
+    if (Object.keys(patch).length === 0) return this.markUnknownOrQuarantined(operation);
+    try { await this.transport.updatePage(connection, mapping, patch); }
+    catch { /* Read back before treating an error as a failed write. */ }
     return this.readBackAndConfirm(operation, connection, mapping);
   }
 
@@ -136,20 +154,52 @@ export class NotionOutboxDispatcher {
     return { ...page, fields: notionTaskFieldsSchema.parse(page.fields) };
   }
 
-  private async recordConflicts(
+  private async applyPreflightMerge(
     operation: NotionOutboxOperation,
     mapping: NotionTaskMapping,
     remote: NotionTaskFields,
-  ) {
-    if (!mapping.baseline) return;
-    const resolution = reconcileNotionTask({ baseline: mapping.baseline, local: operation.desired, remote });
-    for (const conflict of resolution.conflicts) {
-      await this.store.appendNotionConflict({
-        id: randomUUID(), localTaskId: mapping.localTaskId, workspaceId: mapping.workspaceId,
-        field: conflict.field, baseline: conflict.baseline, local: conflict.local,
-        remote: conflict.remote, recordedAt: this.now(),
+    merged: NotionTaskFields,
+    conflicts: NotionFieldConflict[],
+  ): Promise<NotionOutboxOperation> {
+    if (merged.date === null) throw new Error("Undated Notion tasks need the T4 task model");
+    const at = this.now();
+    return this.store.transaction(async () => {
+      if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
+        throw new Error("Notion send was fenced during preflight");
+      }
+      const task = await this.store.getTask(operation.localTaskId);
+      if (!task || !sameFields({
+        title: task.title, date: [task.startDate, task.endDate], completed: task.status === "completed",
+      }, operation.desired)) {
+        throw new Error("Local task changed during Notion preflight");
+      }
+      const commands: PlannerCommand[] = [];
+      if (task.title !== merged.title) commands.push({
+        type: "updateTaskDetails", input: { taskId: task.id, title: merged.title, now: at },
       });
-    }
+      if (task.startDate !== merged.date![0] || task.endDate !== merged.date![1]) commands.push({
+        type: "rescheduleTask", input: { taskId: task.id, startDate: merged.date![0], endDate: merged.date![1], now: at },
+      });
+      if ((task.status === "completed") !== merged.completed) {
+        if (merged.completed) {
+          const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
+          if (!preferences?.timeZone) throw new Error("Notion completion needs a configured time zone");
+          commands.push({ type: "completeTask", input: {
+            taskId: task.id, now: at, completedOn: dateInTimeZone(new Date(at), preferences.timeZone),
+          } });
+        } else commands.push({ type: "reopenTask", input: { taskId: task.id, now: at } });
+      }
+      await executePlannerCommandsWithoutUndo(this.store, commands);
+      const rebased = await this.store.rebaseNotionSending(operation.operationId, remote, merged, at);
+      for (const conflict of conflicts) {
+        await this.store.appendNotionConflict({
+          id: randomUUID(), localTaskId: mapping.localTaskId, workspaceId: mapping.workspaceId,
+          field: conflict.field, baseline: conflict.baseline, local: conflict.local,
+          remote: conflict.remote, winner: "notion", recordedAt: at,
+        });
+      }
+      return rebased;
+    });
   }
 
   private async confirmOrQuarantine(operation: NotionOutboxOperation, page: NotionTaskPage): Promise<DispatchResult> {

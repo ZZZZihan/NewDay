@@ -24,6 +24,7 @@ export class PlannerService {
     private readonly store: SQLitePlannerStore,
     private readonly clock: () => number = Date.now,
     private readonly undoTtlMs = 10_000,
+    private readonly syncDrainTimeoutMs = 5_000,
   ) {}
 
   day(input: { selectedDate: string; asOfDate: string }) {
@@ -99,6 +100,7 @@ export class PlannerService {
       // Commit the send fence before replacing the dataset. A failed import
       // stays paused for reconciliation instead of reopening remote writes.
       await this.store.pauseNotionForRestore();
+      await this.store.waitForNotionSendingToSettle(this.syncDrainTimeoutMs);
       const today = await this.configuredToday();
       if (today) await this.store.withEventContext({ date: today.date, at: new Date(this.clock()).toISOString(), source: "import" }, () => restorePlannerBackup(this.store, source));
       else await restorePlannerBackup(this.store, source);

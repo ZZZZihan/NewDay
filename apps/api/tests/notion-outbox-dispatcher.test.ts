@@ -4,8 +4,9 @@ import test from "node:test";
 import { notionClientKey, type NotionConnection, type NotionOutboxOperation, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 
 import { NotionOutboxDispatcher, type NotionTaskPage, type NotionTaskTransport } from "../src/services/notion-outbox-dispatcher.js";
+import { PlannerService } from "../src/services/planner-service.js";
 import { SQLitePlannerStore } from "../src/storage/sqlite-planner-store.js";
-import { task } from "./fixtures.js";
+import { backup, task } from "./fixtures.js";
 
 const at = "2026-09-21T00:00:00.000Z";
 const fields: NotionTaskFields = { title: "整理项目", date: ["2026-09-08", "2026-09-08"], completed: false };
@@ -54,10 +55,13 @@ function fakeTransport() {
       pages.set("remote-1", { workspaceId: candidate.workspaceId, dataSourceId: candidate.dataSourceId,
         remotePageId: "remote-1", clientKey: candidate.clientKey, fields: desired, inTrash: false });
     },
-    async updatePage(_connection, candidate, desired) {
+    async updatePage(_connection, candidate, patch) {
       calls.update += 1;
+      const current = pages.get(candidate.remotePageId!);
+      if (!current) throw new Error("remote page missing");
       pages.set(candidate.remotePageId!, { workspaceId: candidate.workspaceId, dataSourceId: candidate.dataSourceId,
-        remotePageId: candidate.remotePageId!, clientKey: null, fields: desired, inTrash: false });
+        remotePageId: candidate.remotePageId!, clientKey: null,
+        fields: { ...current.fields, ...patch }, inTrash: false });
     },
   };
   return { transport, pages, calls, setSearchComplete(value: boolean) { searchComplete = value; } };
@@ -122,7 +126,7 @@ test("a matching key outside the mapped data source cannot be adopted", async ()
   } finally { store.close(); }
 });
 
-test("a changed remote field pauses the write and records a three-way conflict", async () => {
+test("a same-field conflict uses the remote value and records the three-way decision", async () => {
   const local = { ...fields, title: "本地标题" };
   const store = await setup("remote-1", local);
   const fake = fakeTransport();
@@ -132,12 +136,65 @@ test("a changed remote field pauses the write and records a three-way conflict",
     fields: { ...fields, title: "Notion 标题" }, inTrash: false,
   });
   try {
-    assert.equal(await new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1"), "unknown");
+    assert.equal(await new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1"), "confirmed");
     assert.equal(fake.calls.update, 0);
+    assert.equal((await store.getTask("task-1"))?.title, "Notion 标题");
     assert.deepEqual((await store.listNotionConflicts()).map(({ field, baseline, local: localValue, remote }) =>
       ({ field, baseline, local: localValue, remote })), [
       { field: "title", baseline: "整理项目", local: "本地标题", remote: "Notion 标题" },
     ]);
+    assert.equal((await store.listNotionConflicts())[0]?.winner, "notion");
+  } finally { store.close(); }
+});
+
+test("different-field edits merge through a business command and send only the local date", async () => {
+  const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const store = await setup("remote-1", desired);
+  const fake = fakeTransport();
+  fake.pages.set("remote-1", {
+    workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null,
+    fields: { ...fields, title: "Notion 新标题" }, inTrash: false,
+  });
+  const before = await store.getPlanningVersion();
+  const update = fake.transport.updatePage;
+  let sentPatch: Partial<NotionTaskFields> | undefined;
+  fake.transport.updatePage = async (...args) => { sentPatch = args[2]; await update(...args); };
+  try {
+    assert.equal(await new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1"), "confirmed");
+    assert.deepEqual(sentPatch, { date: ["2026-09-09", "2026-09-09"] });
+    assert.deepEqual(fake.pages.get("remote-1")?.fields,
+      { title: "Notion 新标题", date: ["2026-09-09", "2026-09-09"], completed: false });
+    assert.equal((await store.getTask("task-1"))?.title, "Notion 新标题");
+    assert.equal((await store.getTask("task-1"))?.startDate, "2026-09-09");
+    assert.equal((await store.getPlanningVersion()).plannerRevision, before.plannerRevision + 1);
+    assert.deepEqual(await store.listNotionConflicts(), []);
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "active");
+  } finally { store.close(); }
+});
+
+test("a remote edit after preflight survives a selective date patch", async () => {
+  const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const store = await setup("remote-1", desired);
+  const fake = fakeTransport();
+  fake.pages.set("remote-1", {
+    workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields, inTrash: false,
+  });
+  const update = fake.transport.updatePage;
+  let sentPatch: Partial<NotionTaskFields> | undefined;
+  fake.transport.updatePage = async (...args) => {
+    sentPatch = args[2];
+    const current = fake.pages.get("remote-1")!;
+    fake.pages.set("remote-1", { ...current, fields: { ...current.fields, title: "Notion 新标题" } });
+    await update(...args);
+  };
+  try {
+    assert.equal(await new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1"), "unknown");
+    assert.deepEqual(sentPatch, { date: ["2026-09-09", "2026-09-09"] });
+    assert.deepEqual(fake.pages.get("remote-1")?.fields,
+      { ...fields, title: "Notion 新标题", date: ["2026-09-09", "2026-09-09"] });
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "paused_unknown");
   } finally { store.close(); }
 });
 
@@ -188,5 +245,59 @@ test("a restore during remote preflight prevents a new HTTP write", async () => 
     release();
     assert.equal(await dispatch, "quarantined");
     assert.equal(fake.calls.create, 0);
+  } finally { store.close(); }
+});
+
+test("restore waits for a known send to finish before replacing the dataset", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  let release!: () => void;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+  const create = fake.transport.createPage;
+  fake.transport.createPage = async (...args) => {
+    entered();
+    await releasePromise;
+    await create(...args);
+  };
+  try {
+    const dispatch = new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1");
+    await enteredPromise;
+    const restore = new PlannerService(store).restore(JSON.stringify(backup([task("replacement")])));
+    for (let i = 0; i < 100 && (await store.getNotionConnection("workspace-1"))?.status !== "paused_after_restore"; i++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "paused_after_restore");
+    assert.equal(await store.getTask("replacement"), undefined);
+    release();
+    assert.equal(await dispatch, "confirmed");
+    await restore;
+    assert.deepEqual(await store.listNotionRestoreQuarantine(), []);
+    assert.deepEqual(await store.getTask("replacement"), task("replacement"));
+  } finally { store.close(); }
+});
+
+test("restore timeout quarantines a send whose HTTP result is still unknown", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  let release!: () => void;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => { entered = resolve; });
+  const releasePromise = new Promise<void>((resolve) => { release = resolve; });
+  const create = fake.transport.createPage;
+  fake.transport.createPage = async (...args) => {
+    entered();
+    await releasePromise;
+    await create(...args);
+  };
+  try {
+    const dispatch = new NotionOutboxDispatcher(store, fake.transport, () => at).dispatch("operation-1");
+    await enteredPromise;
+    await new PlannerService(store, Date.now, 10_000, 20).restore(JSON.stringify(backup([task("replacement")])));
+    assert.equal((await store.listNotionRestoreQuarantine()).length, 1);
+    release();
+    assert.equal(await dispatch, "quarantined");
+    assert.deepEqual(await store.getTask("replacement"), task("replacement"));
   } finally { store.close(); }
 });

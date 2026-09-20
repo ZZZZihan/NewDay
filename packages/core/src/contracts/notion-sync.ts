@@ -82,6 +82,7 @@ export const notionConflictRecordSchema = z.object({
   baseline: z.unknown(),
   local: z.unknown(),
   remote: z.unknown(),
+  winner: z.literal("notion"),
   recordedAt: z.string().datetime({ offset: true }),
 }).strict();
 export type NotionConflictRecord = z.infer<typeof notionConflictRecordSchema>;

@@ -355,6 +355,38 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     });
   }
 
+  /** Rebase one claimed intent after remote fields and the local business
+   * merge have been committed in the same outer transaction. */
+  async rebaseNotionSending(
+    operationId: string,
+    remote: NotionTaskFields,
+    merged: NotionTaskFields,
+    at: string,
+  ): Promise<NotionOutboxOperation> {
+    const baseline = notionTaskFieldsSchema.parse(remote);
+    const desired = notionTaskFieldsSchema.parse(merged);
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "sending") throw new Error("Notion operation is not sending");
+      if ((await this.getNotionConnection(operation.workspaceId))?.status !== "active") {
+        throw new Error("Notion workspace was paused during preflight");
+      }
+      if ((await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) {
+        throw new Error("Notion operation epoch changed during preflight");
+      }
+      const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+      if (!mapping || mapping.workspaceId !== operation.workspaceId || mapping.remotePageId === null ||
+        JSON.stringify(mapping.baseline) !== JSON.stringify(operation.baseline)) {
+        throw new Error("Notion mapping changed during preflight");
+      }
+      const next = notionOutboxOperationSchema.parse({ ...operation, baseline, desired });
+      await this.assertNotionOperationTaskState(next);
+      await this.putNotionTaskMapping({ ...mapping, baseline, updatedAt: at });
+      this.updateNotionOutbox(next);
+      return next;
+    });
+  }
+
   /** A write is confirmed only after reading the exact desired fields back. */
   async confirmNotionOutbox(operationId: string, remotePageId: string, readBack: NotionTaskFields, at: string): Promise<"confirmed" | "unknown" | "quarantined"> {
     const confirmedFields = notionTaskFieldsSchema.parse(readBack);
@@ -444,6 +476,20 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       this.database.prepare(`UPDATE notion_connections SET status='paused_after_restore',
         payload=json_set(payload,'$.status','paused_after_restore','$.updatedAt',?)`).run(at);
     });
+  }
+
+  /** The restore fence is already committed. Let known HTTP attempts finish;
+   * a timeout leaves their durable sending records for quarantine. */
+  async waitForNotionSendingToSettle(timeoutMs: number): Promise<boolean> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new Error("Invalid Notion drain timeout");
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const sending = this.database.prepare("SELECT 1 FROM notion_outbox WHERE status='sending' LIMIT 1").get();
+      if (!sending) return true;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    }
   }
 
   private updateNotionOutbox(value: NotionOutboxOperation) {

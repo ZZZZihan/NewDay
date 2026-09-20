@@ -311,7 +311,7 @@ test("a queued intent already satisfied by read-back needs no duplicate send", a
   } finally { store.close(); }
 });
 
-test("v5 replacement clears old mappings and never infers new ones", async () => {
+test("v5 replacement clears mappings but fences a prior remote structure", async () => {
   const store = new SQLitePlannerStore(":memory:");
   try {
     await store.putTask(task());
@@ -322,7 +322,10 @@ test("v5 replacement clears old mappings and never infers new ones", async () =>
     assert.deepEqual(await store.getTask("task-1"), task());
     assert.notEqual((await store.getPlanningVersion()).datasetEpoch, before.datasetEpoch);
     assert.equal(await store.getNotionTaskMapping("task-1"), undefined);
-    assert.deepEqual(await store.listNotionConnections(), []);
+    const [guard] = await store.listNotionConnections();
+    assert.equal(guard.workspaceId, "workspace-1");
+    assert.equal(guard.rootPageId, "root-1");
+    assert.equal(guard.status, "paused_after_restore");
   } finally { store.close(); }
 });
 

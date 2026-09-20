@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createApp } from "../src/app.js";
-import type { NotionStructureGateway, StructureDatabase, StructurePage, StructureProperty } from "../src/services/notion-structure-gateway.js";
+import { NotionSdkStructureGateway, type NotionStructureGateway, type StructureDatabase, type StructurePage,
+  type StructureProperty } from "../src/services/notion-structure-gateway.js";
 import { NotionCredentialVault } from "../src/storage/notion-credential-vault.js";
 
 const workspaceId = "test-workspace";
@@ -297,9 +298,93 @@ test("database creation detects a matching sibling already under the root", asyn
     const result = (await app.inject({ method: "POST", url: path, payload: {} })).json();
     assert.equal(result.state, "needs_review");
     assert.equal(result.reviewReason, "ambiguous");
-    assert.deepEqual(fake.creates, { root: 1, database: 1, relation: 0 });
+    assert.deepEqual(fake.creates, { root: 1, database: 0, relation: 0 });
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("restoring a backup from before structure creation fences the prior root identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-restore-root-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  const databasePath = join(directory, "planner.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  let app = createApp({ databasePath, notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const path = `/api/notion/connections/${workspaceId}/structure/advance`;
+  try {
+    const before = (await app.inject("/api/planner/backup")).json();
+    assert.deepEqual(before.notionSync.connections, []);
+    assert.equal((await app.inject({ method: "POST", url: path, payload: {} })).json().completedSteps[0], "root");
+    assert.equal(fake.creates.root, 1);
+    const restored = await app.inject({ method: "POST", url: "/api/planner/backup", payload: { source: JSON.stringify(before) } });
+    assert.equal(restored.statusCode, 200);
+    let progress = (await app.inject(`/api/notion/connections/${workspaceId}/structure`)).json();
+    assert.equal(progress.state, "paused_after_restore");
+    assert.equal(progress.rootPageId, "page-1");
+    await app.close();
+    app = createApp({ databasePath, notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+    progress = (await app.inject(`/api/notion/connections/${workspaceId}/structure`)).json();
+    assert.equal(progress.state, "paused_after_restore");
+    assert.equal((await app.inject({ method: "POST", url: path, payload: {} })).statusCode, 409);
+    assert.equal(fake.creates.root, 1);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a same-title database with invalid schema cannot be ignored as a duplicate", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-invalid-sibling-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const path = `/api/notion/connections/${workspaceId}/structure/advance`;
+  try {
+    const root = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    fake.databases.set("wrong-schema", { id: "wrong-schema", title: "Areas", parentPageId: root.rootPageId,
+      dataSourceIds: ["wrong-source"] });
+    fake.properties.set("wrong-source", { Name: { id: "wrong-name", type: "rich_text" } });
+    const progress = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    assert.equal(progress.state, "needs_review");
+    assert.equal(progress.reviewReason, "ambiguous");
+    assert.deepEqual(progress.completedSteps, ["root"]);
+    assert.equal(fake.creates.database, 0);
+    const retried = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    assert.equal(retried.reviewReason, "schema_mismatch");
+    assert.equal(fake.creates.database, 0);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an existing relation is checked before any property update", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-relation-preflight-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const path = `/api/notion/connections/${workspaceId}/structure/advance`;
+  try {
+    let progress;
+    for (let index = 0; index < 5; index += 1) progress = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    const projectSource = progress.dataSources.projects.dataSourceId as string;
+    const areaSource = progress.dataSources.areas.dataSourceId as string;
+    const properties = fake.properties.get(projectSource)!;
+    properties.Area = { id: "existing-area", type: "relation", relationTarget: "other-source" };
+    progress = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    assert.equal(progress.reviewReason, "schema_mismatch");
+    assert.equal(fake.creates.relation, 0);
+    assert.equal(properties.Area.relationTarget, "other-source");
+    properties.Area = { ...properties.Area, relationTarget: areaSource };
+    progress = (await app.inject({ method: "POST", url: path, payload: {} })).json();
+    assert.equal(progress.completedSteps.at(-1), "projects_area");
+    assert.equal(fake.creates.relation, 0);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("an explicitly incomplete Notion root search cannot identify a unique page", async () => {
+  const gateway = new NotionSdkStructureGateway();
+  Object.assign(gateway, { client: () => ({ search: async () => ({
+    results: [{ object: "page", id: "visible-page" }], has_more: false, next_cursor: null,
+    request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
+  }) }) });
+  await assert.rejects(gateway.findRoots("fake-token", "NewDay (test)"), /incomplete/);
 });

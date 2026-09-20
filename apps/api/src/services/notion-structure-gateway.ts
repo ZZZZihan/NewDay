@@ -39,6 +39,7 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
     const seen = new Set<string>();
     do {
       const page = await client.search({ query: title, page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) });
+      if (page.request_status?.type === "incomplete") throw new Error("Notion root search is incomplete");
       for (const item of page.results) if (item.object === "page") matches.push(item.id);
       if (!page.has_more) break;
       if (!page.next_cursor || seen.has(page.next_cursor)) throw new Error("Notion root search pagination is incomplete");

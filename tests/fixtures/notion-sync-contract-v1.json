@@ -94,6 +94,74 @@
       "expected": { "decision": "fetch_complete_property_or_pause", "selectFirstAsUnique": false, "localMutation": false }
     },
     {
+      "id": "lost-root-create-found-once",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": ["99999999-9999-4999-8999-999999999999"],
+      "expected": { "decision": "bind_existing_root", "newCreateCalls": 0 }
+    },
+    {
+      "id": "lost-root-create-search-empty",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": [],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "partial-scan-does-not-advance",
+      "kind": "scan",
+      "pagesRead": 2,
+      "thirdPage": { "status": 503, "code": "service_unavailable" },
+      "expected": { "decision": "retry_or_pause", "advanceWatermark": false, "inferDeletion": false }
+    },
+    {
+      "id": "restore-v5-remains-local",
+      "kind": "backup",
+      "backupVersion": 5,
+      "taskCount": 2,
+      "expected": { "linkedTaskCount": 0, "outboxCount": 0, "inferRemoteMappings": false }
+    },
+    {
+      "id": "restore-v6-quarantines-outbox",
+      "kind": "backup",
+      "backupVersion": 6,
+      "sourceDatasetEpoch": "synthetic-old-epoch",
+      "outbox": [{ "operationId": "synthetic-op-1", "status": "pending" }],
+      "expected": { "decision": "paused_after_restore", "quarantinedOperationIds": ["synthetic-op-1"], "sendCallsBeforeReconciliation": 0 }
+    },
+    {
+      "id": "restore-v6-rejects-duplicate-mapping",
+      "kind": "backup",
+      "backupVersion": 6,
+      "duplicateRemotePageId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "expected": { "decision": "reject_atomically", "localMutation": false }
+    },
+    {
+      "id": "sync-invalidates-old-agent-proposal",
+      "kind": "agent_version",
+      "proposalPlannerRevision": 12,
+      "revisionAfterRemoteTaskChange": 13,
+      "expected": { "decision": "version_conflict", "focusChanged": false }
+    },
+    {
+      "id": "rate-limit-keeps-operation",
+      "kind": "outbox",
+      "remote": { "status": 529, "code": "service_overload", "retryAfterSeconds": 17 },
+      "expected": { "decision": "bounded_retry", "minimumDelaySeconds": 17, "retainOperation": true }
+    },
+    {
+      "id": "oversized-title-pauses-row",
+      "kind": "validation",
+      "remoteTitleLength": 201,
+      "expected": { "decision": "pause_row", "reason": "title_too_long", "localMutation": false }
+    },
+    {
       "id": "monthly-clamps-to-february",
       "kind": "recurrence",
       "rule": { "id": "66666666-6666-4666-8666-666666666666", "pattern": "monthly", "monthDay": 31 },

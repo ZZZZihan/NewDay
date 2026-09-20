@@ -14,7 +14,7 @@ NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需�
 | --- | --- | --- |
 | `main` | `1de8e6c088f08f229e49b21b3469f6259e51bcdb`；仍是基础前端版本 | 本页描述的 API/SQLite、Agent 和生活管理候选尚未合入 |
 | [PR #1 · COL-22](https://github.com/ZZZZihan/NewDay/pull/1) | `61be91776160e2aa6028f75840d2cd26bea39df0`，Next.js/Fastify/SQLite 重构与 Agent 软件链路；隔离复跑 `pnpm check`、`pnpm build`、Chrome/Safari WebKit E2E 56/56 通过 | 代码与数据恢复审查、人工流程验收、用户批准合并 |
-| [PR #2 · COL-26～30](https://github.com/ZZZZihan/NewDay/pull/2) | `1a64aed1e9928d4491ef92eb439a0352081879bc`，收集箱、任务总表及资料库候选；相同命令隔离复跑，E2E 62/62 通过 | 依赖 PR #1；跨视图导入刷新修复见 [PR #4](https://github.com/ZZZZihan/NewDay/pull/4)；按 PR #1 实际合并结果整理分支后重验并获批准合并 |
+| [PR #2 · COL-26～30](https://github.com/ZZZZihan/NewDay/pull/2) | `1a64aed1e9928d4491ef92eb439a0352081879bc`，收集箱、任务总表及资料库候选；相同命令隔离复跑，E2E 62/62 通过 | 依赖 PR #1；备份恢复和撤销后的跨视图刷新修复见 [PR #4](https://github.com/ZZZZihan/NewDay/pull/4) `c4c00da`，该修复候选独立复跑 Chrome/WebKit E2E 66/66；按 PR #1 实际合并结果整理分支后重验并获批准合并 |
 | [PR #3 · COL-32](https://github.com/ZZZZihan/NewDay/pull/3) | Notion 联动契约及合成 fixture 候选，见 [契约说明](./docs/notion-sync-contract.md) | OAuth、真实隔离工作区、同步与恢复尚未实现或验收 |
 | [COL-23](https://linear.app/colife/issue/COL-23) / [COL-24](https://linear.app/colife/issue/COL-24) | Agent 的真实模型 G3 与连续七天使用 G4 尚未执行 | 分别按冻结协议和真实记录验收；软件测试不能替代 |
 

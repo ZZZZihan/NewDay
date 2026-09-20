@@ -12,7 +12,7 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 - 固定 `Notion-Version: 2026-03-11`；计划使用精确版本 `@notionhq/client@5.23.0`，创建连接时显式传 `notionVersion`。2026-09-20 检查了已发布 npm 包：`ClientOptions` 支持 `notionVersion` 与 `retry: false`，`Client.defaultNotionVersion` 仍为 `2025-09-03`；类型含 `initial_data_source`、`data_source_id`、`in_trash` 与查询响应的 `request_status`。原候选 5.12.0 的查询响应类型没有 `request_status`，不足以类型安全地识别已到结果上限的不完整扫描。因此不能依赖 SDK 默认版本，也不能只检查 `has_more`。正式同步客户端禁用 SDK 自动重试，由应用按本契约记录尝试、读取 `Retry-After` 并做有界重试。上线前仍须用项目安装后的 SDK 类型检查及真实隔离工作区读写再次验证。
 - 公共 OAuth 的 client secret 只在 Worker；浏览器不接收长期 access/refresh token。Worker 只处理回调、code 交换、刷新和一次性安全领取，本机 API 存储凭据且与业务备份隔离。每次授权绑定不可重放的 `state`、本机安装会话和明确的回调目标；令牌轮换须原子替换。
-- 公共连接可在用户的 Private 区域创建 workspace 级根页面。根页面保存随机安装标记；创建响应丢失时按标记查询并读回，无法确认则暂停，不能盲目再建。结构顺序：根页面、Areas、Projects、Tasks、Rules 基础结构、关系属性、逐项读回。每步只在读回确认后推进本地初始化状态。
+- 公共连接可在用户的 Private 区域创建 workspace 级根页面。首次发送创建请求前，在本地持久化随机的 128 位安装标记和固定根标题 `NewDay (<标记>)`，并记录该标记的 POST 尝试；同一标记最多自动发送一次。标记位于**标题**，因为 Notion Search 按标题查询，不能按页面正文查找。若创建响应丢失，用同一 OAuth 工作区凭据按标记搜索并读完搜索分页；仅在本地确认此前只有一次创建尝试、结果中恰有一条标题完全相同且父级为 workspace 的页面时绑定。零条或多条均进入待核对，不能直接再次创建。Notion Search 有索引延迟且不保证完整枚举；即使已绑定，后来发现第二条同标记根页面也须暂停并提示人工核对。零条尤其不能证明创建失败；可稍后重试查询或由用户核对，不自动发第二次 POST。结构顺序：根页面、Areas、Projects、Tasks、Rules 基础结构、关系属性、逐项读回。四张表逐一创建；表创建响应丢失时从已知根页面读取完整子块并核对唯一标题、父级、schema、database/data source ID，仍不确定则暂停。每步只在读回确认后推进本地初始化状态。
 - 每张表同时保存 `database_id` 与 `data_source_id`。创建表使用 database API 的 `initial_data_source.properties`；查询行、创建行的父级和关系指向具体 data source。保存每个实际属性 ID，后续按 ID 读写；重命名属性不靠名称猜测。字段类型或关系目标改变时暂停相关行处理并报错。
 
 ### 四张表的 v1 属性
@@ -29,6 +29,8 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 `NewDay Key` 是安装 ID 与本地任务 UUID 派生的稳定标识；远端不强制唯一，所以写入响应丢失时须扫描并核对：恰好一条可用则绑定，多条或查询不完整则暂停并呈现待核对。重复实例的 `Occurrence Key` 由规则页面 ID 与原始发生日期生成，改期不改变该键。`Rule` 关系用于区分实例与一次性任务；不允许把实例字段误写成规则变更。
 
 对 `Area`、`Project`、`Direct Area` 与 `Rule` 关系，先确认属性类型和关系目标；`has_more: true` 时通过页面属性接口读完全部关系，读不全就暂停该行，不能根据截断的前 25 项判断唯一性。关系意外为空时先检查目标数据源的读取权限；不能把不可访问的主线或项目解释成“没有归属”。标题及稳定键若含可能被截断的页面/用户引用，同样读完整属性后再解释。
+
+远端 `Name` 为空、只含空白或超出现有任务/规则模型的 200 字符上限时，暂停该行并显示字段错误，不截断、删行或编造标题。规则 `weekly` 要有至少一个去重的 ISO 1～7 星期值，`monthly` 的 `Month Day` 必须是整数 1～31；其他模式的无关参数不改变生成结果。`Active Dates` 的结束日若提供则含当天且不得早于开始日。规则字段不合法时保留已完成实例和现有映射，停止该规则后续生成，等待 Notion 修正。
 
 ## 3. 日期、可见性和身份
 
@@ -50,7 +52,9 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 
 只有明确读取到目标页面 `in_trash: true` 才自动归档对应本地关联任务，保留映射、资料关联和历史，不硬删。普通数据源查询默认不返回已归档页面，所以要对已知映射逐页核对或明确查询回收站，不能把它从普通扫描中消失视为删除。单次查询缺失、404、403、schema 改动、分页失败和网络错误都进入待核对；不批量归档。v1 从 NewDay 删除联动任务时只提供去 Notion 处理的说明，不能复用本地永久删除命令静默删远端；恢复/取消归档需重新核对远端。
 
-备份恢复期间暂停拉取和发送。业务备份应包含必要的关联与冲突历史但不含 token、client secret 或领取凭证；恢复后先核对安装/工作区、schema、映射、远端当前值及 outbox。所有恢复来的 outbox 默认隔离，逐项对账后才能重新发送。缺凭据时重新授权；换工作区必须新建命名空间，不按同名主线、项目或任务复用旧 ID。
+备份恢复期间暂停拉取和发送。现有业务备份 v5 没有联动数据；T5 首次加入映射时须将业务备份升级为 v6，旧 v1～v5 导入全部视为纯本地数据，不能根据标题、日期或 UUID 推断 Notion 关联。v6 增加 `notionSync` 版本化部分，至少保存来源安装 ID、工作区 ID、根页面/四表的 database 和 data source ID、实际属性 ID、外部映射、逐字段共同基准、冲突记录、同步水位及未完成 outbox 的操作 ID/意图/状态/所属 datasetEpoch。备份的任务、映射和 outbox 引用须完整且唯一；重复远端映射、悬空本地任务或未知版本直接报校验错误，不做部分恢复。
+
+业务备份不得包含 access/refresh token、client secret、OAuth state 或领取凭证。导入 v6 后，即使本机仍有旧凭据，也先进入 `paused_after_restore`：替换导入产生新 `datasetEpoch`，所有恢复来的 outbox 一律标为隔离，原来源安装 ID 仅用于识别旧 `NewDay Key`，不自动当作当前安装身份。先核对授权工作区、schema、映射、远端当前值和逐字段基准，再按远端现状重新形成或舍弃本地意图；未完成核对不得发送旧 outbox。没有匹配凭据时重新授权；换工作区必须新建命名空间，不按同名对象复用旧 ID。恢复后的第一次成功完整扫描之前，不因远端缺项自动归档本地任务。
 
 ## 5. 扫描、水位和可见故障
 
@@ -66,11 +70,13 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 | 同页重复扫描、重启、部分分页失败 | 一条映射；失败不推进水位或触发批量归档 |
 | 查询结果达到 10,000 行上限、关系 `has_more: true` | 不把截断结果当完整；分段或读完整属性，无法读全则暂停且水位不变 |
 | POST/PATCH 成功但响应丢失 | 用稳定键和读回对账；不盲目创建第二页 |
+| 根页面/四表创建响应丢失，搜索零条或多条 | 用标题标记与已知父级核对；搜索结果不完整时暂停，不自动再次创建 |
 | 本地改日期而 Notion 改标题、双方改同一字段 | 分字段合并；同字段 Notion 优先并显示三方值 |
 | 日期区间两端并发修改 | 原子解决，不能组成无效范围 |
 | 429/529、401/403、404、网络中断 | 正确退避/待核对/暂停，无误归档、无无限重试 |
 | Agent 建议生成后同步修改候选任务 | 旧建议返回版本冲突，重点不变 |
 | 备份恢复、换工作区、旧 outbox | 恢复暂停，校验命名空间，旧操作不覆盖远端 |
+| v1～v5 旧备份、v6 重复映射或未知版本 | 旧备份仍为本地数据；无效 v6 原子拒绝，不能部分导入 |
 | 规则月末/改期/停止/恢复 | 实例键稳定，不重复生成，不覆盖已完成历史 |
 
 当前仍需在 T5/T6 用真实隔离 Notion 工作区确定条件写入是否可用，并验证以上日期、关系及回收站响应。规则变更后，已发送到 Notion 的未来未完成实例如何收敛须在 T7 的故障测试中冻结处理；在此之前不可自动删除或重建这些远端页。上述项目未验收前，COL-32 只可标记契约候选，不可把整条 COL-31 标为完成。
@@ -78,6 +84,6 @@ M2 只读读取，联动任务的本地修改入口禁用；M3 才启用经过�
 ## 7. 证据入口
 
 - [Notion API 版本及 SDK 兼容性](https://developers.notion.com/reference/versioning)、[2026-03-11 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2026-03-11)、[@notionhq/client 5.23.0 包](https://www.npmjs.com/package/@notionhq/client/v/5.23.0)。SDK 包核对命令为 `npm view @notionhq/client@5.23.0 version --json` 与 `npm pack @notionhq/client@5.23.0`；同时对照检查了 5.12.0。只做本地包内容检查，没有发起 Notion API 请求。
-- [公共 OAuth 与令牌刷新](https://developers.notion.com/guides/get-started/authorization)、[Private 区域结构创建](https://developers.notion.com/guides/get-started/preparing-for-users)。
+- [公共 OAuth 与令牌刷新](https://developers.notion.com/guides/get-started/authorization)、[Private 区域结构创建](https://developers.notion.com/guides/get-started/preparing-for-users)、[标题搜索](https://developers.notion.com/reference/post-search)及[索引限制](https://developers.notion.com/reference/search-optimizations-and-limitations)。
 - [database/data source 升级指南](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)、[大数据源查询上限与分段](https://developers.notion.com/guides/data-apis/query-large-data-sources)、[页面属性截断](https://developers.notion.com/reference/page-property-values)、[数据源查询与归档过滤](https://developers.notion.com/reference/filter-data-source-entries)、[更新页面](https://developers.notion.com/reference/patch-page)、[请求限制](https://developers.notion.com/reference/request-limits)。
 - 本地代码：`packages/core/src/domain/planner-model.ts`、`packages/core/src/application/day-plan.ts`、`packages/core/src/application/recurrence-generation.ts`、`apps/api/src/storage/sqlite-planner-store.ts`、`apps/api/src/services/planner-service.ts`、`packages/core/src/contracts/planner-backup.ts`。

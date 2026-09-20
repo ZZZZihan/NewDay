@@ -1,16 +1,17 @@
 import type { useNotionConnection } from "../hooks/use-notion-connection";
+import type { NotionStructureProgress } from "../api/notion-api";
 
 type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
-  const { status, message, busy, refresh, start, disconnect, retryRefresh } = connection;
+  const { status, structures, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
         <div>
           <p className="section-kicker">外部连接</p>
           <h1>Notion 连接</h1>
-          <p className="schedule-subtitle">先完成授权，后续再启用结构初始化与任务同步。</p>
+          <p className="schedule-subtitle">授权后可在所选工作区建立私有页面和四张关联表。</p>
         </div>
       </header>
       {message ? <p className="planner-status" role="status">{message}</p> : null}
@@ -31,9 +32,23 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
           <div>
             <strong>{item.workspaceName || "未命名工作区"}</strong>
             <p>{item.status === "active" ? "已授权；任务同步尚未启用" : item.status === "refresh_pending" ? "刷新结果待确认；旧令牌暂停使用" : "需要重新授权；任务同步不可用"}</p>
+            {structures[item.workspaceId] ? (
+              <p>{structures[item.workspaceId].state === "ready" ? "私有根页面和四张关联表已确认"
+                : structures[item.workspaceId].state === "needs_review" ? reviewDescription(structures[item.workspaceId])
+                  : structures[item.workspaceId].state === "paused_after_restore" ? "备份恢复后结构和授权需要重新核对"
+                    : `结构初始化：${structures[item.workspaceId].completedSteps.length}/9 步已确认`}</p>
+            ) : <p>结构状态未读取；可刷新状态重试。</p>}
             <small>工作区 ID：{item.workspaceId}</small>
           </div>
           <div className="notion-panel__connection-actions">
+            {item.status === "active" && structures[item.workspaceId]?.state !== "ready" &&
+              structures[item.workspaceId]?.state !== "paused_after_restore" ? (
+                <button type="button" disabled={busy || !structures[item.workspaceId]} onClick={() => {
+                  if (window.confirm(`即将在工作区 ${item.workspaceName || item.workspaceId} 建立或核对 NewDay 私有页面和四张表，继续吗？`)) {
+                    void initializeStructure(item.workspaceId);
+                  }
+                }}>{structures[item.workspaceId]?.state === "needs_review" ? "重新核对" : "建立或继续结构"}</button>
+              ) : null}
             {item.status === "refresh_pending" ? <button type="button" disabled={busy} onClick={() => void retryRefresh(item.workspaceId)}>重试确认</button> : null}
             <button type="button" disabled={busy} onClick={() => {
               if (window.confirm("删除此工作区保存在本机的 Notion 凭据？")) void disconnect(item.workspaceId);
@@ -43,4 +58,17 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
       ))}
     </section>
   );
+}
+
+function reviewDescription(progress: NotionStructureProgress): string {
+  const messages: Record<NonNullable<NotionStructureProgress["reviewReason"]>, string> = {
+    not_found: "暂未找到已尝试创建的对象；请稍后重新核对，系统不会重复创建",
+    ambiguous: "找到多个同名候选；请在 Notion 核对，系统不会自动选择",
+    unreadable: "无法完整读取远端结构；请检查权限后重新核对",
+    schema_mismatch: "远端字段或关联目标与预期不符；请核对结构",
+    permission: "Notion 权限或授权不足；请核对连接权限",
+    rate_limited: "Notion 暂时限流；请在退避时间后重新核对",
+    request_unknown: "远端请求结果未确认；重新核对只读取远端，不重复创建",
+  };
+  return progress.reviewReason ? messages[progress.reviewReason] : "结构创建结果待核对";
 }

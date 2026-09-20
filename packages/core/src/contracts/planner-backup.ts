@@ -407,6 +407,7 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   const sync = backup.notionSync;
   const taskIds = new Set(backup.tasks.map((task) => task.id));
   assertUnique(sync.connections, (value) => value.workspaceId, "Notion 工作区 ID");
+  assertUnique(sync.initializationSteps ?? [], (value) => JSON.stringify([value.workspaceId, value.step]), "Notion 初始化步骤");
   assertUnique(sync.taskMappings, (value) => value.localTaskId, "Notion 本地任务映射");
   assertUnique(sync.outbox, (value) => value.operationId, "Notion 待发送操作 ID");
   assertUnique(sync.conflicts, (value) => value.id, "Notion 冲突 ID");
@@ -414,6 +415,26 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   assertUnique(sync.restoreQuarantine, (value) => JSON.stringify([value.operation.datasetEpoch, value.operation.operationId]), "Notion 恢复隔离操作");
 
   const connections = new Map(sync.connections.map((value) => [value.workspaceId, value]));
+  for (const step of sync.initializationSteps ?? []) {
+    const connection = connections.get(step.workspaceId);
+    if (!connection) {
+      throw new Error(`Notion 初始化步骤引用了不存在的工作区：${step.workspaceId}`);
+    }
+    if (step.status !== "confirmed") continue;
+    const table = ["areas", "projects", "tasks", "rules"].includes(step.step)
+      ? step.step as keyof typeof connection.dataSources : null;
+    const relationSources: Record<string, readonly ["projects" | "tasks", string]> = {
+      projects_area: ["projects", "Area"], tasks_project: ["tasks", "Project"],
+      tasks_direct_area: ["tasks", "Direct Area"], tasks_rule: ["tasks", "Rule"],
+    };
+    const relation = relationSources[step.step];
+    const boundId = step.step === "root" ? connection.rootPageId
+      : table ? connection.dataSources[table]?.databaseId
+        : relation ? connection.dataSources[relation[0]]?.propertyIds[relation[1]] : null;
+    if (step.remoteId !== boundId) {
+      throw new Error(`Notion 初始化步骤与工作区结构不一致：${step.step}`);
+    }
+  }
   const mappings = new Map(sync.taskMappings.map((value) => [value.localTaskId, value]));
   const remoteKeys = new Set<string>();
   const clientKeys = new Set<string>();

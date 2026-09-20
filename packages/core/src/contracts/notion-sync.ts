@@ -43,6 +43,36 @@ export const notionConnectionSchema = z.object({
 }).strict();
 export type NotionConnection = z.infer<typeof notionConnectionSchema>;
 
+export const notionInitializationStepNameSchema = z.enum([
+  "root", "areas", "projects", "tasks", "rules",
+  "projects_area", "tasks_project", "tasks_direct_area", "tasks_rule",
+]);
+export type NotionInitializationStepName = z.infer<typeof notionInitializationStepNameSchema>;
+
+/** A durable POST/PATCH intent. Once attempted, only readback can confirm it;
+ * an ambiguous result never grants another automatic create request. */
+export const notionInitializationStepSchema = z.object({
+  workspaceId: nonEmptyId,
+  step: notionInitializationStepNameSchema,
+  expectedTitle: nonEmptyId,
+  parentId: nonEmptyId.nullable(),
+  schemaFingerprint: nonEmptyId,
+  status: z.enum(["attempted", "needs_review", "confirmed"]),
+  reviewReason: z.enum(["not_found", "ambiguous", "unreadable", "schema_mismatch", "permission", "rate_limited", "request_unknown"]).nullable(),
+  retryAfterAt: z.string().datetime({ offset: true }).nullable().optional(),
+  attemptedAt: z.string().datetime({ offset: true }),
+  confirmedAt: z.string().datetime({ offset: true }).nullable(),
+  remoteId: nonEmptyId.nullable(),
+}).strict().superRefine((value, context) => {
+  if (value.status === "confirmed" && (!value.remoteId || !value.confirmedAt || value.reviewReason)) {
+    context.addIssue({ code: "custom", message: "已确认的 Notion 初始化步骤必须有读回标识和时间" });
+  }
+  if (value.status !== "confirmed" && (value.remoteId !== null || value.confirmedAt !== null)) {
+    context.addIssue({ code: "custom", message: "未确认的 Notion 初始化步骤不能绑定远端标识" });
+  }
+});
+export type NotionInitializationStep = z.infer<typeof notionInitializationStepSchema>;
+
 export const notionTaskMappingSchema = z.object({
   localTaskId: nonEmptyId,
   workspaceId: nonEmptyId,
@@ -111,6 +141,7 @@ export type NotionRestoreQuarantine = z.infer<typeof notionRestoreQuarantineSche
 export const notionSyncArchiveSchema = z.object({
   version: z.literal(1),
   connections: z.array(notionConnectionSchema),
+  initializationSteps: z.array(notionInitializationStepSchema).optional(),
   taskMappings: z.array(notionTaskMappingSchema),
   outbox: z.array(notionOutboxOperationSchema),
   conflicts: z.array(notionConflictRecordSchema),
@@ -120,7 +151,7 @@ export const notionSyncArchiveSchema = z.object({
 export type NotionSyncArchive = z.infer<typeof notionSyncArchiveSchema>;
 
 export function emptyNotionSyncArchive(): NotionSyncArchive {
-  return { version: 1, connections: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [] };
+  return { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [] };
 }
 
 /** The rich-text key is stable across retries and a restored installation. */

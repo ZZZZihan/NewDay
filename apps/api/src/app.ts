@@ -24,6 +24,8 @@ import { dateInTimeZone } from "@newday/core/contracts/agent-planning";
 import { NotionCredentialVault } from "./storage/notion-credential-vault.js";
 import { NotionOAuthService } from "./services/notion-oauth-service.js";
 import { registerNotionOAuthRoutes } from "./http/notion-oauth-routes.js";
+import { NotionStructureService } from "./services/notion-structure-service.js";
+import { NotionSdkStructureGateway, type NotionStructureGateway } from "./services/notion-structure-gateway.js";
 import type { ApiConfig } from "./config.js";
 
 export type AppOptions = {
@@ -36,6 +38,7 @@ export type AppOptions = {
   agentTimeoutMs?: number;
   notionOAuth?: ApiConfig["notionOAuth"];
   notionFetcher?: typeof fetch;
+  notionStructureGateway?: NotionStructureGateway;
 };
 
 export function createApp(options: AppOptions = {}) {
@@ -46,6 +49,9 @@ export function createApp(options: AppOptions = {}) {
   const notionVault = notionOptions ? new NotionCredentialVault(notionOptions.vaultPath, notionOptions.encryptionKey) : null;
   const notionOAuth = notionOptions && notionVault
     ? new NotionOAuthService(notionOptions.workerOrigin, notionOptions.workerApiKey, notionVault, options.notionFetcher, options.clock)
+    : null;
+  const notionStructure = notionVault
+    ? new NotionStructureService(store, notionVault, options.notionStructureGateway ?? new NotionSdkStructureGateway(), options.clock)
     : null;
   const planner = new PlannerService(store, options.clock);
   const life = new LifeService(store, options.clock);
@@ -96,7 +102,7 @@ export function createApp(options: AppOptions = {}) {
   registerAgentContextRoutes(app, context);
   registerAgentPreferencesRoutes(app, preferences);
   registerAgentHistoryRoutes(app, history);
-  registerNotionOAuthRoutes(app, notionOAuth);
+  registerNotionOAuthRoutes(app, notionOAuth, notionStructure);
   app.get("/api/agent/status", () => store.transaction(async () => {
     const prefs = await preferences.getPreferences();
     return { configured: runs.isConfigured(), modelId: model?.modelId ?? null, timeZone: prefs.timeZone,

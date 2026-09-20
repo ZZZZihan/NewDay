@@ -155,10 +155,10 @@ export const taskSchema = z
           path: ["completedOn"],
         });
       }
-    } else if (task.completedAt === null) {
+    } else if (task.completedAt === null && task.completedOn !== null) {
       context.addIssue({
         code: "custom",
-        message: "已完成任务必须包含完成时间",
+        message: "完成日期不能缺少对应的完成时间",
         path: ["completedAt"],
       });
     }

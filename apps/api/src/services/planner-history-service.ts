@@ -162,6 +162,9 @@ export class PlannerHistoryService {
 /** Derive only recorded transitions. Current task state is never used to invent
  * an earlier result, and a title-only edit does not erase a recorded outcome. */
 export function recordedOutcome(event: PlannerEvent): PlanningHistoryEntry["outcomes"][number]["status"] | undefined {
+  // A Notion checkbox has no completion timestamp. Its first observation is
+  // not evidence that the user completed the task on the scan day.
+  if (event.kind === "notion_observed") return undefined;
   const before = event.taskBefore;
   const after = event.taskAfter;
   // Application events also carry taskBefore as an immutable choice snapshot.

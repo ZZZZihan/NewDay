@@ -8,6 +8,7 @@ export type ProjectRow = RowBase & { kind: "project"; title: string; areaIds: st
 export type TaskRow = RowBase & {
   kind: "task"; title: string; date: [string, string] | null; completed: boolean;
   projectIds: string[]; directAreaIds: string[]; ruleIds: string[]; clientKey: string | null;
+  occurrenceKey: string | null;
 };
 export type ReadRow = AreaRow | ProjectRow | TaskRow;
 
@@ -26,6 +27,9 @@ export interface NotionReadGateway {
  * by created_time and de-duplicates boundary rows. We buffer every result so
  * a failed page or property read never applies a partial scan. */
 export class NotionSdkReadGateway implements NotionReadGateway {
+  constructor(private readonly pause: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise<void>((resolve) => setTimeout(resolve, milliseconds))) {}
+
   private client(token: string) {
     return new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000 });
   }
@@ -35,6 +39,7 @@ export class NotionSdkReadGateway implements NotionReadGateway {
       const ref = connection.dataSources[table];
       if (!ref) throw new NotionReadFailure("schema", `Notion ${table} data source is not initialized`);
       const client = this.client(token);
+      if (table === "tasks") await assertRuleSourceReadable(client, connection);
       await validateSchema(client, connection, table);
       const rows: ReadRow[] = [];
       const seen = new Set<string>();
@@ -75,11 +80,14 @@ export class NotionSdkReadGateway implements NotionReadGateway {
       catch (error) {
         if (isHTTPResponseError(error) && (error.status === 429 || error.status === 529) && attempt < 2) {
           const headers = error.headers;
-          const retryAfter = Number(headers && typeof headers === "object" && "get" in headers &&
-            typeof headers.get === "function" ? headers.get("retry-after") : NaN);
+          const rawRetryAfter = headers && typeof headers === "object" && "get" in headers &&
+            typeof headers.get === "function" ? headers.get("retry-after") : null;
+          const retryAfter = typeof rawRetryAfter === "string" && rawRetryAfter.trim() !== ""
+            ? Number(rawRetryAfter) : NaN;
           const delay = Number.isFinite(retryAfter) && retryAfter >= 0
-            ? Math.min(30_000, retryAfter * 1000) : Math.min(8_000, 1000 * 2 ** attempt);
-          await new Promise<void>((resolve) => setTimeout(resolve, delay + Math.floor(Math.random() * 200)));
+            ? retryAfter * 1000 : Math.min(8_000, 1000 * 2 ** attempt);
+          if (delay > 2_147_483_647) throw new NotionReadFailure("rate_limited", "Notion retry delay exceeds the supported timer range");
+          await this.pause(delay + Math.floor(Math.random() * 200));
           continue;
         }
         if (error instanceof NotionReadFailure) throw error;
@@ -96,6 +104,18 @@ export class NotionSdkReadGateway implements NotionReadGateway {
   }
 }
 
+async function assertRuleSourceReadable(client: Client, connection: NotionConnection): Promise<void> {
+  const ruleId = connection.dataSources.rules?.dataSourceId;
+  if (!ruleId) throw new NotionReadFailure("schema", "Notion Rules data source is not initialized");
+  const response = await client.dataSources.retrieve({ data_source_id: ruleId });
+  if (!("properties" in response) || !Object.values(response.properties).some((property) =>
+    property.id === connection.dataSources.rules?.propertyIds.Name && property.type === "title")) {
+    throw new NotionReadFailure("schema", "Notion Rules data source is not readable with the expected schema");
+  }
+  // A data source schema can be visible while querying its rows is denied.
+  await client.dataSources.query({ data_source_id: ruleId, page_size: 1 });
+}
+
 async function validateSchema(client: Client, connection: NotionConnection, table: ReadTable): Promise<void> {
   const ref = connection.dataSources[table]!;
   const response = await client.dataSources.retrieve({ data_source_id: ref.dataSourceId });
@@ -109,6 +129,7 @@ async function validateSchema(client: Client, connection: NotionConnection, tabl
       "Direct Area": { type: "relation", target: connection.dataSources.areas?.dataSourceId },
       Rule: { type: "relation", target: connection.dataSources.rules?.dataSourceId },
       "NewDay Key": { type: "rich_text" },
+      "Occurrence Key": { type: "rich_text" },
     },
   };
   const properties = Object.values(response.properties);
@@ -146,11 +167,13 @@ async function parseRow(client: Client, page: PageObjectResponse, table: ReadTab
   const completedProperty = prop("Completed", "checkbox");
   if (completedProperty.type !== "checkbox") throw new NotionReadFailure("schema", "Notion completed property changed type");
   const key = await fullText(client, page.id, propertyIds["NewDay Key"], prop("NewDay Key", "rich_text"), "rich_text");
+  const occurrenceKey = await fullText(client, page.id, propertyIds["Occurrence Key"],
+    prop("Occurrence Key", "rich_text"), "rich_text");
   return { ...base, kind: "task", title, date, completed: completedProperty.checkbox,
     projectIds: await relations(client, page.id, propertyIds.Project, prop("Project", "relation")),
     directAreaIds: await relations(client, page.id, propertyIds["Direct Area"], prop("Direct Area", "relation")),
     ruleIds: await relations(client, page.id, propertyIds.Rule, prop("Rule", "relation")),
-    clientKey: key || null };
+    clientKey: key || null, occurrenceKey: occurrenceKey || null };
 }
 
 async function fullText(client: Client, pageId: string, propertyId: string, value: unknown,

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { iterateAllDataSourceRows } from "@notionhq/client";
+import { iterateAllDataSourceRows, UnknownHTTPResponseError } from "@notionhq/client";
 import { AGENT_NAMESPACES } from "@newday/core/contracts/agent-planning";
 import { createPlannerBackup, parsePlannerBackup } from "@newday/core/application/planner-backup";
 import { getDayPlan } from "@newday/core/application/day-plan";
@@ -12,9 +12,10 @@ import { executePlannerCommands } from "@newday/core/application/planner-command
 import type { NotionConnection } from "@newday/core/contracts/notion-sync";
 
 import { PlannerService } from "../src/services/planner-service.js";
-import { NotionReadFailure, type AreaRow, type NotionReadGateway, type ProjectRow,
+import { NotionReadFailure, NotionSdkReadGateway, type AreaRow, type NotionReadGateway, type ProjectRow,
   type ReadRow, type ReadTable, type TaskRow } from "../src/services/notion-read-gateway.js";
 import { NotionReadService } from "../src/services/notion-read-service.js";
+import { recordedOutcome } from "../src/services/planner-history-service.js";
 import { NotionCredentialVault } from "../src/storage/notion-credential-vault.js";
 import { SQLitePlannerStore } from "../src/storage/sqlite-planner-store.js";
 
@@ -27,7 +28,7 @@ const area = (title = "生活"): AreaRow => ({ ...base("area-1"), kind: "area", 
 const project = (title = "周计划"): ProjectRow => ({ ...base("project-1"), kind: "project", title, areaIds: ["area-1"] });
 const task = (date: [string, string] | null = ["2026-09-21", "2026-09-22"], title = "读书"): TaskRow => ({
   ...base("remote-task-1"), kind: "task", title, date, completed: false, projectIds: ["project-1"],
-  directAreaIds: [], ruleIds: [], clientKey: null,
+  directAreaIds: [], ruleIds: [], clientKey: null, occurrenceKey: null,
 });
 
 function connection(): NotionConnection {
@@ -65,7 +66,7 @@ class FakeReadGateway implements NotionReadGateway {
 function vault(): NotionCredentialVault {
   const result = new NotionCredentialVault(":memory:", key);
   const state = "s".repeat(43);
-  result.putPending(state, "fake verifier", Date.now() + 60_000);
+  result.putPending(state, "fake verifier", Date.parse(at) + 60_000, Date.parse(at));
   result.storeClaimed(state, { access_token: "fake-read-access-token", refresh_token: "fake-read-refresh-token",
     bot_id: "read-bot", workspace_id: workspaceId, workspace_name: "隔离测试" }, at);
   return result;
@@ -173,4 +174,61 @@ test("installed SDK partitions incomplete queries and fails closed when a timest
   await assert.rejects(async () => {
     for await (const row of iterateAllDataSourceRows(stuck, { data_source_id: "source-tasks" })) assert.ok(row.id);
   }, /cannot make progress/);
+});
+
+test("a remote completion with no timestamp never becomes a completion on scan day", async () => {
+  const credentials = vault();
+  const store = new SQLitePlannerStore(":memory:");
+  const gateway = new FakeReadGateway();
+  try {
+    await store.putNotionConnection(connection());
+    await store.putAgentRecord(AGENT_NAMESPACES.preferences, "current", { timeZone: "Asia/Shanghai" });
+    gateway.rows.tasks = [{ ...task(["2026-09-19", "2026-09-19"]), completed: true }];
+    const service = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
+    await service.scan(workspaceId);
+    const [mapping] = await store.listNotionTaskMappings();
+    const imported = await store.getTask(mapping.localTaskId);
+    assert.equal(imported?.status, "completed");
+    assert.equal(imported.completedAt, null);
+    assert.equal(imported.completedOn, null);
+    assert.equal((await getDayPlan(store, { selectedDate: "2026-09-21", asOfDate: "2026-09-21" })).completed.length, 0);
+    gateway.rows.tasks = [{ ...task(["2026-09-19", "2026-09-19"]), completed: false }];
+    await service.scan(workspaceId);
+    gateway.rows.tasks = [{ ...task(["2026-09-19", "2026-09-19"]), completed: true }];
+    await service.scan(workspaceId);
+    const observations = (await store.listPlannerEvents()).filter((event) => event.taskId === mapping.localTaskId);
+    assert.ok(observations.some((event) => event.kind === "notion_observed"));
+    assert.ok(observations.every((event) => recordedOutcome(event) === undefined));
+  } finally { store.close(); credentials.close(); }
+});
+
+test("SDK refuses to classify tasks when the Rules source cannot be read", async () => {
+  const gateway = new NotionSdkReadGateway();
+  let queries = 0;
+  Object.assign(gateway, { client: () => ({ dataSources: {
+    retrieve: async () => { throw new UnknownHTTPResponseError({ status: 403,
+      message: "forbidden", headers: new Headers(), rawBodyText: "" }); },
+    query: async () => { queries += 1; return { results: [], has_more: false, next_cursor: null }; },
+  } }) });
+  await assert.rejects(gateway.scan("fake-token", connection(), "tasks"), (error: unknown) =>
+    error instanceof NotionReadFailure && error.category === "permission");
+  assert.equal(queries, 0);
+});
+
+test("SDK retry waits for full Retry-After and backs off when it is missing", async () => {
+  for (const header of ["120", null]) {
+    const waits: number[] = [];
+    const gateway = new NotionSdkReadGateway(async (milliseconds) => { waits.push(milliseconds); });
+    let requests = 0;
+    Object.assign(gateway, { client: () => ({ pages: { retrieve: async () => {
+      requests += 1;
+      if (requests === 1) throw new UnknownHTTPResponseError({ status: 429,
+        message: "rate limited", headers: new Headers(header === null ? {} : { "retry-after": header }), rawBodyText: "" });
+      return { id: "known-page", in_trash: false };
+    } } }) });
+    assert.deepEqual(await gateway.readKnownPage("fake-token", "known-page"), { id: "known-page", inTrash: false });
+    assert.equal(requests, 2);
+    assert.equal(waits.length, 1);
+    assert.ok(waits[0] >= (header ? 120_000 : 1000));
+  }
 });

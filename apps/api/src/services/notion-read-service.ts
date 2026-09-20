@@ -112,7 +112,13 @@ export class NotionReadService {
                 areaPageId: row.areaIds[0], updatedAt: row.editedAt };
             }));
           } else {
-            if (await this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects)) {
+            const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
+            const apply = () => this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects);
+            const changed = preferences?.timeZone
+              ? await this.store.withEventContext({ date: dateInTimeZone(this.clock(), preferences.timeZone),
+                at: this.timestamp(), source: "system", kind: "notion_observed" }, apply)
+              : await apply();
+            if (changed) {
               clearUndoReceipts(this.store);
             }
           }
@@ -142,10 +148,9 @@ export class NotionReadService {
     const mappings = await this.store.listNotionTaskMappings();
     const byRemote = new Map(mappings.filter((mapping) => mapping.workspaceId === connection.workspaceId && mapping.remotePageId)
       .map((mapping) => [mapping.remotePageId!, mapping]));
-    const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
     for (const row of rows) {
       if (row.ruleIds.length > 1) throw new NotionReadFailure("schema", `Notion task ${row.id} has multiple rules`);
-      if (row.ruleIds.length === 1) {
+      if (row.ruleIds.length === 1 || row.occurrenceKey) {
         if (byRemote.has(row.id)) throw new NotionReadFailure("schema", `Linked task ${row.id} became a rule instance`);
         continue; // Rule instances belong to T7, never materialize as one-off tasks.
       }
@@ -162,12 +167,10 @@ export class NotionReadService {
       while (!previousMapping && await this.store.getTask(localId)) localId = randomUUID();
       const previous = await this.store.getTask(localId);
       if (previousMapping?.status === "needs_review") throw new NotionReadFailure("schema", `Notion mapping ${row.id} requires review`);
-      const completedAt = fields.completed ? previous?.status === "completed" ? previous.completedAt : at : null;
-      if (fields.completed && !preferences?.timeZone) {
-        throw new NotionReadFailure("schema", "Set a time zone before importing completed Notion tasks");
-      }
-      const completedOn = fields.completed
-        ? previous?.status === "completed" ? previous.completedOn : dateInTimeZone(this.clock(), preferences!.timeZone!) : null;
+      // Notion's checkbox does not identify when completion happened. Keep a
+      // known local completion timestamp, otherwise explicitly record unknown.
+      const completedAt = fields.completed && previous?.status === "completed" ? previous.completedAt : null;
+      const completedOn = fields.completed && previous?.status === "completed" ? previous.completedOn : null;
       const next: Task = taskSchema.parse({
         id: localId, title: fields.title, notes: previous?.notes ?? "",
         startDate: fields.date?.[0] ?? null, endDate: fields.date?.[1] ?? null,

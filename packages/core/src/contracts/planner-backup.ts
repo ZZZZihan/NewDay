@@ -284,6 +284,9 @@ function validatePlannerBackup(backup: PlannerBackup) {
     if (task.archived && !linkedTaskIds.has(task.id)) {
       throw new Error(`未关联 Notion 的任务不能标记为远端归档：${task.id}`);
     }
+    if (task.status === "completed" && task.completedAt === null && !linkedTaskIds.has(task.id)) {
+      throw new Error(`未关联 Notion 的已完成任务必须有完成时间：${task.id}`);
+    }
   }
   for (const item of backup.inboxItems) {
     if (item.sourceResourceId !== null && !resourceIds.has(item.sourceResourceId)) {

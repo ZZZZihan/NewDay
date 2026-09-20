@@ -206,6 +206,52 @@ test("v6 backup preserves mappings but restores every unfinished send in quarant
   } finally { source.close(); target.close(); }
 });
 
+test("an earlier v6 conflict export without a winner remains importable", async () => {
+  const source = new SQLitePlannerStore(":memory:");
+  const target = new SQLitePlannerStore(":memory:");
+  try {
+    await source.putTask(task());
+    await source.putNotionConnection(connection());
+    await source.putNotionTaskMapping(mapping("task-1", "remote-1"));
+    await source.appendNotionConflict({ id: "conflict-1", localTaskId: "task-1", workspaceId: "workspace-1",
+      field: "title", baseline: "原始", local: "本地", remote: "Notion", winner: "notion", recordedAt: at });
+    const exported = await createPlannerBackup(source, at);
+    if (exported.version !== 6) throw new Error("expected v6 backup");
+    const earlier = structuredClone(exported);
+    delete (earlier.notionSync.conflicts[0] as Partial<typeof earlier.notionSync.conflicts[number]>).winner;
+    const normalized = parsePlannerBackup(JSON.stringify(earlier));
+    if (normalized.version !== 6) throw new Error("expected normalized v6 backup");
+    assert.equal(normalized.notionSync.conflicts[0]?.winner, "notion");
+    await restorePlannerBackup(target, JSON.stringify(earlier));
+    assert.equal((await target.listNotionConflicts())[0]?.winner, "notion");
+  } finally { source.close(); target.close(); }
+});
+
+test("conflicts persisted by the earlier v4 database read with the Notion decision", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-legacy-conflict-"));
+  const path = join(directory, "planner.sqlite");
+  try {
+    const initial = new SQLitePlannerStore(path);
+    try {
+      await initial.putTask(task());
+      await initial.putNotionConnection(connection());
+      await initial.putNotionTaskMapping(mapping("task-1", "remote-1"));
+      await initial.appendNotionConflict({ id: "conflict-1", localTaskId: "task-1", workspaceId: "workspace-1",
+        field: "title", baseline: "原始", local: "本地", remote: "Notion", winner: "notion", recordedAt: at });
+    } finally { initial.close(); }
+    const legacy = new DatabaseSync(path);
+    try { legacy.exec("UPDATE notion_conflicts SET payload=json_remove(payload, '$.winner')"); }
+    finally { legacy.close(); }
+    const reopened = new SQLitePlannerStore(path);
+    try {
+      assert.equal((await reopened.listNotionConflicts())[0]?.winner, "notion");
+      const exported = await createPlannerBackup(reopened, at);
+      if (exported.version !== 6) throw new Error("expected v6 backup");
+      assert.equal(exported.notionSync.conflicts[0]?.winner, "notion");
+    } finally { reopened.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test("v6 duplicate remote mappings reject before replacing any data", async () => {
   const source = new SQLitePlannerStore(":memory:");
   const target = new SQLitePlannerStore(":memory:");

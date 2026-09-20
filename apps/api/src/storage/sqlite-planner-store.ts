@@ -333,6 +333,25 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     });
   }
 
+  /** The caller has completed preflight but has not started HTTP. A later
+   * committed intent can replace this attempt without creating an unknown
+   * remote result or pausing the entire workspace. */
+  async supersedeNotionUnsentIfNewer(operationId: string): Promise<boolean> {
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "sending") return false;
+      const [newer] = this.many<NotionOutboxOperation>(
+        "SELECT payload FROM notion_outbox WHERE local_task_id=? AND operation_id<>? AND status='pending'",
+        operation.localTaskId, operationId);
+      if (!newer || newer.workspaceId !== operation.workspaceId || newer.datasetEpoch !== operation.datasetEpoch) return false;
+      const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+      if (!mapping || JSON.stringify(mapping.baseline) !== JSON.stringify(newer.baseline)) return false;
+      await this.assertNotionOperationTaskState(newer);
+      this.updateNotionOutbox({ ...operation, status: "superseded" });
+      return true;
+    });
+  }
+
   /** Recheck after an asynchronous remote preflight. A restore may have fenced
    * or replaced this attempt while the provider was being read. */
   canDispatchNotionOutbox(operationId: string, datasetEpoch: string): boolean {
@@ -436,7 +455,8 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
   }
 
   async listNotionConflicts(): Promise<NotionConflictRecord[]> {
-    return this.many<NotionConflictRecord>("SELECT payload FROM notion_conflicts ORDER BY rowid");
+    return this.many<unknown>("SELECT payload FROM notion_conflicts ORDER BY rowid")
+      .map((value) => notionConflictRecordSchema.parse(value));
   }
 
   async listNotionScanWatermarks(): Promise<NotionScanWatermark[]> {

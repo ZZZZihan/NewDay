@@ -173,6 +173,45 @@ test("different-field edits merge through a business command and send only the l
   } finally { store.close(); }
 });
 
+test("a newer local intent during preflight supersedes the unsent attempt without pausing the workspace", async () => {
+  const first: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const second: NotionTaskFields = { ...fields, date: ["2026-09-10", "2026-09-10"] };
+  const remote: NotionTaskFields = { ...fields, title: "Notion 新标题" };
+  const store = await setup("remote-1", first);
+  const fake = fakeTransport();
+  fake.pages.set("remote-1", {
+    workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields: remote, inTrash: false,
+  });
+  const read = fake.transport.readPage;
+  let committedNewer = false;
+  fake.transport.readPage = async (...args) => {
+    const page = await read(...args);
+    if (!committedNewer) {
+      committedNewer = true;
+      await store.transaction(async () => {
+        const current = (await store.getTask("task-1"))!;
+        await store.putTask({ ...current, startDate: second.date![0], endDate: second.date![1] });
+        const older = (await store.getNotionOutboxOperation("operation-1"))!;
+        await store.enqueueNotionOutbox({ ...older, operationId: "operation-2", desired: second,
+          status: "pending", attemptCount: 0, lastAttemptAt: null, confirmedAt: null });
+      });
+    }
+    return page;
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    assert.equal(await dispatcher.dispatch("operation-1"), "superseded");
+    assert.equal(fake.calls.update, 0);
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "superseded");
+    assert.equal((await store.getNotionOutboxOperation("operation-2"))?.status, "pending");
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "active");
+    assert.equal(await dispatcher.dispatch("operation-2"), "confirmed");
+    assert.deepEqual(fake.pages.get("remote-1")?.fields, { ...second, title: remote.title });
+    assert.equal((await store.getTask("task-1"))?.title, remote.title);
+  } finally { store.close(); }
+});
+
 test("a remote edit after preflight survives a selective date patch", async () => {
   const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
   const store = await setup("remote-1", desired);

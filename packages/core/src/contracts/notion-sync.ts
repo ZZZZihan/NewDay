@@ -82,7 +82,9 @@ export const notionConflictRecordSchema = z.object({
   baseline: z.unknown(),
   local: z.unknown(),
   remote: z.unknown(),
-  winner: z.literal("notion"),
+  // Early v6 candidate exports omitted the decision; its only supported
+  // conflict rule was already Notion-wins, so normalize on import.
+  winner: z.literal("notion").default("notion"),
   recordedAt: z.string().datetime({ offset: true }),
 }).strict();
 export type NotionConflictRecord = z.infer<typeof notionConflictRecordSchema>;

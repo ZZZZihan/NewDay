@@ -35,7 +35,7 @@ export interface NotionTaskTransport {
   updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>): Promise<void>;
 }
 
-type DispatchResult = "confirmed" | "unknown" | "quarantined";
+type DispatchResult = "confirmed" | "unknown" | "quarantined" | "superseded";
 
 /** The product has no transport adapter yet. This coordinates fake-provider
  * fault tests and supplies the send boundary for the later T6 adapter. */
@@ -75,6 +75,9 @@ export class NotionOutboxDispatcher {
     catch { return this.markUnknownOrQuarantined(operation); }
     if (before === "uncertain") return this.markUnknownOrQuarantined(operation);
     if (before && sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
+    try {
+      if (await this.store.supersedeNotionUnsentIfNewer(operation.operationId)) return "superseded";
+    } catch { return this.markUnknownOrQuarantined(operation); }
 
     if (mapping.remotePageId === null) {
       if (before !== null || !this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {

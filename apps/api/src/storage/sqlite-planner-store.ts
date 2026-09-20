@@ -451,7 +451,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       if (!connection || connection.status !== "active" ||
         (await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) return false;
       this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
-      await this.putNotionConnection({ ...connection, status: "paused", updatedAt: at });
+      await this.putNotionConnection({ ...connection, status: "paused", pauseReason: "preflight_read", updatedAt: at });
       return true;
     });
   }

@@ -71,7 +71,7 @@ export class PlannerService {
         if (command.type === "createTask" && command.input.notionWorkspaceId) {
           const workspaceId = command.input.notionWorkspaceId;
           const connection = await this.store.getNotionConnection(workspaceId);
-          if (!connection || connection.status !== "active" ||
+          if (!connection || !this.acceptsLinkedLocalChanges(connection) ||
             !connection.dataSources.areas || !connection.dataSources.projects ||
             !connection.dataSources.tasks || !connection.dataSources.rules) {
             throw new ApiError(409, "Notion 工作区尚未准备好，无法创建联动任务");
@@ -79,7 +79,9 @@ export class PlannerService {
           const taskSourceId = connection.dataSources.tasks.dataSourceId;
           const scanned = (await this.store.listNotionScanWatermarks()).some((watermark) =>
             watermark.workspaceId === workspaceId && watermark.dataSourceId === taskSourceId &&
-            watermark.lastSuccessAt !== null && !watermark.lastError);
+            watermark.lastSuccessAt !== null &&
+            (watermark.lastError === null || watermark.lastError === undefined ||
+              ["network", "remote", "rate_limited"].includes(watermark.lastError)));
           if (!scanned) throw new ApiError(409, "Notion 任务尚未完成首次成功扫描");
           if (newLinks.has(command.input.id) || await this.store.getNotionTaskMapping(command.input.id)) {
             throw new ApiError(409, "联动任务标识已存在");
@@ -99,7 +101,8 @@ export class PlannerService {
           throw new ApiError(409, "此 Notion 任务不能在 NewDay 执行该操作");
         }
         const connection = await this.store.getNotionConnection(mapping.workspaceId);
-        if (!connection || !["active", "paused_unknown"].includes(connection.status)) {
+        if (!connection || !this.acceptsLinkedLocalChanges(connection) &&
+          connection.status !== "paused_unknown") {
           throw new ApiError(409, "Notion 联动已暂停；先核对连接状态");
         }
         linked.set(command.input.taskId, mapping);
@@ -227,6 +230,13 @@ export class PlannerService {
     const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
     if (!preferences?.timeZone) return undefined;
     return { date: dateInTimeZone(this.clock(), preferences.timeZone), timeZone: preferences.timeZone };
+  }
+
+  /** A failed preflight read has sent no write. The workspace remains paused
+   * for remote traffic, but local edits may continue accumulating in outbox. */
+  private acceptsLinkedLocalChanges(connection: { status: string; pauseReason?: string }): boolean {
+    return connection.status === "active" ||
+      (connection.status === "paused" && connection.pauseReason === "preflight_read");
   }
 
   private async enqueueLinkedIntent(mapping: NotionTaskMapping, desired: NotionTaskFields, at: string) {

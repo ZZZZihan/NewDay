@@ -18,7 +18,7 @@ NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需�
 | [PR #3 · COL-32](https://github.com/ZZZZihan/NewDay/pull/3) | Notion 联动契约及合成 fixture 候选，见 [契约说明](./docs/notion-sync-contract.md) | OAuth、真实隔离工作区、同步与恢复尚未实现或验收 |
 | [COL-23](https://linear.app/colife/issue/COL-23) / [COL-24](https://linear.app/colife/issue/COL-24) | Agent 的真实模型 G3 与连续七天使用 G4 尚未执行 | 分别按冻结协议和真实记录验收；软件测试不能替代 |
 
-以上复跑使用独立工作树、端口 `3100/3002` 和临时 SQLite；GitHub 当前未返回候选 Check Runs 或审查结论。替换导入前下载安全备份及 JSON 备份恢复属于候选实现，尚未在个人真实数据上试用。NewDay/Notion 联动的完整进度由 [COL-31](https://linear.app/colife/issue/COL-31) 跟踪，T1～T8 分项为 COL-32～COL-39。
+以上复跑使用独立工作树、端口 `3100/3002` 和临时 SQLite；GitHub 当前未返回候选 Check Runs 或审查结论。替换导入前下载安全备份及 JSON 备份恢复属于候选实现，尚未在个人真实数据上试用。NewDay/Notion 联动的完整进度由 [COL-31](https://linear.app/colife/issue/COL-31) 跟踪，T1～T8 分项为 COL-32～COL-39。COL-33 的 OAuth 隔离候选配置与未验收边界见 [Notion OAuth 运维说明](./docs/notion-oauth-operations.md)。
 
 ## 核心功能
 

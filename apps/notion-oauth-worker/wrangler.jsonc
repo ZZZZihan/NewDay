@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "newday-notion-oauth",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-18",
+  "durable_objects": {
+    "bindings": [
+      { "name": "OAUTH_SESSIONS", "class_name": "OAuthSession" }
+    ]
+  },
+  "exports": {
+    "OAuthSession": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "secrets": {
+    "required": [
+      "NOTION_CLIENT_ID",
+      "NOTION_CLIENT_SECRET",
+      "NOTION_REDIRECT_URI",
+      "LOCAL_RETURN_ORIGIN",
+      "LOCAL_API_KEY"
+    ]
+  }
+}

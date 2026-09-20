@@ -149,6 +149,21 @@ Agent 界面在确认前预览新增、保留、移除的重点，收到成功�
 
 Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，跨刷新或 API 重启后仍可查询，但执行时必须仍为同一天、同一时区、同一 epoch，规划版本和当前重点集合未变化，原重点任务仍可执行。恢复只替换重点集合，自身也有独立的幂等 operation 和事件；不恢复或覆盖任务正文、完成状态、日期或重复规则。
 
+### Notion OAuth 候选 API
+
+`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。当前阶段不初始化 Notion 表，也不执行任务同步。配置、恢复和真实验收前提见 [Notion OAuth 运维说明](./notion-oauth-operations.md)。
+
+| 方法与路径 | 输入 | 成功响应 |
+| --- | --- | --- |
+| `GET /api/notion/status` | 无 | `{ configured, connections }`；连接摘要不含令牌 |
+| `POST /api/notion/oauth/start` | `{}` | `{ authorizationUrl }` |
+| `POST /api/notion/oauth/claim` | `{ state, ticket }` | `{ connection }`，本机加密事务提交后才返回 |
+| `POST /api/notion/oauth/cancel` | `{ state }` | `{ ok: true }` |
+| `POST /api/notion/connections/:workspaceId/refresh` | `{}` | `{ connection }`；未知结果保留同一次尝试 |
+| `POST /api/notion/connections/:workspaceId/disconnect` | `{}` | `{ ok: true, removed }`；删除本机凭据 |
+
+Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要求 API 服务密钥，Notion 回调仅通过随机 state 找到授权会话。浏览器回调 URL fragment 中只有一次性 ticket；页面清除 fragment 后交给本机 API。`refresh_pending` 阻止旧令牌继续供同步使用。Notion 凭据不进入规划和 Agent JSON 备份。
+
 ## 存储、备份与旧数据
 
 默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、收集箱、两级文件夹、资料、资料任务关联、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
@@ -182,6 +197,10 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `NEWDAY_WEB_PORT` | `3000`，统一启动器传给 Next 的端口 |
 | `NEWDAY_WEB_ORIGIN` | 指定 API 接受的浏览器 Origin；未设置时接受 `http://localhost:3000` 与 `http://127.0.0.1:3000` |
 | `NEWDAY_DATABASE_PATH` | `data/newday.sqlite`；相对路径以仓库根目录为基准，也可使用绝对路径 |
+| `NEWDAY_NOTION_WORKER_ORIGIN` | 未设置即关闭 OAuth；启用时为 Worker 精确 HTTPS origin |
+| `NEWDAY_NOTION_WORKER_API_KEY` | 与 Worker `LOCAL_API_KEY` 相同的独立 32 字节 base64url 服务密钥 |
+| `NEWDAY_NOTION_CREDENTIAL_KEY` | 独立 32 字节 base64url 本机凭据加密密钥；与前两项一并设置 |
+| `NEWDAY_NOTION_CREDENTIAL_PATH` | `data/notion-vault/credentials.sqlite`；与业务数据库分开 |
 | `NEWDAY_AGENT_PROVIDER` | `disabled`；真实生成可设 `openai-compatible`；`scripted` 仅允许隔离 E2E 数据库 |
 | `NEWDAY_AGENT_BASE_URL` | `https://api.openai.com/v1`；适配器向该前缀的 `/chat/completions` 请求，默认要求 HTTPS；回环或下方明确许可的精确 HTTP 来源除外 |
 | `NEWDAY_AGENT_MODEL` | 无默认模型；启用真实 provider 时必须显式设置 |

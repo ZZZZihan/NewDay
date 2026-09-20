@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, Inbox, Library, ListTodo, MoreHorizontal, Plus, Sun, Upload } from "lucide-react";
+import { useCallback, useState } from "react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, Inbox, Library, ListTodo, MoreHorizontal, Plus, Sun, Upload, Link2 } from "lucide-react";
 import { Button } from "@heroui/react/button";
 import { Card } from "@heroui/react/card";
 import { Input } from "@heroui/react/input";
@@ -18,12 +18,16 @@ import { PlannerStatus } from "./planner-status";
 import { FullscreenToggle } from "./fullscreen-toggle";
 import { LifePanel, type LifeView } from "./life-panel";
 import { useLifeWorkspace } from "../hooks/use-life-workspace";
+import { useNotionConnection } from "../hooks/use-notion-connection";
+import { NotionConnectionPanel } from "./notion-connection-panel";
 
 const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"] as const;
 
 export function DayPlanner() {
-  const [view, setView] = useState<"today" | LifeView>("today");
-  const life = useLifeWorkspace(view !== "today");
+  const [view, setView] = useState<"today" | LifeView | "notion">("today");
+  const life = useLifeWorkspace(view !== "today" && view !== "notion");
+  const onNotionReturn = useCallback(() => setView("notion"), []);
+  const notion = useNotionConnection(onNotionReturn);
   const {
     now, today, timeZone, selectedDate, setDateOverride, quickTitle, setQuickTitle,
     setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
@@ -126,6 +130,7 @@ export function DayPlanner() {
             <button type="button" className={view === "inbox" ? "selected" : ""} aria-current={view === "inbox" ? "page" : undefined} onClick={() => setView("inbox")}><Inbox size={17} />收集箱</button>
             <button type="button" className={view === "tasks" ? "selected" : ""} aria-current={view === "tasks" ? "page" : undefined} onClick={() => setView("tasks")}><ListTodo size={17} />任务总表</button>
             <button type="button" className={view === "library" ? "selected" : ""} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Library size={17} />资料库</button>
+            <button type="button" className={view === "notion" ? "selected" : ""} aria-current={view === "notion" ? "page" : undefined} onClick={() => setView("notion")}><Link2 size={17} />Notion 连接</button>
           </nav>
 
           <div className="time-panel__bottom">
@@ -344,7 +349,7 @@ export function DayPlanner() {
               </details>
             ) : null}
           </div>
-        </section> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onViewChange={setView} />}
+        </section> : view === "notion" ? <NotionConnectionPanel connection={notion} /> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onViewChange={setView} />}
         <aside className="assistant-panel" aria-label="规划助手">
           <AgentPlanner
             selectedDate={selectedDate}

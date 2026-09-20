@@ -676,6 +676,15 @@ html:fullscreen .time-panel__bottom {
 .life-navigation button:hover, .life-navigation button.selected {
   background: color-mix(in srgb, var(--accent) 13%, var(--surface-muted)); color: var(--accent);
 }
+.notion-panel__actions { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.5rem 0; }
+.notion-panel button { min-height: 2.2rem; border: 1px solid var(--line); border-radius: .25rem; padding: .45rem .75rem; background: var(--surface-muted); color: var(--ink); font: inherit; font-size: .75rem; cursor: pointer; }
+.notion-panel button:disabled { opacity: .5; cursor: default; }
+.notion-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.notion-panel .life-primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.notion-panel__connection { display: flex; justify-content: space-between; align-items: start; gap: 1rem; margin-top: .6rem; }
+.notion-panel__connection p { margin: .35rem 0; }
+.notion-panel__connection small { overflow-wrap: anywhere; }
+.notion-panel__connection-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .life-panel { min-width: 0; }
 .life-heading { margin-bottom: 1.4rem; }
 .life-panel input, .life-panel textarea, .life-panel select {
@@ -754,7 +763,7 @@ html:fullscreen .time-panel__bottom {
 .life-resource-links { border-top: 1px solid var(--line); margin-top: .8rem; }
 
 @media (max-width: 700px) {
-  .life-navigation { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .2rem; margin-top: 1rem; }
+  .life-navigation { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .2rem; margin-top: 1rem; }
   .life-navigation .sidebar-kicker { grid-column: 1 / -1; }
   .life-navigation button { display: grid; justify-items: center; gap: .15rem; padding: .35rem .1rem; text-align: center; font-size: .65rem; }
   .life-library-layout { grid-template-columns: 1fr; }
@@ -762,6 +771,7 @@ html:fullscreen .time-panel__bottom {
 }
 
 @media (max-width: 390px) {
+  .life-navigation { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .life-toolbar { flex-wrap: wrap; }
   .life-toolbar > select { width: 100%; }
   .life-form-grid { grid-template-columns: 1fr; }

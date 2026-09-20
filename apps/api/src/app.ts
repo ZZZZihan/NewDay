@@ -21,6 +21,10 @@ import { registerAgentContextRoutes } from "./http/agent-context-routes.js";
 import { registerAgentPreferencesRoutes } from "./http/agent-preferences-routes.js";
 import { registerAgentHistoryRoutes } from "./http/agent-history-routes.js";
 import { dateInTimeZone } from "@newday/core/contracts/agent-planning";
+import { NotionCredentialVault } from "./storage/notion-credential-vault.js";
+import { NotionOAuthService } from "./services/notion-oauth-service.js";
+import { registerNotionOAuthRoutes } from "./http/notion-oauth-routes.js";
+import type { ApiConfig } from "./config.js";
 
 export type AppOptions = {
   databasePath?: string;
@@ -30,12 +34,19 @@ export type AppOptions = {
   clock?: () => number;
   planningModel?: PlanningModel | null;
   agentTimeoutMs?: number;
+  notionOAuth?: ApiConfig["notionOAuth"];
+  notionFetcher?: typeof fetch;
 };
 
 export function createApp(options: AppOptions = {}) {
   const config = loadConfig();
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: options.bodyLimit ?? 10 * 1024 * 1024 });
   const store = new SQLitePlannerStore(options.databasePath ?? config.databasePath);
+  const notionOptions = options.notionOAuth === undefined ? config.notionOAuth : options.notionOAuth;
+  const notionVault = notionOptions ? new NotionCredentialVault(notionOptions.vaultPath, notionOptions.encryptionKey) : null;
+  const notionOAuth = notionOptions && notionVault
+    ? new NotionOAuthService(notionOptions.workerOrigin, notionOptions.workerApiKey, notionVault, options.notionFetcher, options.clock)
+    : null;
   const planner = new PlannerService(store, options.clock);
   const life = new LifeService(store, options.clock);
   const context = new PlannerContextService(store, options.clock);
@@ -77,7 +88,7 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.addHook("onReady", () => runs.initialize());
-  app.addHook("onClose", async () => { await runs.close(); store.close(); });
+  app.addHook("onClose", async () => { await runs.close(); notionVault?.close(); store.close(); });
   registerPlannerRoutes(app, planner);
   registerLifeRoutes(app, life);
   registerAgentRunRoutes(app, runs);
@@ -85,6 +96,7 @@ export function createApp(options: AppOptions = {}) {
   registerAgentContextRoutes(app, context);
   registerAgentPreferencesRoutes(app, preferences);
   registerAgentHistoryRoutes(app, history);
+  registerNotionOAuthRoutes(app, notionOAuth);
   app.get("/api/agent/status", () => store.transaction(async () => {
     const prefs = await preferences.getPreferences();
     return { configured: runs.isConfigured(), modelId: model?.modelId ?? null, timeZone: prefs.timeZone,

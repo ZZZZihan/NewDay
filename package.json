@@ -20,6 +20,7 @@
     "test": "vitest run && pnpm --filter @newday/api test && pnpm --filter @newday/notion-oauth-worker test && pnpm test:agent:integration",
     "test:agent:integration": "tsx --test tests/agent/integration/*.test.ts",
     "agent:smoke": "tsx tooling/agent-live-smoke.ts",
+    "agent:evaluation:preflight": "tsx tooling/agent-evaluation-preflight.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "check": "pnpm lint && pnpm typecheck && pnpm test"
@@ -45,6 +46,7 @@
     "dexie": "^4.4.5",
     "@newday/core": "workspace:*",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.5.4"
   }
 }

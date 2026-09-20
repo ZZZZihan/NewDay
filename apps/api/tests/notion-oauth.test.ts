@@ -105,6 +105,47 @@ test("disconnecting one workspace preserves a different pending authorization", 
   } finally { vault.close(); }
 });
 
+test("disconnect rejects an older claim for that workspace across restart, but permits another workspace and a new claim", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-disconnect-"));
+  const path = join(directory, "vault.sqlite");
+  const oldA = "a".repeat(43);
+  const pendingB = "b".repeat(43);
+  const newA = "c".repeat(43);
+  const now = Date.parse("2026-09-21T00:00:00.000Z");
+  const acknowledged: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const endpoint = new URL(String(input)).pathname;
+    const body = JSON.parse(String(init?.body)) as Record<string, string>;
+    if (endpoint === "/oauth/ack") {
+      acknowledged.push(body.state);
+      return Response.json({ status: "acknowledged" });
+    }
+    assert.equal(endpoint, "/oauth/claim");
+    return Response.json({ ...credential, workspace_id: body.state === pendingB ? "workspace-two" : "workspace-one" });
+  };
+  let vault = new NotionCredentialVault(path, key);
+  try {
+    vault.putPending(state, "initial", now + 60_000, now);
+    assert.ok(vault.storeClaimed(state, credential, new Date(now).toISOString()));
+    vault.putPending(oldA, "old-A", now + 60_000, now);
+    vault.putPending(pendingB, "pending-B", now + 60_000, now);
+    assert.equal(vault.disconnect("workspace-one"), true);
+    vault.close();
+    vault = new NotionCredentialVault(path, key);
+    const service = new NotionOAuthService(origin, workerApiKey, vault, fetcher, () => now);
+    await assert.rejects(service.claim(oldA, ticket), /已断开/);
+    assert.equal(vault.getCredential("workspace-one"), null);
+    assert.equal(vault.getPending(oldA, now), null);
+    assert.equal((await service.claim(pendingB, ticket)).workspaceId, "workspace-two");
+    vault.putPending(newA, "new-A", now + 60_000, now);
+    assert.equal((await service.claim(newA, ticket)).workspaceId, "workspace-one");
+    assert.deepEqual(acknowledged, [oldA, pendingB, newA]);
+  } finally {
+    vault.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("lost refresh response keeps one persisted attempt and blocks stale token until a retry confirms rotation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-refresh-"));
   const path = join(directory, "vault.sqlite");

@@ -30,7 +30,8 @@ export class NotionOAuthService {
       authorizationUrl.searchParams.get("redirect_uri") !== `${this.workerOrigin}/oauth/callback`) {
       throw new ApiError(502, "Notion 授权服务返回无效地址");
     }
-    this.vault.putPending(response.state, verifier, this.now() + 10 * 60_000);
+    const now = this.now();
+    this.vault.putPending(response.state, verifier, now + 10 * 60_000, now);
     return { authorizationUrl: authorizationUrl.href };
   }
 
@@ -46,6 +47,13 @@ export class NotionOAuthService {
     const response = await this.request("/oauth/claim", { state, ticket, verifier });
     const credential = parseCredential(response);
     const summary = this.vault.storeClaimed(state, credential, new Date(this.now()).toISOString());
+    if (!summary) {
+      // The disconnect won the local transaction. Clear the temporary Worker
+      // result when possible; its TTL is the fallback if ACK is unavailable.
+      try { await this.request("/oauth/ack", { state, ticket, verifier }); }
+      catch { /* The rejected token remains unusable locally. */ }
+      throw new ApiError(409, "该工作区已断开，请重新开始授权");
+    }
     // The Worker can safely redeliver the same claim until this ACK. If the
     // ACK is lost, the temporary copy expires; local storage is authoritative.
     try { await this.request("/oauth/ack", { state, ticket, verifier }); }

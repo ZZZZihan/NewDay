@@ -51,22 +51,39 @@ export class NotionCredentialVault {
     try {
       this.database.exec(`PRAGMA journal_mode = DELETE;
         CREATE TABLE IF NOT EXISTS oauth_pending (
-          state TEXT PRIMARY KEY, encrypted_verifier TEXT NOT NULL, expires_at INTEGER NOT NULL
+          state TEXT PRIMARY KEY, encrypted_verifier TEXT NOT NULL, expires_at INTEGER NOT NULL,
+          start_sequence INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS disconnected_workspaces (
+          workspace_id TEXT PRIMARY KEY, disconnect_sequence INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS oauth_sequence (
+          id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS credentials (
           workspace_id TEXT PRIMARY KEY, workspace_name TEXT, bot_id TEXT NOT NULL,
           status TEXT NOT NULL CHECK(status IN ('active','reauthorization_required')),
           encrypted TEXT NOT NULL, refresh_attempt_id TEXT, updated_at TEXT NOT NULL
         );`);
+      this.database.prepare("INSERT OR IGNORE INTO oauth_sequence(id,value) VALUES(1,0)").run();
+      // Pending sessions from an older vault are conservatively treated as old.
+      const pendingColumns = this.database.prepare("PRAGMA table_info(oauth_pending)").all();
+      if (!pendingColumns.some((column) => column.name === "start_sequence")) {
+        this.database.exec("ALTER TABLE oauth_pending ADD COLUMN start_sequence INTEGER NOT NULL DEFAULT 0");
+      }
     } catch (error) { this.database.close(); throw error; }
   }
 
   close(): void { this.database.close(); }
 
-  putPending(state: string, verifier: string, expiresAt: number): void {
-    this.database.prepare("DELETE FROM oauth_pending WHERE expires_at<=?").run(Date.now());
-    this.database.prepare("INSERT INTO oauth_pending(state,encrypted_verifier,expires_at) VALUES(?,?,?)")
-      .run(state, this.encrypt(verifier), expiresAt);
+  putPending(state: string, verifier: string, expiresAt: number, now = Date.now()): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM oauth_pending WHERE expires_at<=?").run(now);
+      this.database.prepare("INSERT INTO oauth_pending(state,encrypted_verifier,expires_at,start_sequence) VALUES(?,?,?,?)")
+        .run(state, this.encrypt(verifier), expiresAt, this.nextSequence());
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 
   getPending(state: string, now: number): string | null {
@@ -79,11 +96,18 @@ export class NotionCredentialVault {
     this.database.prepare("DELETE FROM oauth_pending WHERE state=?").run(state);
   }
 
-  storeClaimed(state: string, credential: NotionCredential, now: string): NotionCredentialSummary {
+  storeClaimed(state: string, credential: NotionCredential, now: string): NotionCredentialSummary | null {
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      const pending = this.database.prepare("SELECT 1 FROM oauth_pending WHERE state=?").get(state);
+      const pending = this.database.prepare("SELECT start_sequence FROM oauth_pending WHERE state=?").get(state);
       if (!pending) throw new Error("Notion OAuth state is no longer pending");
+      const disconnected = this.database.prepare("SELECT disconnect_sequence FROM disconnected_workspaces WHERE workspace_id=?")
+        .get(credential.workspace_id);
+      if (disconnected && Number(pending.start_sequence) <= Number(disconnected.disconnect_sequence)) {
+        this.database.prepare("DELETE FROM oauth_pending WHERE state=?").run(state);
+        this.database.exec("COMMIT");
+        return null;
+      }
       const summary = summaryOf(credential, "active", now);
       this.database.prepare(`INSERT INTO credentials(workspace_id,workspace_name,bot_id,status,encrypted,refresh_attempt_id,updated_at)
         VALUES(?,?,?,?,?,NULL,?) ON CONFLICT(workspace_id) DO UPDATE SET
@@ -150,11 +174,19 @@ export class NotionCredentialVault {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const changed = this.database.prepare("DELETE FROM credentials WHERE workspace_id=?").run(workspaceId).changes > 0;
+      this.database.prepare(`INSERT INTO disconnected_workspaces(workspace_id,disconnect_sequence) VALUES(?,?)
+        ON CONFLICT(workspace_id) DO UPDATE SET disconnect_sequence=excluded.disconnect_sequence`)
+        .run(workspaceId, this.nextSequence());
       // Pending OAuth sessions have no workspace identity until claim. A
       // workspace-specific disconnect must not cancel another authorization.
       this.database.exec("COMMIT");
       return changed;
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+
+  private nextSequence(): number {
+    this.database.prepare("UPDATE oauth_sequence SET value=value+1 WHERE id=1").run();
+    return Number(this.database.prepare("SELECT value FROM oauth_sequence WHERE id=1").get()!.value);
   }
 
   private encrypt(value: unknown): string {

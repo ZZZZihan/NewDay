@@ -6,6 +6,20 @@ NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需�
 
 需求、进度和验收统一放在 [Linear · NewDay](https://linear.app/colife/project/newday-aa09602a66c8)，代码、分支、提交与 PR 放在 [GitHub · ZZZZihan/NewDay](https://github.com/ZZZZihan/NewDay)。后续开发先关联 Linear issue，再以 `COL-编号` 串起分支、提交和 PR；具体步骤见 [Linear + Git 工作流](./docs/project-management.md)。
 
+## 交付状态（2026-09-20 快照）
+
+以下功能说明对应尚未合并的候选分支，不代表 `main`、已部署服务或个人真实数据已经验收。实时状态以各 PR 与 Linear 为准。
+
+| 层级 | 候选与已核实结果 | 尚需完成 |
+| --- | --- | --- |
+| `main` | `1de8e6c088f08f229e49b21b3469f6259e51bcdb`；仍是基础前端版本 | 本页描述的 API/SQLite、Agent 和生活管理候选尚未合入 |
+| [PR #1 · COL-22](https://github.com/ZZZZihan/NewDay/pull/1) | `61be91776160e2aa6028f75840d2cd26bea39df0`，Next.js/Fastify/SQLite 重构与 Agent 软件链路；隔离复跑 `pnpm check`、`pnpm build`、Chrome/Safari WebKit E2E 56/56 通过 | 代码与数据恢复审查、人工流程验收、用户批准合并 |
+| [PR #2 · COL-26～30](https://github.com/ZZZZihan/NewDay/pull/2) | `1a64aed1e9928d4491ef92eb439a0352081879bc`，收集箱、任务总表及资料库候选；相同命令隔离复跑，E2E 62/62 通过 | 依赖 PR #1；跨视图导入刷新修复见 [PR #4](https://github.com/ZZZZihan/NewDay/pull/4)；按 PR #1 实际合并结果整理分支后重验并获批准合并 |
+| [PR #3 · COL-32](https://github.com/ZZZZihan/NewDay/pull/3) | Notion 联动契约及合成 fixture 候选，见 [契约说明](./docs/notion-sync-contract.md) | OAuth、真实隔离工作区、同步与恢复尚未实现或验收 |
+| [COL-23](https://linear.app/colife/issue/COL-23) / [COL-24](https://linear.app/colife/issue/COL-24) | Agent 的真实模型 G3 与连续七天使用 G4 尚未执行 | 分别按冻结协议和真实记录验收；软件测试不能替代 |
+
+以上复跑使用独立工作树、端口 `3100/3002` 和临时 SQLite；GitHub 当前未返回候选 Check Runs 或审查结论。替换导入前下载安全备份及 JSON 备份恢复属于候选实现，尚未在个人真实数据上试用。NewDay/Notion 联动的完整进度由 [COL-31](https://linear.app/colife/issue/COL-31) 跟踪，T1～T8 分项为 COL-32～COL-39。
+
 ## 核心功能
 
 - 桌面端采用左右分栏：左侧显示大号当前时钟，右侧专注每日任务

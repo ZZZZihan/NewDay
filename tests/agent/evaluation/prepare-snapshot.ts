@@ -41,6 +41,7 @@ export type PreparedEvaluationScenario = {
   id: string;
   snapshot: z.infer<typeof planningSnapshotSchema>;
   gaps: string[];
+  manualSteps: string[];
   adaptations: string[];
 };
 
@@ -56,6 +57,7 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
   const clock = () => Date.parse(input.sampledAt);
   const store = new MemoryAgentStore();
   const gaps: string[] = [];
+  const manualSteps: string[] = [];
   const adaptations: string[] = [];
   for (const task of input.tasks) {
     const futureFields = (["createdAt", "updatedAt", "completedAt"] as const).filter((field) => {
@@ -66,7 +68,7 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
       gaps.push(`task ${task.id}: ${futureFields.join(", ")} are later than sampledAt; the snapshot cannot reconstruct this task's earlier state`);
   }
   if (scenario.clarificationAnswers)
-    gaps.push("clarificationAnswers: fixture keys do not identify the model's generated question IDs for a second call");
+    manualSteps.push("clarificationAnswers: a reviewer must bind fixture semantic keys to the actual first-round question IDs before any answer call; the mapping cannot be prepared offline");
   try {
     await store.transaction(async () => {
       for (const task of input.tasks) await store.putTask(task);
@@ -180,7 +182,7 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
     if (snapshot.currentFocusTaskIds.length !== input.currentFocusTaskIds.length ||
       input.currentFocusTaskIds.some((taskId) => !snapshot.currentFocusTaskIds.includes(taskId)))
       gaps.push("currentFocusTaskIds: at least one fixture focus is not present in the production snapshot");
-    return { id: scenario.id, snapshot, gaps, adaptations };
+    return { id: scenario.id, snapshot, gaps, manualSteps, adaptations };
   } finally {
     store.close();
   }

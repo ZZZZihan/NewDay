@@ -19,7 +19,7 @@ const manifest = JSON.parse(manifestSource.toString("utf8")) as {
   developmentCases: number;
 };
 if (manifest.version !== 2) throw new Error("manifest-v2.json: expected version 2");
-const cases: Array<{ split: string; id: string; candidateCount: number; factCount: number; gaps: string[]; adaptations: string[] }> = [];
+const cases: Array<{ split: string; id: string; candidateCount: number; factCount: number; gaps: string[]; manualSteps: string[]; adaptations: string[] }> = [];
 const corpusSha256: Record<string, string> = {};
 for (const [split, filename, expectedCount] of [
   ["development", "development-v1.json", manifest.developmentCases],
@@ -35,29 +35,33 @@ for (const [split, filename, expectedCount] of [
   for (const value of corpus.scenarios) {
     const prepared = await prepareEvaluationScenario(value);
     cases.push({ split, id: prepared.id, candidateCount: prepared.snapshot.candidates.length,
-      factCount: prepared.snapshot.facts.length, gaps: prepared.gaps, adaptations: prepared.adaptations });
+      factCount: prepared.snapshot.facts.length, gaps: prepared.gaps, manualSteps: prepared.manualSteps, adaptations: prepared.adaptations });
   }
 }
 const blockedCases = cases.filter(({ gaps }) => gaps.length > 0);
+const operatorCases = cases.filter(({ manualSteps }) => manualSteps.length > 0);
 const report = {
   format: "newday-agent-evaluation-preflight", version: 1, createdAt: new Date().toISOString(),
-  status: blockedCases.length ? "blocked" : "ready_for_review",
+  status: blockedCases.length ? "blocked" : operatorCases.length ? "operator_required" : "ready_for_review",
   realProviderCalls: 0,
   manifestVersion: manifest.version, manifestSha256: sha256(manifestSource),
   promptVersion: AGENT_PROMPT_VERSION, schemaVersion: AGENT_SCHEMA_VERSION,
   systemPromptSha256: sha256(PLANNING_SYSTEM_PROMPT),
   providerSchemaSha256: sha256(JSON.stringify(planningProviderJsonSchema)),
   corpusSha256, scenarios: cases.length, blockedCases: blockedCases.map(({ split, id, gaps }) => ({ split, id, gaps })),
+  operatorCases: operatorCases.map(({ split, id, manualSteps }) => ({ split, id, manualSteps })),
   cases,
-  claimBoundary: "Snapshot conversion only. No model quality, cost, latency, G3 or G4 result is established.",
+  claimBoundary: "Snapshot conversion only. operator_required is not authorization for an unattended batch or a provider request. No model quality, cost, latency, G3 or G4 result is established.",
 };
 const output = JSON.stringify(report, null, 2) + "\n";
 if (values.output) {
   const path = resolve(values.output);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, output, { mode: 0o600, flag: "wx" });
-  console.log(JSON.stringify({ reportPath: path, status: report.status, scenarios: cases.length, blockedCases: blockedCases.length, realProviderCalls: 0 }));
+  console.log(JSON.stringify({ reportPath: path, status: report.status, scenarios: cases.length,
+    blockedCases: blockedCases.length, operatorCases: operatorCases.length, realProviderCalls: 0 }));
 } else console.log(output);
 if (blockedCases.length) process.exitCode = 2;
+else if (operatorCases.length) process.exitCode = 3;
 
 function sha256(source: Buffer | string) { return createHash("sha256").update(source).digest("hex"); }

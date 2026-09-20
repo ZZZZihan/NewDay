@@ -16,7 +16,9 @@ describe("frozen corpus to production snapshot preflight", () => {
       expect(entry.adaptations, entry.id).toContain("learningEnabled: unspecified by fixture -> production default true");
       expect(entry.snapshot.candidates.every(({ task }) => cases[index].input.tasks.some(({ id }) => id === task.id)), entry.id).toBe(true);
     }
-    expect(prepared.filter(({ gaps }) => gaps.length).map(({ id }) => id)).toEqual(["H-P05"]);
+    expect(prepared.filter(({ gaps }) => gaps.length).map(({ id }) => id)).toEqual([]);
+    expect(prepared.filter(({ manualSteps }) => manualSteps.length).map(({ id }) => id)).toEqual(["H-P05"]);
+    expect(prepared.find(({ id }) => id === "H-P05")?.manualSteps[0]).toContain("actual first-round question IDs");
     expect(prepared.find(({ id }) => id === "H-C08")?.gaps).toEqual([]);
     expect(prepared.find(({ id }) => id === "H-C08")?.snapshot.candidates.map(({ task }) => task.id)).toEqual(["local"]);
     expect(prepared.find(({ id }) => id === "H-P08")?.adaptations).toContain(

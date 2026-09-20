@@ -47,7 +47,11 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : source.table === "rules" ? "规则" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
             </div> : null}
             {syncs[item.workspaceId] ? <div className="notion-read-status" aria-label="写回状态">
-              <p>写回：{syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"
+              <p>写回：{!syncs[item.workspaceId].restoreQuarantine ? "隔离明细不可用，已停用发送入口"
+                : syncs[item.workspaceId].restoreQuarantine.length > 0 ||
+                  syncs[item.workspaceId].operations.some((operation) => operation.status === "quarantined")
+                  ? "恢复隔离待核对，不能发送"
+                : syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"
                 : syncs[item.workspaceId].connectionStatus === "paused" && syncs[item.workspaceId].pauseReason === "manual"
                   ? "已手动暂停；不再启动新一轮读取或发送"
                   : syncs[item.workspaceId].connectionStatus === "paused" ? "远端预读失败，等待手动重试"

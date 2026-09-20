@@ -169,6 +169,7 @@ test("manual drain stays hidden until the API confirms an empty restore quaranti
   await page.goto("/");
   await page.getByRole("button", { name: "Notion 连接" }).click();
   await expect(page.getByText("恢复隔离明细未返回")).toBeVisible();
+  await expect(page.getByText("写回：隔离明细不可用，已停用发送入口")).toBeVisible();
   await expect(page.getByRole("button", { name: "发送待同步任务" })).toHaveCount(0);
 
   restoreQuarantine = [{ sourceEpoch: "old-epoch", operationId: "old-operation", localTaskId: "old-task",
@@ -177,10 +178,12 @@ test("manual drain stays hidden until the API confirms an empty restore quaranti
     quarantinedAt: "2026-09-21T00:05:00.000Z" }];
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
+  await expect(page.getByText("写回：恢复隔离待核对，不能发送")).toBeVisible();
   await expect(page.getByRole("button", { name: "发送待同步任务" })).toHaveCount(0);
 
   restoreQuarantine = [];
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByText("写回：可发送")).toBeVisible();
   await expect(page.getByRole("button", { name: "发送待同步任务" })).toBeVisible();
 });
 

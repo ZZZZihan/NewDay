@@ -73,7 +73,9 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                 }}>{structures[item.workspaceId]?.state === "needs_review" ? "重新核对" : "建立或继续结构"}</button>
               ) : null}
             {item.status === "refresh_pending" ? <button type="button" disabled={busy} onClick={() => void retryRefresh(item.workspaceId)}>重试确认</button> : null}
-            {item.status === "active" && structures[item.workspaceId]?.state === "ready" ? <button type="button" disabled={busy} onClick={() => void scan(item.workspaceId)}>立即读取 Notion</button> : null}
+            {item.status === "active" && structures[item.workspaceId]?.state === "ready" &&
+              reads[item.workspaceId]?.connectionStatus === "active" ?
+              <button type="button" disabled={busy} onClick={() => void scan(item.workspaceId)}>立即读取 Notion</button> : null}
             {syncs[item.workspaceId]?.connectionStatus === "active" &&
               syncs[item.workspaceId].operations.some((operation) => operation.status === "pending") ?
               <button type="button" disabled={busy} onClick={() => void drain(item.workspaceId)}>发送待同步任务</button> : null}

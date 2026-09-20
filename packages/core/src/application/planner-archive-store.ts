@@ -5,6 +5,7 @@ import type {
 } from "../domain/planner-model";
 import type { PlannerStore } from "./planner-store";
 import type { InboxItem, LifeFolder, LifeResource, ResourceTaskLink } from "../domain/life-model";
+import type { NotionSyncArchive } from "../contracts/notion-sync";
 
 export type PlannerArchiveData = {
   tasks: readonly Task[];
@@ -14,6 +15,7 @@ export type PlannerArchiveData = {
   folders?: readonly LifeFolder[];
   resources?: readonly LifeResource[];
   resourceTaskLinks?: readonly ResourceTaskLink[];
+  notionSync?: NotionSyncArchive;
 };
 
 export interface PlannerArchiveStore extends PlannerStore {
@@ -22,4 +24,5 @@ export interface PlannerArchiveStore extends PlannerStore {
   listAllFolders?(): Promise<LifeFolder[]>;
   listAllResources?(): Promise<LifeResource[]>;
   listAllResourceTaskLinks?(): Promise<ResourceTaskLink[]>;
+  listNotionSyncData?(): Promise<NotionSyncArchive>;
 }

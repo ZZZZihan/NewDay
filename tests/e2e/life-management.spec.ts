@@ -56,7 +56,7 @@ test("two-level library supports resource search, task links and backup", async 
   const archive = (await (await request.get("/api/planner/backup")).json()) as {
     version: number; folders: Array<{ name: string }>; resources: Array<{ title: string }>; resourceTaskLinks: unknown[];
   };
-  expect(archive.version).toBe(5);
+  expect(archive.version).toBe(6);
   expect(archive.folders.map((folder) => folder.name).sort()).toEqual(["健康", "运动"]);
   expect(archive.resources[0]?.title).toBe("训练计划");
   expect(archive.resourceTaskLinks).toHaveLength(1);

@@ -8,6 +8,26 @@ import type { PlannerArchiveData, PlannerArchiveStore } from "@newday/core/appli
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences, type ExecutionReceipt, type OperationResult, type PlannerEvent, type PlanningVersion } from "@newday/core/contracts/agent-planning";
 import type { FocusRecord, RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
 import type { InboxItem, LifeFolder, LifeResource, ResourceTaskLink } from "@newday/core/domain/life-model";
+import {
+  notionConnectionSchema,
+  notionOutboxOperationSchema,
+  notionTaskFieldsSchema,
+  notionTaskMappingSchema,
+  notionConflictRecordSchema,
+  notionScanWatermarkSchema,
+  notionRestoreQuarantineSchema,
+  notionSyncArchiveSchema,
+  emptyNotionSyncArchive,
+  notionClientKey,
+  type NotionConnection,
+  type NotionConflictRecord,
+  type NotionOutboxOperation,
+  type NotionTaskFields,
+  type NotionTaskMapping,
+  type NotionScanWatermark,
+  type NotionRestoreQuarantine,
+  type NotionSyncArchive,
+} from "@newday/core/contracts/notion-sync";
 
 type Row = Record<string, SQLOutputValue>;
 export type StorageFailurePoint = "before_commit" | "after_commit" | "before_event" | "before_receipt";
@@ -35,6 +55,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     try {
       this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
       this.initializeSchema();
+      this.recoverNotionSendingAfterRestart();
     } catch (error) { this.database.close(); throw error; }
   }
 
@@ -195,6 +216,250 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
   async listFocusRecordsForTask(id: string) { return this.many<FocusRecord>("SELECT payload FROM focus_records WHERE task_id = ? ORDER BY id", id); }
   async listAllFocusRecords() { return this.many<FocusRecord>("SELECT payload FROM focus_records ORDER BY id"); }
 
+  async getNotionConnection(workspaceId: string): Promise<NotionConnection | undefined> {
+    return this.one<NotionConnection>("SELECT payload FROM notion_connections WHERE workspace_id=?", workspaceId);
+  }
+
+  async listNotionConnections(): Promise<NotionConnection[]> {
+    return this.many<NotionConnection>("SELECT payload FROM notion_connections ORDER BY workspace_id");
+  }
+
+  async putNotionConnection(value: NotionConnection): Promise<void> {
+    const connection = notionConnectionSchema.parse(value);
+    await this.transaction(async () => {
+      const existing = await this.getNotionConnection(connection.workspaceId);
+      if (existing && existing.installationId !== connection.installationId) {
+        throw new Error("Notion workspace installation identity cannot change");
+      }
+      this.database.prepare(`INSERT INTO notion_connections(workspace_id,status,payload) VALUES(?,?,?)
+        ON CONFLICT(workspace_id) DO UPDATE SET status=excluded.status,payload=excluded.payload`)
+        .run(connection.workspaceId, connection.status, JSON.stringify(connection));
+    });
+  }
+
+  async getNotionTaskMapping(localTaskId: string): Promise<NotionTaskMapping | undefined> {
+    return this.one<NotionTaskMapping>("SELECT payload FROM notion_task_mappings WHERE local_task_id=?", localTaskId);
+  }
+
+  async listNotionTaskMappings(): Promise<NotionTaskMapping[]> {
+    return this.many<NotionTaskMapping>("SELECT payload FROM notion_task_mappings ORDER BY local_task_id");
+  }
+
+  async putNotionTaskMapping(value: NotionTaskMapping): Promise<void> {
+    const mapping = notionTaskMappingSchema.parse(value);
+    await this.transaction(async () => {
+      if (!await this.getTask(mapping.localTaskId)) throw new Error("Notion mapping task does not exist");
+      const connection = await this.getNotionConnection(mapping.workspaceId);
+      if (!connection) throw new Error("Notion mapping workspace does not exist");
+      if (mapping.clientKey !== notionClientKey(connection.installationId, mapping.localTaskId)) {
+        throw new Error("Notion mapping client key does not match the installation");
+      }
+      if (connection.dataSources.tasks && connection.dataSources.tasks.dataSourceId !== mapping.dataSourceId) {
+        throw new Error("Notion mapping data source does not match the workspace schema");
+      }
+      const existing = await this.getNotionTaskMapping(mapping.localTaskId);
+      if (existing && (existing.workspaceId !== mapping.workspaceId || existing.dataSourceId !== mapping.dataSourceId ||
+        existing.clientKey !== mapping.clientKey ||
+        (existing.remotePageId !== null && existing.remotePageId !== mapping.remotePageId))) {
+        throw new Error("Notion mapping identity cannot change");
+      }
+      this.database.prepare(`INSERT INTO notion_task_mappings(local_task_id,workspace_id,data_source_id,remote_page_id,client_key,payload)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(local_task_id) DO UPDATE SET
+        data_source_id=excluded.data_source_id,remote_page_id=excluded.remote_page_id,payload=excluded.payload`)
+        .run(mapping.localTaskId, mapping.workspaceId, mapping.dataSourceId, mapping.remotePageId,
+          mapping.clientKey, JSON.stringify(mapping));
+    });
+  }
+
+  async getNotionOutboxOperation(operationId: string): Promise<NotionOutboxOperation | undefined> {
+    return this.one<NotionOutboxOperation>("SELECT payload FROM notion_outbox WHERE operation_id=?", operationId);
+  }
+
+  async listNotionOutboxOperations(): Promise<NotionOutboxOperation[]> {
+    return this.many<NotionOutboxOperation>("SELECT payload FROM notion_outbox ORDER BY created_at,operation_id");
+  }
+
+  /** Called inside the same outer transaction as the matching task command. */
+  async enqueueNotionOutbox(value: NotionOutboxOperation): Promise<void> {
+    const operation = notionOutboxOperationSchema.parse(value);
+    if (operation.status !== "pending" || operation.attemptCount !== 0 || operation.lastAttemptAt !== null) {
+      throw new Error("New Notion operation must be pending and unsent");
+    }
+    await this.transaction(async () => {
+      const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+      if (!mapping || mapping.workspaceId !== operation.workspaceId) throw new Error("Notion operation mapping is missing");
+      const currentVersion = await this.getPlanningVersion();
+      if (currentVersion.datasetEpoch !== operation.datasetEpoch) throw new Error("Notion operation epoch is stale");
+      if (JSON.stringify(mapping.baseline) !== JSON.stringify(operation.baseline)) {
+        throw new Error("Notion operation baseline is stale");
+      }
+      await this.assertNotionOperationTaskState(operation);
+      for (const older of this.many<NotionOutboxOperation>(
+        "SELECT payload FROM notion_outbox WHERE local_task_id=? AND status='pending'", operation.localTaskId)) {
+        this.updateNotionOutbox({ ...older, status: "superseded" });
+      }
+      this.database.prepare(`INSERT INTO notion_outbox(operation_id,local_task_id,workspace_id,dataset_epoch,status,created_at,payload)
+        VALUES(?,?,?,?,?,?,?)`).run(operation.operationId, operation.localTaskId, operation.workspaceId,
+          operation.datasetEpoch, operation.status, operation.createdAt, JSON.stringify(operation));
+    });
+  }
+
+  /** Persist the send attempt before HTTP. A restart moves it to unknown. */
+  async markNotionOutboxSending(operationId: string, at: string): Promise<NotionOutboxOperation> {
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "pending") throw new Error("Notion operation is not pending");
+      const connection = await this.getNotionConnection(operation.workspaceId);
+      if (connection?.status !== "active") throw new Error("Notion connection is paused");
+      const version = await this.getPlanningVersion();
+      if (version.datasetEpoch !== operation.datasetEpoch) throw new Error("Notion operation epoch is stale");
+      const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+      if (!mapping || mapping.workspaceId !== operation.workspaceId ||
+        JSON.stringify(mapping.baseline) !== JSON.stringify(operation.baseline)) {
+        throw new Error("Notion operation baseline is stale");
+      }
+      await this.assertNotionOperationTaskState(operation);
+      const blocker = this.database.prepare(`SELECT 1 FROM notion_outbox WHERE local_task_id=?
+        AND status IN ('sending','unknown','quarantined') LIMIT 1`).get(operation.localTaskId);
+      if (blocker) throw new Error("Notion mapping has an unresolved send");
+      if (this.database.prepare("SELECT 1 FROM notion_restore_quarantine WHERE workspace_id=? LIMIT 1").get(operation.workspaceId)) {
+        throw new Error("Notion workspace has an unresolved pre-restore send");
+      }
+      const sending = notionOutboxOperationSchema.parse({
+        ...operation, status: "sending", attemptCount: operation.attemptCount + 1, lastAttemptAt: at,
+      });
+      this.updateNotionOutbox(sending);
+      return sending;
+    });
+  }
+
+  /** Recheck after an asynchronous remote preflight. A restore may have fenced
+   * or replaced this attempt while the provider was being read. */
+  canDispatchNotionOutbox(operationId: string, datasetEpoch: string): boolean {
+    // Keep this synchronous: the dispatcher calls the provider immediately
+    // afterwards, with no event-loop turn where a restore could slip in.
+    const operation = this.database.prepare("SELECT workspace_id,dataset_epoch,status FROM notion_outbox WHERE operation_id=?").get(operationId);
+    if (!operation || operation.status !== "sending" || operation.dataset_epoch !== datasetEpoch) return false;
+    const connection = this.database.prepare("SELECT status FROM notion_connections WHERE workspace_id=?").get(operation.workspace_id);
+    const currentEpoch = this.database.prepare("SELECT value FROM metadata WHERE key='dataset_epoch'").get();
+    return connection?.status === "active" && currentEpoch?.value === datasetEpoch;
+  }
+
+  async markNotionOutboxUnknown(operationId: string): Promise<void> {
+    await this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "sending") throw new Error("Notion operation is not sending");
+      this.updateNotionOutbox({ ...operation, status: "unknown" });
+      const connection = await this.getNotionConnection(operation.workspaceId);
+      if (connection) await this.putNotionConnection({ ...connection, status: "paused_unknown", updatedAt: new Date().toISOString() });
+    });
+  }
+
+  /** A write is confirmed only after reading the exact desired fields back. */
+  async confirmNotionOutbox(operationId: string, remotePageId: string, readBack: NotionTaskFields, at: string): Promise<"confirmed" | "unknown" | "quarantined"> {
+    const confirmedFields = notionTaskFieldsSchema.parse(readBack);
+    if (!remotePageId) throw new Error("Notion read-back page ID is missing");
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || !["sending", "unknown"].includes(operation.status)) throw new Error("Notion operation has no send attempt");
+      const connection = await this.getNotionConnection(operation.workspaceId);
+      if (!connection) throw new Error("Notion operation workspace is missing");
+      if ((await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) {
+        this.updateNotionOutbox({ ...operation, status: "quarantined" });
+        await this.putNotionConnection({ ...connection, status: "paused_unknown", updatedAt: at });
+        return "quarantined";
+      }
+      if (JSON.stringify(confirmedFields) !== JSON.stringify(operation.desired)) {
+        this.updateNotionOutbox({ ...operation, status: "unknown" });
+        await this.putNotionConnection({ ...connection, status: "paused_unknown", updatedAt: at });
+        return "unknown";
+      }
+      const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+      if (!mapping || mapping.workspaceId !== operation.workspaceId ||
+        (mapping.remotePageId !== null && mapping.remotePageId !== remotePageId)) {
+        throw new Error("Notion operation mapping changed");
+      }
+      await this.putNotionTaskMapping({ ...mapping, remotePageId, baseline: confirmedFields, status: "active", updatedAt: at });
+      this.updateNotionOutbox({ ...operation, status: "confirmed", confirmedAt: at });
+      // A newer local intent may have arrived while this HTTP request was in
+      // flight. Its comparison point is now the fields we actually read back.
+      for (const pending of this.many<NotionOutboxOperation>(
+        "SELECT payload FROM notion_outbox WHERE local_task_id=? AND status='pending'", operation.localTaskId)) {
+        this.updateNotionOutbox(JSON.stringify(pending.desired) === JSON.stringify(confirmedFields)
+          ? { ...pending, baseline: confirmedFields, status: "confirmed", confirmedAt: at }
+          : { ...pending, baseline: confirmedFields });
+      }
+      return "confirmed";
+    });
+  }
+
+  async appendNotionConflict(value: NotionConflictRecord): Promise<void> {
+    const conflict = notionConflictRecordSchema.parse(value);
+    await this.transaction(async () => {
+      const mapping = await this.getNotionTaskMapping(conflict.localTaskId);
+      if (!mapping || mapping.workspaceId !== conflict.workspaceId) throw new Error("Notion conflict mapping is missing");
+      this.database.prepare("INSERT INTO notion_conflicts(id,local_task_id,workspace_id,payload) VALUES(?,?,?,?)")
+        .run(conflict.id, conflict.localTaskId, conflict.workspaceId, JSON.stringify(conflict));
+    });
+  }
+
+  async listNotionConflicts(): Promise<NotionConflictRecord[]> {
+    return this.many<NotionConflictRecord>("SELECT payload FROM notion_conflicts ORDER BY rowid");
+  }
+
+  async listNotionScanWatermarks(): Promise<NotionScanWatermark[]> {
+    return this.many<NotionScanWatermark>("SELECT payload FROM notion_scan_watermarks ORDER BY workspace_id,data_source_id");
+  }
+
+  async listNotionRestoreQuarantine(): Promise<NotionRestoreQuarantine[]> {
+    return this.many<NotionRestoreQuarantine>("SELECT payload FROM notion_restore_quarantine ORDER BY source_epoch,operation_id");
+  }
+
+  async putNotionScanWatermark(value: NotionScanWatermark): Promise<void> {
+    const watermark = notionScanWatermarkSchema.parse(value);
+    await this.transaction(async () => {
+      if (!await this.getNotionConnection(watermark.workspaceId)) throw new Error("Notion scan workspace does not exist");
+      this.database.prepare(`INSERT INTO notion_scan_watermarks(workspace_id,data_source_id,payload) VALUES(?,?,?)
+        ON CONFLICT(workspace_id,data_source_id) DO UPDATE SET payload=excluded.payload`)
+        .run(watermark.workspaceId, watermark.dataSourceId, JSON.stringify(watermark));
+    });
+  }
+
+  async listNotionSyncData(): Promise<NotionSyncArchive> {
+    return {
+      version: 1,
+      connections: await this.listNotionConnections(),
+      taskMappings: await this.listNotionTaskMappings(),
+      outbox: await this.listNotionOutboxOperations(),
+      conflicts: await this.listNotionConflicts(),
+      watermarks: await this.listNotionScanWatermarks(),
+      restoreQuarantine: await this.listNotionRestoreQuarantine(),
+    };
+  }
+
+  /** Committed before archive replacement so no later claim can start. */
+  async pauseNotionForRestore(): Promise<void> {
+    await this.transaction(async () => {
+      const at = new Date().toISOString();
+      this.database.prepare(`UPDATE notion_connections SET status='paused_after_restore',
+        payload=json_set(payload,'$.status','paused_after_restore','$.updatedAt',?)`).run(at);
+    });
+  }
+
+  private updateNotionOutbox(value: NotionOutboxOperation) {
+    const operation = notionOutboxOperationSchema.parse(value);
+    this.database.prepare("UPDATE notion_outbox SET status=?,payload=? WHERE operation_id=?")
+      .run(operation.status, JSON.stringify(operation), operation.operationId);
+  }
+
+  private async assertNotionOperationTaskState(operation: NotionOutboxOperation) {
+    const task = await this.getTask(operation.localTaskId);
+    if (!task || task.title !== operation.desired.title || task.startDate !== operation.desired.date?.[0] ||
+      task.endDate !== operation.desired.date?.[1] || (task.status === "completed") !== operation.desired.completed) {
+      throw new Error("Notion operation does not match the committed task");
+    }
+  }
+
   async getInboxItem(id: string) { return this.one<InboxItem>("SELECT payload FROM life_inbox WHERE id=?", id); }
   async listAllInboxItems() { return this.many<InboxItem>("SELECT payload FROM life_inbox ORDER BY created_at DESC,id"); }
   async putInboxItem(item: InboxItem) {
@@ -245,8 +510,17 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
   }
 
   async replaceAllData(data: PlannerArchiveData) {
+    const sync = notionSyncArchiveSchema.parse(data.notionSync ?? emptyNotionSyncArchive());
     await this.transaction(async () => {
+      const quarantinedAt = new Date().toISOString();
+      for (const operation of this.many<NotionOutboxOperation>(
+        "SELECT payload FROM notion_outbox WHERE status IN ('sending','unknown','quarantined')")) {
+        const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+        if (!mapping) throw new Error("Notion unresolved send lost its mapping");
+        this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
+      }
       await this.rotateDatasetEpoch();
+      this.database.exec("DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_connections;");
       this.database.exec("DELETE FROM life_resource_tasks; DELETE FROM life_inbox; DELETE FROM life_resources; DELETE FROM life_folders WHERE parent_id IS NOT NULL; DELETE FROM life_folders WHERE parent_id IS NULL; DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
       for (const series of data.recurrenceSeries ?? []) await this.putRecurrenceSeries(series);
       for (const task of data.tasks) await this.putTask(task);
@@ -257,8 +531,39 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       for (const resource of data.resources ?? []) await this.putResource(resource);
       for (const item of data.inboxItems ?? []) await this.putInboxItem(item);
       for (const link of data.resourceTaskLinks ?? []) await this.putResourceTaskLink(link);
+      for (const connection of sync.connections) {
+        await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
+      }
+      for (const mapping of sync.taskMappings) await this.putNotionTaskMapping(mapping);
+      for (const operation of sync.outbox) {
+        const restored: NotionOutboxOperation = ["confirmed", "superseded"].includes(operation.status)
+          ? operation : { ...operation, status: "quarantined" };
+        this.database.prepare(`INSERT INTO notion_outbox(operation_id,local_task_id,workspace_id,dataset_epoch,status,created_at,payload)
+          VALUES(?,?,?,?,?,?,?)`).run(restored.operationId, restored.localTaskId, restored.workspaceId,
+            restored.datasetEpoch, restored.status, restored.createdAt, JSON.stringify(restored));
+      }
+      for (const conflict of sync.conflicts) await this.appendNotionConflict(conflict);
+      for (const watermark of sync.watermarks) await this.putNotionScanWatermark(watermark);
+      for (const item of sync.restoreQuarantine) this.putNotionRestoreQuarantine(item);
       await this.recordMutation("dataset_replaced");
     });
+  }
+
+  private putNotionRestoreQuarantine(value: NotionRestoreQuarantine) {
+    const item = notionRestoreQuarantineSchema.parse(value);
+    const previous = this.one<NotionRestoreQuarantine>(
+      "SELECT payload FROM notion_restore_quarantine WHERE source_epoch=? AND operation_id=?",
+      item.operation.datasetEpoch, item.operation.operationId);
+    if (previous) {
+      if (JSON.stringify(previous.operation) !== JSON.stringify(item.operation) ||
+        JSON.stringify(previous.mapping) !== JSON.stringify(item.mapping)) {
+        throw new Error("Notion restore quarantine identity collision");
+      }
+      return;
+    }
+    this.database.prepare(`INSERT INTO notion_restore_quarantine(source_epoch,operation_id,workspace_id,local_task_id,payload)
+      VALUES(?,?,?,?,?)`).run(item.operation.datasetEpoch, item.operation.operationId,
+        item.operation.workspaceId, item.operation.localTaskId, JSON.stringify(item));
   }
 
   /** This marker survives replacement so old browser data cannot overwrite a restore. */
@@ -266,7 +571,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.transaction(async () => {
       const imported = this.database.prepare("SELECT value FROM metadata WHERE key = 'browser_import_hash'").get();
       if (imported) return imported.value === hash ? "already-imported" as const : "server-not-empty" as const;
-      const counts = this.database.prepare("SELECT (SELECT COUNT(*) FROM tasks)+(SELECT COUNT(*) FROM recurrence_series)+(SELECT COUNT(*) FROM focus_records)+(SELECT COUNT(*) FROM life_inbox)+(SELECT COUNT(*) FROM life_folders)+(SELECT COUNT(*) FROM life_resources) AS count").get();
+      const counts = this.database.prepare("SELECT (SELECT COUNT(*) FROM tasks)+(SELECT COUNT(*) FROM recurrence_series)+(SELECT COUNT(*) FROM focus_records)+(SELECT COUNT(*) FROM life_inbox)+(SELECT COUNT(*) FROM life_folders)+(SELECT COUNT(*) FROM life_resources)+(SELECT COUNT(*) FROM notion_connections) AS count").get();
       if (Number(counts?.count) > 0) return "server-not-empty" as const;
       await this.replaceAllData(data);
       this.database.prepare("INSERT INTO metadata (key,value) VALUES ('browser_import_hash',?)").run(hash);
@@ -336,11 +641,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private initializeSchema() {
     const version = Number(this.database.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 3) throw new Error("This database was created by a newer version of NewDay");
-    if (version === 3) return;
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      if (version < 2) this.database.exec(`
+    if (version > 4) throw new Error("This database was created by a newer version of NewDay");
+    if (version < 3) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        if (version < 2) this.database.exec(`
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY NOT NULL,series_id TEXT,occurrence_key TEXT UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
         CREATE INDEX IF NOT EXISTS tasks_by_series ON tasks(series_id);
         CREATE TABLE IF NOT EXISTS recurrence_series (id TEXT PRIMARY KEY NOT NULL,logical_series_id TEXT NOT NULL,start_date TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
@@ -353,11 +658,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         CREATE INDEX planner_events_by_date ON planner_events(date);
         CREATE TABLE execution_ledger (operation_id TEXT PRIMARY KEY NOT NULL,request_digest TEXT NOT NULL,proposal_id TEXT NOT NULL,dataset_epoch TEXT NOT NULL,terminal_status TEXT NOT NULL CHECK(terminal_status IN ('applied','no_change')),payload TEXT CHECK(payload IS NULL OR json_valid(payload))) STRICT;
       `);
-      if (version < 2) {
-        this.database.prepare("INSERT INTO metadata(key,value) VALUES('dataset_epoch',?) ON CONFLICT(key) DO NOTHING").run(randomUUID());
-        this.database.exec("INSERT INTO metadata(key,value) VALUES('planner_revision','0') ON CONFLICT(key) DO NOTHING");
-      }
-      this.database.exec(`
+        if (version < 2) {
+          this.database.prepare("INSERT INTO metadata(key,value) VALUES('dataset_epoch',?) ON CONFLICT(key) DO NOTHING").run(randomUUID());
+          this.database.exec("INSERT INTO metadata(key,value) VALUES('planner_revision','0') ON CONFLICT(key) DO NOTHING");
+        }
+        this.database.exec(`
         CREATE TABLE life_folders (id TEXT PRIMARY KEY NOT NULL,parent_id TEXT REFERENCES life_folders(id) ON DELETE RESTRICT,name TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
         CREATE UNIQUE INDEX life_folders_root_name ON life_folders(name COLLATE NOCASE) WHERE parent_id IS NULL;
         CREATE UNIQUE INDEX life_folders_child_name ON life_folders(parent_id,name COLLATE NOCASE) WHERE parent_id IS NOT NULL;
@@ -366,9 +671,82 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         CREATE TABLE life_inbox (id TEXT PRIMARY KEY NOT NULL,source_resource_id TEXT REFERENCES life_resources(id) ON DELETE SET NULL,created_at TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
         CREATE TABLE life_resource_tasks (resource_id TEXT NOT NULL REFERENCES life_resources(id) ON DELETE CASCADE,task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,PRIMARY KEY(resource_id,task_id)) STRICT;
         CREATE INDEX life_resource_tasks_by_task ON life_resource_tasks(task_id);
-        PRAGMA user_version=3;
-        COMMIT;
-      `);
+          PRAGMA user_version=3;
+          COMMIT;
+        `);
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    }
+    if (version < 4) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(`
+          CREATE TABLE notion_connections (
+            workspace_id TEXT PRIMARY KEY NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('disconnected','active','paused','paused_after_restore','paused_unknown')),
+            payload TEXT NOT NULL CHECK(json_valid(payload))
+          ) STRICT;
+          CREATE TABLE notion_task_mappings (
+            local_task_id TEXT PRIMARY KEY NOT NULL REFERENCES tasks(id) ON DELETE RESTRICT,
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            data_source_id TEXT NOT NULL,
+            remote_page_id TEXT,
+            client_key TEXT NOT NULL,
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            UNIQUE(workspace_id,client_key)
+          ) STRICT;
+          CREATE UNIQUE INDEX notion_task_mapping_remote ON notion_task_mappings(workspace_id,data_source_id,remote_page_id)
+            WHERE remote_page_id IS NOT NULL;
+          CREATE TABLE notion_outbox (
+            operation_id TEXT PRIMARY KEY NOT NULL,
+            local_task_id TEXT NOT NULL REFERENCES notion_task_mappings(local_task_id) ON DELETE RESTRICT,
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            dataset_epoch TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('pending','sending','unknown','confirmed','superseded','quarantined')),
+            created_at TEXT NOT NULL,
+            payload TEXT NOT NULL CHECK(json_valid(payload))
+          ) STRICT;
+          CREATE INDEX notion_outbox_ready ON notion_outbox(workspace_id,status,created_at);
+          CREATE INDEX notion_outbox_by_task ON notion_outbox(local_task_id,status);
+          CREATE TABLE notion_conflicts (
+            id TEXT PRIMARY KEY NOT NULL,
+            local_task_id TEXT NOT NULL REFERENCES notion_task_mappings(local_task_id) ON DELETE RESTRICT,
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            payload TEXT NOT NULL CHECK(json_valid(payload))
+          ) STRICT;
+          CREATE TABLE notion_scan_watermarks (
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            data_source_id TEXT NOT NULL,
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            PRIMARY KEY(workspace_id,data_source_id)
+          ) STRICT;
+          CREATE TABLE notion_restore_quarantine (
+            source_epoch TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL,
+            local_task_id TEXT NOT NULL,
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            PRIMARY KEY(source_epoch,operation_id)
+          ) STRICT;
+          CREATE INDEX notion_restore_quarantine_by_mapping ON notion_restore_quarantine(workspace_id,local_task_id);
+          PRAGMA user_version=4;
+          COMMIT;
+        `);
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    }
+  }
+
+  private recoverNotionSendingAfterRestart() {
+    const hasSending = this.database.prepare("SELECT 1 FROM notion_outbox WHERE status='sending' LIMIT 1").get();
+    if (!hasSending) return;
+    const at = new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`UPDATE notion_connections SET status='paused_unknown',
+        payload=json_set(payload,'$.status','paused_unknown','$.updatedAt',?)
+        WHERE workspace_id IN (SELECT DISTINCT workspace_id FROM notion_outbox WHERE status='sending')`).run(at);
+      this.database.exec(`UPDATE notion_outbox SET status='unknown',
+        payload=json_set(payload,'$.status','unknown') WHERE status='sending'`);
+      this.database.exec("COMMIT");
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 }

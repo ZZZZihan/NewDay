@@ -108,7 +108,10 @@ export class NotionOutboxDispatcher {
         if (merged === "superseded") return merged;
         operation = merged;
         mapping = (await this.store.getNotionTaskMapping(operation.localTaskId))!;
-      } catch { return this.markUnknownOrQuarantined(operation); }
+      } catch {
+        if (await this.store.deferNotionUnsentAfterManualPause(operation.operationId, operation.datasetEpoch)) return "paused";
+        return this.markUnknownOrQuarantined(operation);
+      }
     }
     if (sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
     if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {

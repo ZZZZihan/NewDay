@@ -163,6 +163,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `POST /api/notion/connections/:workspaceId/disconnect` | `{}` | `{ ok: true, removed }`；删除本机凭据 |
 | `GET /api/notion/connections/:workspaceId/structure` | 无 | 当前初始化步骤、读回 ID 与待核对类别，不含令牌 |
 | `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
+| `POST /api/notion/connections/:workspaceId/structure/reconcile` | `{ step, attemptedAt }` | 只读核对当前已有尝试；若步骤或尝试已变更则返回 409，不会创建下一结构 |
 | `GET /api/notion/connections/:workspaceId/read` | 无 | 各数据源扫描水位与失败类别 |
 | `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、规则、任务与实例；生成窗口内缺少的规则实例进入持久待发送队列 |
 | `GET /api/notion/connections/:workspaceId/sync` | 无 | 写回操作状态及字段冲突，不含凭据 |

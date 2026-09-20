@@ -146,6 +146,17 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     setBusy(true);
     setMessage(null);
     try {
+      if (reviewOnly) {
+        const current = structures[workspaceId];
+        if (!current?.nextStep || !current.reviewAttemptedAt) throw new Error("当前核对步骤已过期，请刷新状态");
+        const result = await notionApi.reconcileStructure(workspaceId, current.nextStep, current.reviewAttemptedAt);
+        refreshRevision.current += 1;
+        setStructures((value) => ({ ...value, [workspaceId]: result }));
+        setMessage(result.state === "needs_review"
+          ? "当前结构尝试仍待核对；不会自动重发创建请求。"
+          : "本次只核对了已有结构尝试；如需继续建立后续结构，请另行点击建立或继续结构。");
+        return;
+      }
       // Each API call records at most one remote structural mutation before
       // returning its readback. Keep the UI responsive across all nine steps.
       for (let index = 0; index < 9; index += 1) {
@@ -159,10 +170,6 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
         }
         if (result.state === "needs_review") {
           setMessage("Notion 创建结果需要核对；系统不会自动再次创建。检查该工作区后可点击重新核对。");
-          return;
-        }
-        if (reviewOnly) {
-          setMessage("本次只核对了已有结构尝试；如需继续建立后续结构，请另行点击建立或继续结构。");
           return;
         }
       }

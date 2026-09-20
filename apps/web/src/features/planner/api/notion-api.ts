@@ -16,6 +16,7 @@ export type NotionStructureProgress = {
   nextStep: string | null;
   reviewReason: "not_found" | "ambiguous" | "unreadable" | "schema_mismatch" | "permission" | "rate_limited" | "request_unknown" | null;
   retryAfterAt: string | null;
+  reviewAttemptedAt: string | null;
   rootPageId: string | null;
   dataSources: Record<string, { databaseId: string; dataSourceId: string; propertyIds: Record<string, string> }>;
   completedSteps: string[];
@@ -61,6 +62,9 @@ export const notionApi = {
   refresh: (workspaceId: string) => post<{ connection: NotionConnection }>(`/connections/${encodeURIComponent(workspaceId)}/refresh`, {}),
   structure: (workspaceId: string) => request<NotionStructureProgress>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/structure`),
   advanceStructure: (workspaceId: string) => post<NotionStructureProgress>(`/connections/${encodeURIComponent(workspaceId)}/structure/advance`, {}),
+  reconcileStructure: (workspaceId: string, step: NonNullable<NotionStructureProgress["nextStep"]>,
+    attemptedAt: string) => post<NotionStructureProgress>(
+    `/connections/${encodeURIComponent(workspaceId)}/structure/reconcile`, { step, attemptedAt }),
   readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
   scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
   syncStatus: (workspaceId: string) => request<NotionSyncStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/sync`),

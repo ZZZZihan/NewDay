@@ -48,6 +48,16 @@ export function registerNotionOAuthRoutes(app: FastifyInstance, oauth: NotionOAu
     return requiredStructure(structure).advance(workspaceId);
   });
 
+  app.post("/api/notion/connections/:workspaceId/structure/reconcile", async (request) => {
+    const { step, attemptedAt } = z.strictObject({
+      step: z.enum(["root", "areas", "projects", "tasks", "rules", "projects_area", "tasks_project",
+        "tasks_direct_area", "tasks_rule"]),
+      attemptedAt: z.iso.datetime({ offset: true }),
+    }).parse(request.body);
+    const { workspaceId } = disconnectParams.parse(request.params);
+    return requiredStructure(structure).reconcile(workspaceId, step, attemptedAt);
+  });
+
   app.post("/api/notion/connections/:workspaceId/refresh", async (request) => {
     z.strictObject({}).parse(request.body);
     const { workspaceId } = disconnectParams.parse(request.params);

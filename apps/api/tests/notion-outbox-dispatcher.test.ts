@@ -100,6 +100,39 @@ test("manual pause fences a preflight before any page write and keeps its intent
   } finally { store.close(); }
 });
 
+test("manual pause during an existing page preflight defers a conflict merge without inventing an unknown write", async () => {
+  const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const store = await setup("remote-1", desired);
+  const fake = fakeTransport();
+  const remoteFields = { ...fields, title: "Notion 改名" };
+  fake.pages.set("remote-1", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields: remoteFields, inTrash: false });
+  let releaseRead!: () => void;
+  let readStarted!: () => void;
+  const started = new Promise<void>((resolve) => { readStarted = resolve; });
+  const released = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const read = fake.transport.readPage;
+  fake.transport.readPage = async (...args) => {
+    readStarted();
+    await released;
+    return read(...args);
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    const sync = new NotionSyncService(store, dispatcher);
+    const sending = dispatcher.dispatch("operation-1");
+    await started;
+    await sync.pause("workspace-1");
+    releaseRead();
+    assert.equal(await sending, "paused");
+    assert.equal((await store.getNotionConnection("workspace-1"))?.pauseReason, "manual");
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "pending");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+    assert.deepEqual(fake.pages.get("remote-1")?.fields, remoteFields);
+    assert.equal((await store.getTask("task-1"))?.title, desired.title);
+  } finally { store.close(); }
+});
+
 test("a create response lost after remote success binds one page by stable key", async () => {
   const store = await setup();
   const fake = fakeTransport();

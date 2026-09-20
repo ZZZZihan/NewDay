@@ -58,28 +58,33 @@ test("authorized workspace shows explicit structure creation and readback progre
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
-test("structure review stops after one read-only advance before the next creation step", async ({ page }) => {
+test("structure review uses one read-only reconcile before the next creation step", async ({ page }) => {
   const workspaceId = "workspace-review";
   await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
     workspaceId, workspaceName: "结构复核空间", botId: "bot-test", status: "active",
     updatedAt: "2026-09-21T00:00:00.000Z",
   }] } }));
   const progress = (state: string, completedSteps: string[], nextStep: string, reviewReason: string | null) => ({
-    workspaceId, state, nextStep, reviewReason, retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps,
+    workspaceId, state, nextStep, reviewReason, retryAfterAt: null,
+    reviewAttemptedAt: state === "needs_review" ? "2026-09-21T00:00:00.000Z" : null,
+    rootPageId: "root-id", dataSources: {}, completedSteps,
   });
   await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
     route.fulfill({ json: progress("needs_review", ["root"], "areas", "request_unknown") }));
-  let advances = 0;
-  await page.route(`**/api/notion/connections/${workspaceId}/structure/advance`, (route) => {
-    advances += 1;
+  let reconciles = 0;
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/reconcile`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({ step: "areas", attemptedAt: "2026-09-21T00:00:00.000Z" });
+    reconciles += 1;
     return route.fulfill({ json: progress("in_progress", ["root", "areas"], "projects", null) });
   });
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/advance`, (route) =>
+    route.fulfill({ status: 500, json: { message: "review must not advance" } }));
   await page.goto("/");
   await page.getByRole("button", { name: "Notion 连接" }).click();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "重新核对" }).click();
   await expect(page.getByText("本次只核对了已有结构尝试")).toBeVisible();
-  expect(advances).toBe(1);
+  expect(reconciles).toBe(1);
 });
 
 test("Notion panel exposes a manual pause and explicit resume", async ({ page }) => {

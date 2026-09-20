@@ -17,10 +17,10 @@ Cloudflare Worker 负责 Notion 公共 OAuth 的回调、令牌交换与轮换�
 ## 授权与故障恢复
 
 - 本机生成随机 verifier，将 SHA-256 challenge 发给 Worker。Worker 保存随机 state 10 分钟。Notion 回调成功后 Worker 将随机票据放入回环 Web 地址的 URL fragment；页面立即清除 fragment，再由本机 API 用 verifier 与票据领取令牌。Worker 在本机加密事务提交后收到 ACK 才删除暂存令牌。重复领取在 ACK 前可以重送同一结果；ACK 后拒绝重放。
-- 用户取消 Notion 授权时，Worker 标记该 state 为取消，本机清除对应 verifier。若回调错误、过期或本机进程停止，重新开始授权；不要把未领取的会话算作已连接。
+- 用户在 Notion 授权页取消时，Worker 在回调中标记该 state 为取消，本机清除对应 verifier。单独调用本机 `/oauth/cancel` 只删除本机 verifier；Worker 会话到期后自行失效。断开某个已连接工作区只删除该工作区的本机凭据，不取消其他尚未完成的授权。若回调错误、过期或本机进程停止，重新开始授权；不要把未领取的会话算作已连接。
 - 本机凭据库用 AES-256-GCM 保存令牌和待领取 verifier，库文件权限为 `0600`。`GET /api/notion/status` 只返回工作区摘要与 `active`、`refresh_pending` 或 `reauthorization_required` 状态。密钥、access token、refresh token 不进入 HTTP 响应、业务备份或 Agent 备份。
 - 刷新使用保存在库中的固定 attempt ID。请求超时可能发生在 Notion 已轮换之后；此时状态是 `refresh_pending`，旧令牌停止供后续任务调用。页面的“重试确认”用原 attempt ID 读取 Worker 暂存的轮换结果。Worker 明确无法提供结果、缓存过期或令牌身份不匹配时进入 `reauthorization_required`，需重新授权。
-- “断开”删除本机凭据和未完成的本机授权会话，不声称撤销 Notion 设置中的连接授权。若要在 Notion 一侧撤销，也需由用户在 Notion 中移除该连接。重新连接同一工作区会替换其本机凭据；后续表映射和同步必须另行核对。
+- “断开”只删除指定工作区的本机凭据，不声称撤销 Notion 设置中的连接授权，也不取消尚未完成的其他授权会话。若要在 Notion 一侧撤销，也需由用户在 Notion 中移除该连接。重新连接同一工作区会替换其本机凭据；后续表映射和同步必须另行核对。
 
 ## 当前验收状态
 

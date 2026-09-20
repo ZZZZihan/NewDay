@@ -150,7 +150,8 @@ export class NotionCredentialVault {
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const changed = this.database.prepare("DELETE FROM credentials WHERE workspace_id=?").run(workspaceId).changes > 0;
-      this.database.prepare("DELETE FROM oauth_pending").run();
+      // Pending OAuth sessions have no workspace identity until claim. A
+      // workspace-specific disconnect must not cancel another authorization.
       this.database.exec("COMMIT");
       return changed;
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }

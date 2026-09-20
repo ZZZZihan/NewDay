@@ -92,6 +92,19 @@ test("cancelled local state cannot claim a valid Worker ticket", async () => {
   } finally { await app.close(); }
 });
 
+test("disconnecting one workspace preserves a different pending authorization", () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const pendingForAnotherWorkspace = "b".repeat(43);
+  try {
+    vault.putPending(state, "first verifier", Date.now() + 60_000);
+    vault.storeClaimed(state, credential, new Date().toISOString());
+    vault.putPending(pendingForAnotherWorkspace, "second verifier", Date.now() + 60_000);
+    assert.equal(vault.disconnect("workspace-one"), true);
+    assert.equal(vault.getCredential("workspace-one"), null);
+    assert.equal(vault.getPending(pendingForAnotherWorkspace, Date.now()), "second verifier");
+  } finally { vault.close(); }
+});
+
 test("lost refresh response keeps one persisted attempt and blocks stale token until a retry confirms rotation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-refresh-"));
   const path = join(directory, "vault.sqlite");

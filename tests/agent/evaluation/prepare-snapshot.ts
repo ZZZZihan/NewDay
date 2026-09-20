@@ -140,7 +140,23 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
 
     for (const [index, history] of input.priorHistory.entries()) {
       if (history.kind === "preference_deleted") {
-        gaps.push(`priorHistory[${index}]: deleted preference has no representation in the production snapshot`);
+        // A deletion is a setup action, not a fact to send to the model. Run
+        // the real preference update path and verify the final snapshot below.
+        const current = await preferences.getPreferences();
+        const deletedId = `fixture-deleted:${index}`;
+        if (current.explicitPreferences.some(({ id }) => id === deletedId))
+          throw new Error(`${scenario.id}: synthetic deleted preference ID collides with active input`);
+        const active = current.explicitPreferences.map(({ id, text, source }) => ({ id, text, source }));
+        await preferences.updatePreferences({
+          expectedRevision: current.revision, timeZone: input.timeZone, learningEnabled: current.learningEnabled,
+          explicitPreferences: [...active, { id: deletedId, text: history.text, source: "user" }],
+        });
+        const withDeletedPreference = await preferences.getPreferences();
+        await preferences.updatePreferences({
+          expectedRevision: withDeletedPreference.revision, timeZone: input.timeZone,
+          learningEnabled: withDeletedPreference.learningEnabled, explicitPreferences: active,
+        });
+        adaptations.push(`priorHistory[${index}]: preference_deleted -> production add/delete setup at synthetic sampledAt ${input.sampledAt}; deletion time was not supplied and removed text is excluded from the snapshot`);
         continue;
       }
       const at = `${history.date}T08:00:00.000Z`;
@@ -155,6 +171,12 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
     }
 
     const snapshot = planningSnapshotSchema.parse(await contexts.createSnapshot());
+    for (const [index, history] of input.priorHistory.entries()) {
+      if (history.kind === "preference_deleted" &&
+        (snapshot.preferences.explicitPreferences.some(({ text }) => text === history.text) ||
+          snapshot.facts.some(({ text }) => text.includes(history.text))))
+        gaps.push(`priorHistory[${index}]: deleted preference text remains visible in the production snapshot`);
+    }
     if (snapshot.currentFocusTaskIds.length !== input.currentFocusTaskIds.length ||
       input.currentFocusTaskIds.some((taskId) => !snapshot.currentFocusTaskIds.includes(taskId)))
       gaps.push("currentFocusTaskIds: at least one fixture focus is not present in the production snapshot");

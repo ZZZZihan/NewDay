@@ -504,11 +504,130 @@ test("a restore during an in-flight send keeps the late result out of the new da
       originalStatus: "sending", attemptCount: 1, lastAttemptAt: at,
       dataSourceId: "tasks-source-1", remotePageId: null,
       clientKey: notionClientKey("install-1", "task-1"),
-      quarantinedAt, desired: fields, baseline: null,
+      quarantinedAt, inCurrentOutbox: false, desired: fields, baseline: null,
     }]);
     await store.putNotionConnection({ ...connection(), workspaceId: "workspace-2" });
     assert.deepEqual((await sync.status("workspace-2")).restoreQuarantine, []);
   } finally { store.close(); }
+});
+
+test("backup import exposes an unfinished outbox intent for read-only review without replay", async () => {
+  const source = await setup();
+  let archived: string;
+  try {
+    await source.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    archived = JSON.stringify(await createPlannerBackup(source, at));
+  } finally { source.close(); }
+
+  const restored = new SQLitePlannerStore(":memory:");
+  const fake = fakeTransport();
+  try {
+    await restorePlannerBackup(restored, archived);
+    const sync = new NotionSyncService(restored, new NotionOutboxDispatcher(restored, fake.transport, () => at));
+    const imported = await sync.status("workspace-1");
+    assert.equal(imported.connectionStatus, "paused_after_restore");
+    assert.equal(imported.operations[0]?.status, "quarantined");
+    assert.deepEqual(imported.restoreQuarantine.map(({ inCurrentOutbox, originalStatus, desired }) =>
+      ({ inCurrentOutbox, originalStatus, desired })), [{ inCurrentOutbox: true, originalStatus: "pending", desired: fields }]);
+    const sourceEpoch = imported.restoreQuarantine[0]!.sourceEpoch;
+    const checked = await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.equal(checked.restoreQuarantine[0]?.latestReview?.outcome, "not_observed");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+    await assert.rejects(sync.resume("workspace-1"), /无需恢复发送/);
+
+    const conflicting = structuredClone(parsePlannerBackup(archived));
+    if (conflicting.version !== 6) throw new Error("expected v6 backup");
+    conflicting.notionSync.outbox[0]!.desired.title = "同一操作的另一原意图";
+    const beforeConflict = await restored.getPlanningVersion();
+    await assert.rejects(restorePlannerBackup(restored, JSON.stringify(conflicting)),
+      /conflicts with restore quarantine identity/);
+    assert.deepEqual(await restored.getPlanningVersion(), beforeConflict,
+      "a conflicting operation must roll back the entire backup import");
+    assert.equal((await restored.getTask("task-1"))?.title, fields.title);
+    assert.equal((await sync.status("workspace-1")).restoreQuarantine[0]?.latestReview?.outcome,
+      "not_observed");
+
+    const attempted = structuredClone(parsePlannerBackup(archived));
+    if (attempted.version !== 6) throw new Error("expected v6 backup");
+    attempted.notionSync.outbox[0]!.status = "unknown";
+    attempted.notionSync.outbox[0]!.attemptCount = 1;
+    attempted.notionSync.outbox[0]!.lastAttemptAt = at;
+    await assert.rejects(restorePlannerBackup(restored, JSON.stringify(attempted)),
+      /conflicts with restore quarantine identity/);
+    assert.deepEqual(await restored.getPlanningVersion(), beforeConflict,
+      "a later send attempt must not silently inherit a pending audit record");
+    assert.equal((await sync.status("workspace-1")).restoreQuarantine[0]?.originalStatus, "pending");
+
+    const again = JSON.stringify(await createPlannerBackup(restored, at));
+    await restorePlannerBackup(restored, again);
+    const after = await sync.status("workspace-1");
+    assert.equal(after.restoreQuarantine.length, 1, "repeated restore must not duplicate the audit record");
+    assert.equal(after.restoreQuarantine[0]?.inCurrentOutbox, true);
+    assert.equal(after.restoreQuarantine[0]?.latestReview?.outcome, "not_observed");
+    assert.equal(after.operations[0]?.status, "quarantined");
+    const exported = await createPlannerBackup(restored, at);
+    if (exported.version !== 6) throw new Error("expected v6 backup");
+    assert.deepEqual(Object.keys(exported.notionSync.restoreQuarantine[0]!).sort(),
+      ["operation", "mapping", "quarantinedAt", "latestReview"].sort(),
+      "v6 restore records must keep the existing strict backup shape");
+  } finally { restored.close(); }
+});
+
+test("backup import rejects a changed known page for an already isolated operation", async () => {
+  const source = await setup("remote-1");
+  let archived: string;
+  try { archived = JSON.stringify(await createPlannerBackup(source, at)); }
+  finally { source.close(); }
+
+  const restored = new SQLitePlannerStore(":memory:");
+  try {
+    await restorePlannerBackup(restored, archived);
+    const conflicting = structuredClone(parsePlannerBackup(archived));
+    if (conflicting.version !== 6) throw new Error("expected v6 backup");
+    conflicting.notionSync.taskMappings[0]!.remotePageId = "remote-2";
+    const before = await restored.getPlanningVersion();
+    await assert.rejects(restorePlannerBackup(restored, JSON.stringify(conflicting)),
+      /conflicts with restore quarantine identity/);
+    assert.deepEqual(await restored.getPlanningVersion(), before);
+    assert.equal((await restored.getNotionTaskMapping("task-1"))?.remotePageId, "remote-1");
+  } finally { restored.close(); }
+});
+
+test("backup import rejects a page ID that contradicts a saved read-only observation", async () => {
+  const source = await setup();
+  let archived: string;
+  try {
+    await source.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    archived = JSON.stringify(await createPlannerBackup(source, at));
+  } finally { source.close(); }
+
+  const restored = new SQLitePlannerStore(":memory:");
+  const fake = fakeTransport();
+  try {
+    await restorePlannerBackup(restored, archived);
+    const status = new NotionSyncService(restored, new NotionOutboxDispatcher(restored, fake.transport, () => at));
+    fake.pages.set("remote-B", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+      remotePageId: "remote-B", clientKey: notionClientKey("install-1", "task-1"),
+      fields, inTrash: false });
+    const sourceEpoch = (await status.status("workspace-1")).restoreQuarantine[0]!.sourceEpoch;
+    const checked = await status.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.equal(checked.restoreQuarantine[0]?.latestReview?.outcome, "matches_intent");
+    assert.equal(checked.restoreQuarantine[0]?.latestReview?.remotePageId, "remote-B");
+
+    const conflicting = structuredClone(parsePlannerBackup(archived));
+    if (conflicting.version !== 6) throw new Error("expected v6 backup");
+    conflicting.notionSync.taskMappings[0]!.remotePageId = "remote-C";
+    const before = await restored.getPlanningVersion();
+    await assert.rejects(restorePlannerBackup(restored, JSON.stringify(conflicting)),
+      /conflicts with restore quarantine identity/);
+    assert.deepEqual(await restored.getPlanningVersion(), before);
+    assert.equal((await status.status("workspace-1")).restoreQuarantine[0]?.latestReview?.remotePageId, "remote-B");
+    assert.equal((await restored.getNotionTaskMapping("task-1"))?.remotePageId, null);
+  } finally { restored.close(); }
 });
 
 test("restore audit records a remote match without replaying an old operation or lifting its fence", async () => {

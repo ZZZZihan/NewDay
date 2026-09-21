@@ -69,11 +69,13 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               {!syncs[item.workspaceId].restoreQuarantine ? (
                 <p>恢复隔离明细未返回；请更新本机 API 并刷新状态，当前不能恢复发送。</p>
               ) : syncs[item.workspaceId].restoreQuarantine.length ? (
-                <div aria-label="恢复前隔离操作">
-                  <p>恢复前隔离 {syncs[item.workspaceId].restoreQuarantine.length} 项；须核对原工作区与远端结果，当前不能恢复发送。</p>
+                <div aria-label="恢复隔离操作">
+                  <p>恢复隔离 {syncs[item.workspaceId].restoreQuarantine.length} 项；须核对原工作区与远端结果，当前不能恢复发送。</p>
                   {syncs[item.workspaceId].restoreQuarantine.map((entry) => (
                     <p key={`${entry.sourceEpoch}:${entry.operationId}`}>
                       任务 {entry.localTaskId} · 操作 {entry.operationId} · 原状态 {entry.originalStatus} · 尝试 {entry.attemptCount} 次；
+                      位置 {entry.inCurrentOutbox === true ? "当前 outbox 与隔离账本"
+                        : entry.inCurrentOutbox === false ? "仅隔离账本" : "记录位置未返回"}；
                       远端页面 {entry.remotePageId ?? "未确认"} · 稳定键 {entry.clientKey} · 数据源 {entry.dataSourceId}；
                       隔离于 {new Date(entry.quarantinedAt).toLocaleString("zh-CN")}
                       {entry.desired ? <>；原意图 {JSON.stringify(entry.desired)}</> : <>；原意图未返回，请更新本机 API</>}
@@ -85,7 +87,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                       </> : null}
                       {item.status === "active" && syncs[item.workspaceId].connectionStatus === "paused_after_restore" && entry.desired ?
                         <button type="button" disabled={busy} onClick={() =>
-                          void reconcileRestore(item.workspaceId, entry.sourceEpoch, entry.operationId)}>只读核对恢复前操作</button> : null}
+                          void reconcileRestore(item.workspaceId, entry.sourceEpoch, entry.operationId)}>只读核对隔离操作</button> : null}
                     </p>
                   ))}
                 </div>

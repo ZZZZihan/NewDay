@@ -26,12 +26,12 @@ const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const nonEmpty = z.string().trim().min(1).max(2_000);
 const instant = z.string().refine((value) => Number.isFinite(Date.parse(value)), "expected an ISO timestamp");
 const absolutePath = z.string().refine(isAbsolute, "expected an absolute path");
-const httpsOrigin = z.string().refine((value) => {
+const providerOrigin = z.string().refine((value) => {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === "https:" && parsed.origin === value;
+    return ["http:", "https:"].includes(parsed.protocol) && parsed.origin === value;
   } catch { return false; }
-}, "expected an HTTPS origin without a path");
+}, "expected an HTTP(S) origin without a path");
 
 export const requiredStopConditions = [
   "outbound_call_cap_reached",
@@ -83,7 +83,8 @@ export const evaluationFreezeSchema = z.strictObject({
   }),
   provider: z.strictObject({
     kind: z.literal("openai-compatible"),
-    origin: httpsOrigin,
+    origin: providerOrigin,
+    allowHttpOrigin: providerOrigin.nullable(),
     baseUrlSha256: sha256Schema,
     modelId: nonEmpty,
     reasoningEffort: z.enum(["provider_default", "none", "low", "medium", "high"]),
@@ -115,6 +116,22 @@ export const evaluationFreezeSchema = z.strictObject({
   }
   if (conditions.size !== value.stopConditions.length) {
     context.addIssue({ code: "custom", path: ["stopConditions"], message: "stop conditions must be unique" });
+  }
+  const providerUrl = new URL(value.provider.origin);
+  const providerIsLoopback = ["localhost", "127.0.0.1", "[::1]"].includes(providerUrl.hostname);
+  if (providerUrl.protocol === "http:" && !providerIsLoopback && value.provider.allowHttpOrigin !== value.provider.origin) {
+    context.addIssue({
+      code: "custom",
+      path: ["provider", "allowHttpOrigin"],
+      message: "a non-loopback HTTP provider requires the exact frozen HTTP origin exception",
+    });
+  }
+  if ((providerUrl.protocol === "https:" || providerIsLoopback) && value.provider.allowHttpOrigin !== null) {
+    context.addIssue({
+      code: "custom",
+      path: ["provider", "allowHttpOrigin"],
+      message: "HTTPS and loopback providers must not freeze an HTTP origin exception",
+    });
   }
 });
 
@@ -276,6 +293,7 @@ function sameStringSet(left: string[], right: string[]) {
 export type ProviderConfiguration = {
   provider: string;
   baseUrl: string;
+  allowHttpOrigin?: string;
   modelId?: string;
   apiKey?: string;
   reasoningEffort?: string;
@@ -290,6 +308,7 @@ export function verifyProviderConfiguration(freeze: EvaluationFreeze, configurat
   const checks: Array<[string, unknown, unknown]> = [
     ["provider origin", new URL(configuration.baseUrl).origin, freeze.provider.origin],
     ["provider base URL hash", sha256(configuration.baseUrl), freeze.provider.baseUrlSha256],
+    ["provider HTTP origin exception", configuration.allowHttpOrigin ?? null, freeze.provider.allowHttpOrigin],
     ["model ID", configuration.modelId, freeze.provider.modelId],
     ["reasoning effort", configuration.reasoningEffort ?? "provider_default", freeze.provider.reasoningEffort],
     ["max output tokens", configuration.maxOutputTokens, freeze.provider.maxOutputTokens],

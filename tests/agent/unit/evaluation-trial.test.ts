@@ -57,6 +57,7 @@ function freeze(overrides: Record<string, unknown> = {}): EvaluationFreeze {
     provider: {
       kind: "openai-compatible",
       origin: "https://provider.example",
+      allowHttpOrigin: null,
       baseUrlSha256: sha256("https://provider.example/v1"),
       modelId: "frozen-model",
       reasoningEffort: "none",
@@ -162,6 +163,33 @@ describe("guarded real-provider evaluation trial", () => {
       .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
     expect(() => verifyProviderConfiguration(freeze(), { ...configuration, baseUrl: "https://provider.example/other" }))
       .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
+  });
+
+  it("freezes an explicit non-loopback HTTP transport exception", () => {
+    const origin = "http://192.168.50.8:8788";
+    const approved = freeze({
+      provider: {
+        origin,
+        allowHttpOrigin: origin,
+        baseUrlSha256: sha256(`${origin}/v1`),
+      },
+    });
+    const configuration = {
+      provider: "openai-compatible",
+      baseUrl: `${origin}/v1`,
+      allowHttpOrigin: origin,
+      modelId: "frozen-model",
+      apiKey: "top-secret",
+      reasoningEffort: "none",
+      maxOutputTokens: 1200,
+      timeoutMs: 30_000,
+    };
+    expect(() => verifyProviderConfiguration(approved, configuration)).not.toThrow();
+    expect(() => verifyProviderConfiguration(approved, { ...configuration, allowHttpOrigin: undefined }))
+      .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
+    expect(evaluationFreezeSchema.safeParse(deepMerge(approved as unknown as Record<string, unknown>, {
+      provider: { allowHttpOrigin: null },
+    })).success).toBe(false);
   });
 
   it("uses one bounded repair and passes no business store or apply command to the model", async () => {

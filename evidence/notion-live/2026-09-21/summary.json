@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-21T06:08:09Z",
+  "candidate": {
+    "baseCommit": "4ae0a5bb2abe565dbf1d7b045d9d51bbca838dbd",
+    "branch": "codex/col-33-oauth-worker-hardening",
+    "state": "acceptance fixes not yet committed at evidence capture"
+  },
+  "scope": {
+    "workspaceAlias": "notion-20260921-live-01",
+    "workspaceIdSuffix": "9bced353",
+    "workspaceName": "NewDay 验收 2026-09-21",
+    "personalWorkspaceWritesAuthorized": false,
+    "personalWorkspaceWritesPerformed": false,
+    "workerVersion": "bee7b114-b73a-479d-9c7c-7588c9ddf5a0",
+    "notionSdkVersion": "5.23.0",
+    "notionApiVersion": "2026-03-11"
+  },
+  "results": {
+    "A1": {
+      "status": "partial",
+      "verified": [
+        "cancelled authorization left zero connections",
+        "successful OAuth claim stored one encrypted credential",
+        "API restart preserved the connection",
+        "refresh rotated ciphertext and cleared refresh_pending",
+        "vault mode is 0600",
+        "business backups contain no credential markers"
+      ],
+      "open": [
+        "disconnect plus new browser authorization",
+        "live stale callback rejection after disconnect"
+      ]
+    },
+    "A2": {
+      "status": "passed",
+      "confirmedInitializationSteps": 9,
+      "structureState": "ready"
+    },
+    "A3": {
+      "status": "not_executed",
+      "reason": "no real upstream response-loss proxy was used"
+    },
+    "R1": {
+      "status": "passed",
+      "verified": [
+        "area and project ownership",
+        "same-day and inclusive cross-day dates",
+        "undated and cleared-date tasks",
+        "restart and repeated scans produced no duplicate mappings"
+      ]
+    },
+    "R2": {
+      "status": "partial",
+      "verified": [
+        "a real in_trash page archived only its verified local mapping"
+      ],
+      "open": [
+        "permission revocation",
+        "real proxy 404",
+        "partial pagination",
+        "schema fault"
+      ]
+    },
+    "W1": {
+      "status": "passed",
+      "verified": [
+        "create, title and date update, complete and reopen",
+        "one remote page and one stable client key",
+        "same-field Notion-wins conflict recorded once"
+      ]
+    },
+    "W2": {
+      "status": "not_executed",
+      "reason": "no real upstream response-loss or 429/529 proxy was used"
+    },
+    "W3": {
+      "status": "partial",
+      "verified": [
+        "different-field merge",
+        "date range resolved atomically with Notion as winner"
+      ],
+      "open": [
+        "stale Agent proposal rejection after a remote task change"
+      ],
+      "conflictRecords": 2
+    },
+    "C1": {
+      "status": "passed",
+      "counts": {
+        "daily": 32,
+        "weekdays": 24,
+        "weeklyMonWedFri": 14,
+        "monthlyDay31InitialWindow": 1,
+        "monthlyControlledFebruary": 1
+      },
+      "controlledClock": "2027-02-01",
+      "controlledClockRemoteReadback": "2027-02-28"
+    },
+    "C2": {
+      "status": "passed_after_fix",
+      "verified": [
+        "instance rename, reschedule, complete and reopen retained identity",
+        "rule edit preserved existing exceptions",
+        "rule moved to trash disabled the series without deleting two existing pages",
+        "a full real scan succeeded after handling Notion hiding relations to trashed rules"
+      ],
+      "archivedRulePageSuffix": "7b936707",
+      "existingInstances": 2,
+      "unresolvedOperations": 0
+    },
+    "C3": {
+      "status": "passed",
+      "controlledRecoveryDate": "2026-12-01",
+      "recoveryWindowEnd": "2027-01-01",
+      "existingDailyInstances": 32,
+      "newDailyInstances": 32,
+      "downtimeHistoryInstances": 0,
+      "totalDailyInstances": 64,
+      "uniqueDailyOccurrenceKeys": 64,
+      "uniqueDailyRemotePages": 64
+    },
+    "D1": {
+      "status": "passed",
+      "backupVersion": 6,
+      "backupTasks": 1,
+      "backupOutbox": {
+        "confirmed": 7,
+        "pending": 1
+      },
+      "restoredConnectionStatus": "paused_after_restore",
+      "quarantinedOperations": 1,
+      "credentialRowsInRestoreVault": 0,
+      "readOnlyReviewOutcome": "unreadable",
+      "rollbackPreservedFence": true
+    }
+  },
+  "finalObservedState": {
+    "connectionStatus": "active",
+    "confirmedInitializationSteps": 9,
+    "taskMappingsWithRemotePage": 108,
+    "uniqueRemotePages": 108,
+    "uniqueClientKeys": 108,
+    "outboxConfirmed": 118,
+    "outboxUnresolved": 0,
+    "conflictRecords": 2,
+    "credentialRows": 1,
+    "credentialRefreshPending": false
+  },
+  "artifacts": {
+    "baselineBackup": {
+      "file": "baseline-before-oauth.json",
+      "sha256": "e015331f880b9299b7ca9bc54263a450df58b03febadff8c4ac72465d5498ae0",
+      "mode": "0600",
+      "credentialMarkerMatches": 0
+    },
+    "pausedBusinessBackup": {
+      "file": "business-backup-paused.json",
+      "sha256": "02aab1e09ee048dbfadd8c100fb8b0fc1b965cf05b4ec0a256ab6043d7271139",
+      "mode": "0600",
+      "credentialMarkerMatches": 0
+    },
+    "restoreSnapshot": {
+      "file": "planner-imported-snapshot.sqlite",
+      "sha256": "b5a389aaee88a1b7e9a6293a132d23065b065e1542b22f8f74c683aa80e52027",
+      "mode": "0600"
+    },
+    "credentialVaultMode": "0600"
+  },
+  "releaseDecision": {
+    "status": "no_go",
+    "push": false,
+    "merge": false,
+    "openAcceptance": [
+      "A1 disconnect and browser reauthorization",
+      "A3 real response-loss injection",
+      "R2 real permission and read-failure injection",
+      "W2 real write-failure and rate-limit injection",
+      "W3 stale Agent proposal rejection",
+      "G3 frozen real-model evaluation",
+      "G4 prospective seven-day use record"
+    ]
+  }
+}

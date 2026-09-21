@@ -22,8 +22,9 @@ export type NotionSharedField = keyof NotionTaskFields;
 const nonEmptyId = z.string().min(1);
 const notionPageUrl = z.string().url().refine((value) => {
   const url = new URL(value);
-  return url.protocol === "https:" && (url.hostname === "notion.so" || url.hostname.endsWith(".notion.so"));
-}, "Notion 页面链接必须使用 notion.so 的 HTTPS 地址");
+  return url.protocol === "https:" && (url.hostname === "app.notion.com" ||
+    url.hostname === "notion.so" || url.hostname.endsWith(".notion.so"));
+}, "Notion 页面链接必须使用官方 HTTPS 地址");
 
 export const notionDataSourceRefSchema = z.object({
   databaseId: nonEmptyId,

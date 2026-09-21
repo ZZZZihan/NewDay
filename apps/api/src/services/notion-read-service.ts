@@ -183,10 +183,18 @@ export class NotionReadService {
     const seenOccurrences = new Set<string>();
     for (const row of rows) {
       if (row.ruleIds.length > 1) throw new NotionReadFailure("schema", `Notion task ${row.id} has multiple rules`);
-      if (Boolean(row.ruleIds.length) !== Boolean(row.occurrenceKey)) {
+      const previousMapping = byRemote.get(row.id) ?? (row.occurrenceKey ? byOccurrence.get(row.occurrenceKey) : undefined);
+      const linkedRulePageId = row.ruleIds[0] ?? null;
+      const previousRule = previousMapping?.rulePageId ? rules.get(previousMapping.rulePageId) : undefined;
+      // Notion hides a relation after its target rule is moved to trash. Keep
+      // the already verified identity only for that archived rule; a missing
+      // relation to an active rule remains a schema failure.
+      const rulePageId = linkedRulePageId ?? (row.occurrenceKey &&
+        previousMapping?.occurrenceKey === row.occurrenceKey && previousRule?.status === "archived"
+        ? previousMapping.rulePageId ?? null : null);
+      if (Boolean(rulePageId) !== Boolean(row.occurrenceKey)) {
         throw new NotionReadFailure("schema", `Notion task ${row.id} has an incomplete rule instance identity`);
       }
-      const rulePageId = row.ruleIds[0] ?? null;
       const rule = rulePageId ? rules.get(rulePageId) : undefined;
       let occurrenceDate: string | undefined;
       if (rulePageId) {
@@ -211,7 +219,6 @@ export class NotionReadService {
       const areaId = project?.areaIds[0] ?? row.directAreaIds[0] ?? null;
       if (areaId && !areaIds.has(areaId)) throw new NotionReadFailure("schema", `Notion task ${row.id} area is inaccessible`);
       const fields = notionTaskFieldsSchema.parse({ title: row.title, date: row.date, completed: row.completed });
-      const previousMapping = byRemote.get(row.id) ?? (row.occurrenceKey ? byOccurrence.get(row.occurrenceKey) : undefined);
       if (previousMapping && (previousMapping.rulePageId !== (rulePageId ?? undefined) ||
         previousMapping.occurrenceKey !== (row.occurrenceKey ?? undefined) ||
         previousMapping.remotePageId !== null && previousMapping.remotePageId !== row.id)) {

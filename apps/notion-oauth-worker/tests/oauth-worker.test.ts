@@ -124,16 +124,23 @@ describe("OAuth Worker handoff", () => {
     const verifier = "z".repeat(43);
     const started = await post("/oauth/start", { challenge: await hash(verifier) });
     const { state } = await started.json() as { state: string };
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
-      ...credential,
-      workspace_name: "隔离工作区",
-      owner: { user: { person: { email: "must-not-be-persisted@example.test" } } },
-      duplicated_template_id: "not-needed",
-    })));
+    const upstream = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      return Response.json({
+        ...credential,
+        workspace_name: "隔离工作区",
+        owner: { user: { person: { email: "must-not-be-persisted@example.test" } } },
+        duplicated_template_id: "not-needed",
+      });
+    });
+    vi.stubGlobal("fetch", upstream);
     try {
       const callback = await handleOAuthRequest(new Request(
         `https://oauth.example.test/oauth/callback?state=${state}&code=test-code`), workerEnv);
       expect(callback.status).toBe(303);
+      expect(upstream.mock.calls[0]![1]!.redirect).toBe("manual");
+      expect(new Headers(upstream.mock.calls[0]![1]!.headers).get("notion-version")).toBe("2026-03-11");
       const fragment = new URL(callback.headers.get("location")!).hash;
       const ticket = fragment.split(":")[2]!;
       const claimed = await post("/oauth/claim", { state, ticket, verifier });

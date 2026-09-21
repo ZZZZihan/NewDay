@@ -29,6 +29,7 @@ type SessionRecord = AuthorizationRecord | RefreshRecord;
 
 const AUTHORIZATION_LIFETIME_MS = 10 * 60_000;
 const REFRESH_RESULT_LIFETIME_MS = 24 * 60 * 60_000;
+const NOTION_VERSION = "2026-03-11";
 const MAX_JSON_BODY_BYTES = 4096;
 const MAX_UPSTREAM_JSON_BYTES = 16 * 1024;
 const MAX_TOKEN_LENGTH = 8192;
@@ -311,20 +312,52 @@ async function exchangeToken(env: Env, payload: Record<string, string>): Promise
   let response: Response;
   try {
     response = await fetch("https://api.notion.com/v1/oauth/token", {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(15_000),
+      method: "POST", redirect: "manual", signal: AbortSignal.timeout(15_000),
       headers: {
         authorization: `Basic ${btoa(`${env.NOTION_CLIENT_ID}:${env.NOTION_CLIENT_SECRET}`)}`,
-        accept: "application/json", "content-type": "application/json",
+        accept: "application/json", "content-type": "application/json", "notion-version": NOTION_VERSION,
       },
       body: JSON.stringify(payload),
     });
-  } catch { return null; }
+  } catch (error) {
+    const cause = error && typeof error === "object" && "cause" in error ? error.cause : null;
+    const message = error instanceof Error
+      ? error.message
+        .replaceAll(env.NOTION_CLIENT_ID, "[redacted]")
+        .replaceAll(env.NOTION_CLIENT_SECRET, "[redacted]")
+        .replace(/[A-Za-z0-9_-]{24,}/g, "[redacted]")
+        .slice(0, 200)
+      : "unknown";
+    console.warn(JSON.stringify({
+      event: "notion_oauth_token_exchange_failed", stage: "fetch",
+      name: error instanceof Error ? error.name : typeof error,
+      message,
+      causeCode: cause && typeof cause === "object" && "code" in cause && typeof cause.code === "string"
+        ? cause.code.slice(0, 64) : "unknown",
+    }));
+    return null;
+  }
   if (!response.ok) {
     await cancelBody(response.body);
+    console.warn(JSON.stringify({
+      event: "notion_oauth_token_exchange_failed", stage: "response", status: response.status,
+    }));
     return null;
   }
   const token = await readJsonObject(response.body, response.headers, MAX_UPSTREAM_JSON_BYTES);
-  return token ? parseCredential(token) : null;
+  const credential = token ? parseCredential(token) : null;
+  if (!credential) {
+    console.warn(JSON.stringify({
+      event: "notion_oauth_token_exchange_failed", stage: "credential_shape", status: response.status,
+      fields: token ? {
+        accessToken: typeof token.access_token,
+        refreshToken: token.refresh_token === null ? "null" : typeof token.refresh_token,
+        botId: typeof token.bot_id,
+        workspaceId: typeof token.workspace_id,
+      } : null,
+    }));
+  }
+  return credential;
 }
 
 export async function handleOAuthRequest(request: Request, env: Env): Promise<Response> {

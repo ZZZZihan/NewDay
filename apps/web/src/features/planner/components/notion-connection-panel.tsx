@@ -1,11 +1,11 @@
 import type { useNotionConnection } from "../hooks/use-notion-connection";
-import type { NotionStructureProgress } from "../api/notion-api";
+import type { NotionRestoreReview, NotionStructureProgress } from "../api/notion-api";
 
 type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
   const { status, structures, reads, syncs, message, busy, refresh, start, disconnect,
-    retryRefresh, initializeStructure, scan, drain, pause, reconcile, resume } = connection;
+    retryRefresh, initializeStructure, scan, drain, pause, reconcile, reconcileRestore, resume } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
@@ -76,6 +76,16 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                       任务 {entry.localTaskId} · 操作 {entry.operationId} · 原状态 {entry.originalStatus} · 尝试 {entry.attemptCount} 次；
                       远端页面 {entry.remotePageId ?? "未确认"} · 稳定键 {entry.clientKey} · 数据源 {entry.dataSourceId}；
                       隔离于 {new Date(entry.quarantinedAt).toLocaleString("zh-CN")}
+                      {entry.desired ? <>；原意图 {JSON.stringify(entry.desired)}</> : <>；原意图未返回，请更新本机 API</>}
+                      {entry.baseline !== undefined ? <>；原共同基准 {entry.baseline ? JSON.stringify(entry.baseline) : "尚未建立"}</> : null}
+                      {entry.latestReview ? <>；上次只读观察 {new Date(entry.latestReview.checkedAt).toLocaleString("zh-CN")}：
+                        {restoreReviewDescription(entry.latestReview.outcome)}
+                        {entry.latestReview.remotePageId ? ` · 页面 ${entry.latestReview.remotePageId}` : ""}
+                        {entry.latestReview.remoteFields ? ` · 远端值 ${JSON.stringify(entry.latestReview.remoteFields)}` : ""}
+                      </> : null}
+                      {item.status === "active" && syncs[item.workspaceId].connectionStatus === "paused_after_restore" && entry.desired ?
+                        <button type="button" disabled={busy} onClick={() =>
+                          void reconcileRestore(item.workspaceId, entry.sourceEpoch, entry.operationId)}>只读核对恢复前操作</button> : null}
                     </p>
                   ))}
                 </div>
@@ -124,6 +134,20 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
       ))}
     </section>
   );
+}
+
+function restoreReviewDescription(outcome: NotionRestoreReview["outcome"]): string {
+  const descriptions = {
+    matches_intent: "远端当前值与原意图一致",
+    different: "远端当前值与原意图不同，须人工比较",
+    not_observed: "未观察到远端页面；不能据此证明旧请求未成功",
+    incomplete: "远端查询不完整，继续隔离",
+    ambiguous: "找到多个候选页面，继续隔离",
+    identity_mismatch: "工作区、数据源或页面身份不符，继续隔离",
+    unreadable: "远端读取失败，继续隔离",
+    trashed: "远端页面在回收站，继续隔离",
+  } satisfies Record<NotionRestoreReview["outcome"], string>;
+  return descriptions[outcome];
 }
 
 function reviewDescription(progress: NotionStructureProgress): string {

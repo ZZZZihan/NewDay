@@ -37,6 +37,15 @@ export type NotionReadStatus = {
   }>;
 };
 
+export type NotionTaskFields = { title: string; date: [string, string] | null; completed: boolean };
+export type NotionRestoreReview = {
+  checkedAt: string;
+  outcome: "matches_intent" | "different" | "not_observed" | "incomplete" | "ambiguous" |
+    "identity_mismatch" | "unreadable" | "trashed";
+  remotePageId: string | null;
+  remoteFields: NotionTaskFields | null;
+};
+
 export type NotionSyncStatus = {
   workspaceId: string;
   connectionStatus: NotionReadStatus["connectionStatus"];
@@ -48,7 +57,8 @@ export type NotionSyncStatus = {
   restoreQuarantine: Array<{ sourceEpoch: string; operationId: string; localTaskId: string;
     originalStatus: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
     attemptCount: number; lastAttemptAt: string | null; dataSourceId: string;
-    remotePageId: string | null; clientKey: string; quarantinedAt: string }>;
+    remotePageId: string | null; clientKey: string; quarantinedAt: string;
+    desired?: NotionTaskFields; baseline?: NotionTaskFields | null; latestReview?: NotionRestoreReview }>;
   conflicts: Array<{ id: string; localTaskId: string; field: "title" | "date" | "completed";
     baseline: unknown; local: unknown; remote: unknown; winner: "notion"; recordedAt: string }>;
 };
@@ -76,5 +86,7 @@ export const notionApi = {
   pause: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/pause`, {}),
   reconcile: (workspaceId: string, operationId: string) => post<NotionSyncStatus>(
     `/connections/${encodeURIComponent(workspaceId)}/sync/operations/${encodeURIComponent(operationId)}/reconcile`, {}),
+  reconcileRestore: (workspaceId: string, sourceEpoch: string, operationId: string) => post<NotionSyncStatus>(
+    `/connections/${encodeURIComponent(workspaceId)}/sync/restore/${encodeURIComponent(operationId)}/reconcile`, { sourceEpoch }),
   resume: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/resume`, {}),
 };

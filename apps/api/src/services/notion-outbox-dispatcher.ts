@@ -6,9 +6,11 @@ import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday
 import { taskSchema } from "@newday/core/domain/planner-model";
 import {
   notionTaskFieldsSchema,
+  notionClientKey,
   type NotionFieldConflict,
   type NotionConnection,
   type NotionOutboxOperation,
+  type NotionRestoreReview,
   type NotionTaskFields,
   type NotionTaskMapping,
 } from "@newday/core/contracts/notion-sync";
@@ -67,6 +69,70 @@ export class NotionOutboxDispatcher {
     const result = this.tail.then(() => this.reconcileOne(operationId));
     this.tail = result.catch(() => undefined);
     return result;
+  }
+
+  /** Observe an operation from a replaced dataset. This never calls a page
+   * write or changes either the restored outbox or the workspace fence. */
+  reconcileRestore(sourceEpoch: string, operationId: string): Promise<NotionRestoreReview> {
+    const result = this.tail.then(() => this.reconcileRestoreOne(sourceEpoch, operationId));
+    this.tail = result.catch(() => undefined);
+    return result;
+  }
+
+  private async reconcileRestoreOne(sourceEpoch: string, operationId: string): Promise<NotionRestoreReview> {
+    const entry = (await this.store.listNotionRestoreQuarantine()).find((item) =>
+      item.operation.datasetEpoch === sourceEpoch && item.operation.operationId === operationId);
+    if (!entry) throw new Error("Notion restore quarantine operation changed");
+    const connection = await this.store.getNotionConnection(entry.operation.workspaceId);
+    if (!connection || connection.status !== "paused_after_restore") {
+      throw new Error("Notion restore workspace is not paused");
+    }
+    const datasetEpoch = (await this.store.getPlanningVersion()).datasetEpoch;
+    const { mapping, operation } = entry;
+    // Timestamp the observation before remote I/O; a slow older read must not
+    // appear newer simply because its response arrived last.
+    const checkedAt = this.now();
+    let outcome: NotionRestoreReview["outcome"] = "identity_mismatch";
+    let remotePageId: string | null = null;
+    let remoteFields: NotionTaskFields | null = null;
+    if (mapping.workspaceId === connection.workspaceId &&
+      mapping.localTaskId === operation.localTaskId &&
+      mapping.dataSourceId === connection.dataSources.tasks?.dataSourceId &&
+      mapping.clientKey === notionClientKey(connection.installationId, mapping.localTaskId)) {
+      try {
+        let page: NotionTaskPage | undefined | null;
+        if (mapping.remotePageId) {
+          page = await this.transport.readPage(connection, mapping);
+        } else {
+          const found = await this.transport.findByClientKey(connection, mapping);
+          if (!found.complete) outcome = "incomplete";
+          else if (found.pages.length > 1) outcome = "ambiguous";
+          else page = found.pages[0];
+        }
+        if (page === null || (page === undefined && outcome === "identity_mismatch")) {
+          outcome = "not_observed";
+        } else if (page) {
+          remotePageId = page.remotePageId;
+          if (page.workspaceId !== mapping.workspaceId || page.dataSourceId !== mapping.dataSourceId ||
+            !page.remotePageId || (mapping.remotePageId !== null && page.remotePageId !== mapping.remotePageId) ||
+            (mapping.remotePageId === null && page.clientKey !== mapping.clientKey) ||
+            (mapping.remotePageId !== null && page.clientKey !== null && page.clientKey !== mapping.clientKey) ||
+            page.rulePageId !== mapping.rulePageId || page.occurrenceKey !== mapping.occurrenceKey) {
+            outcome = "identity_mismatch";
+          } else {
+            remoteFields = notionTaskFieldsSchema.parse(page.fields);
+            outcome = page.inTrash ? "trashed" : sameFields(remoteFields, operation.desired) ? "matches_intent" : "different";
+          }
+        }
+      } catch {
+        outcome = "unreadable";
+        remotePageId = null;
+        remoteFields = null;
+      }
+    }
+    const review: NotionRestoreReview = { checkedAt, outcome, remotePageId, remoteFields };
+    await this.store.recordNotionRestoreReview(entry, datasetEpoch, connection, review);
+    return review;
   }
 
   private async dispatchOne(operationId: string): Promise<DispatchResult> {

@@ -20,6 +20,7 @@ import {
   notionReadNodeSchema,
   notionReadTaskContextSchema,
   notionRestoreQuarantineSchema,
+  notionRestoreReviewSchema,
   notionSyncArchiveSchema,
   emptyNotionSyncArchive,
   notionClientKey,
@@ -36,6 +37,7 @@ import {
   type NotionReadNode,
   type NotionReadTaskContext,
   type NotionRestoreQuarantine,
+  type NotionRestoreReview,
   type NotionSyncArchive,
 } from "@newday/core/contracts/notion-sync";
 
@@ -646,6 +648,39 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.many<NotionRestoreQuarantine>("SELECT payload FROM notion_restore_quarantine ORDER BY source_epoch,operation_id");
   }
 
+  /** Keep the observation only if the same restored dataset and remote
+   * identity are still fenced after the provider read. */
+  async recordNotionRestoreReview(expected: NotionRestoreQuarantine, datasetEpoch: string,
+    observedConnection: NotionConnection, value: NotionRestoreReview): Promise<void> {
+    const review = notionRestoreReviewSchema.parse(value);
+    await this.transaction(async () => {
+      if ((await this.getPlanningVersion()).datasetEpoch !== datasetEpoch) {
+        throw new Error("Notion restore audit dataset changed during read");
+      }
+      const connection = await this.getNotionConnection(expected.operation.workspaceId);
+      if (connection?.status !== "paused_after_restore" ||
+        JSON.stringify(connection) !== JSON.stringify(observedConnection)) {
+        throw new Error("Notion restore audit connection changed during read");
+      }
+      const current = this.one<NotionRestoreQuarantine>(
+        "SELECT payload FROM notion_restore_quarantine WHERE source_epoch=? AND operation_id=?",
+        expected.operation.datasetEpoch, expected.operation.operationId);
+      if (!current || current.quarantinedAt !== expected.quarantinedAt ||
+        JSON.stringify(current.operation) !== JSON.stringify(expected.operation) ||
+        JSON.stringify(current.mapping) !== JSON.stringify(expected.mapping) ||
+        JSON.stringify(current.latestReview) !== JSON.stringify(expected.latestReview)) {
+        throw new Error("Notion restore audit operation changed during read");
+      }
+      if (current.latestReview && Date.parse(current.latestReview.checkedAt) > Date.parse(review.checkedAt)) {
+        throw new Error("Notion restore audit newer observation already exists");
+      }
+      const updated = notionRestoreQuarantineSchema.parse({ ...current, latestReview: review });
+      this.database.prepare(`UPDATE notion_restore_quarantine SET payload=?
+        WHERE source_epoch=? AND operation_id=?`).run(JSON.stringify(updated),
+          expected.operation.datasetEpoch, expected.operation.operationId);
+    });
+  }
+
   async putNotionScanWatermark(value: NotionScanWatermark): Promise<void> {
     const watermark = notionScanWatermarkSchema.parse(value);
     await this.transaction(async () => {
@@ -830,6 +865,14 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       if (JSON.stringify(previous.operation) !== JSON.stringify(item.operation) ||
         JSON.stringify(previous.mapping) !== JSON.stringify(item.mapping)) {
         throw new Error("Notion restore quarantine identity collision");
+      }
+      // This table survives a backup replacement. Keep the latest observation
+      // from either side when the same quarantined send is imported again.
+      if (item.latestReview && (!previous.latestReview ||
+        Date.parse(item.latestReview.checkedAt) > Date.parse(previous.latestReview.checkedAt))) {
+        this.database.prepare(`UPDATE notion_restore_quarantine SET payload=?
+          WHERE source_epoch=? AND operation_id=?`).run(JSON.stringify({ ...previous, latestReview: item.latestReview }),
+            item.operation.datasetEpoch, item.operation.operationId);
       }
       return;
     }

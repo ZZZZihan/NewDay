@@ -23,12 +23,14 @@ export class NotionSyncService {
       retryAfterAt: connection.retryAfterAt ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
-      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt }) => ({
+      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt, latestReview }) => ({
         sourceEpoch: operation.datasetEpoch, operationId: operation.operationId,
         localTaskId: operation.localTaskId, originalStatus: operation.status,
         attemptCount: operation.attemptCount, lastAttemptAt: operation.lastAttemptAt,
         dataSourceId: mapping.dataSourceId, remotePageId: mapping.remotePageId,
         clientKey: mapping.clientKey, quarantinedAt,
+        desired: operation.desired, baseline: operation.baseline,
+        ...(latestReview ? { latestReview } : {}),
       })),
       conflicts };
   }
@@ -59,6 +61,25 @@ export class NotionSyncService {
         throw new ApiError(409, "此操作不在待核对状态");
       }
       await this.dispatcher.reconcileUnknown(operationId);
+      return this.status(workspaceId);
+    });
+  }
+
+  reconcileRestore(workspaceId: string, sourceEpoch: string, operationId: string) {
+    return this.run(async () => {
+      const entry = (await this.store.listNotionRestoreQuarantine()).find((item) =>
+        item.operation.workspaceId === workspaceId && item.operation.datasetEpoch === sourceEpoch &&
+        item.operation.operationId === operationId);
+      if (!entry || (await this.store.getNotionConnection(workspaceId))?.status !== "paused_after_restore") {
+        throw new ApiError(409, "恢复隔离操作或工作区暂停状态已变化，请刷新后核对");
+      }
+      try { await this.dispatcher.reconcileRestore(sourceEpoch, operationId); }
+      catch (error) {
+        if (error instanceof Error && error.message.startsWith("Notion restore ")) {
+          throw new ApiError(409, "恢复核对期间数据集或连接已变化，请刷新后重新核对");
+        }
+        throw error;
+      }
       return this.status(workspaceId);
     });
   }

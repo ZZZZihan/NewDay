@@ -170,6 +170,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `POST /api/notion/connections/:workspaceId/sync/drain` | `{}` | 串行尝试待发送操作，返回最新状态 |
 | `POST /api/notion/connections/:workspaceId/sync/pause` | `{}` | 对已就绪工作区持久暂停自动读取与新发送；已开始的请求仍须核对 |
 | `POST /api/notion/connections/:workspaceId/sync/operations/:operationId/reconcile` | `{}` | 对未知操作只读核对；不再次发送 |
+| `POST /api/notion/connections/:workspaceId/sync/restore/:operationId/reconcile` | `{ sourceEpoch }` | 对恢复前隔离操作只读观察远端并留存最新结果；不核销或恢复发送 |
 | `POST /api/notion/connections/:workspaceId/sync/resume` | `{}` | 手动暂停或预读失败后，待已开始的请求结算且限流截止时间已过，恢复待发送队列 |
 
 Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要求 API 服务密钥，Notion 回调仅通过随机 state 找到授权会话。浏览器回调 URL fragment 中只有一次性 ticket；页面清除 fragment 后交给本机 API。`refresh_pending` 阻止旧令牌继续供同步使用。Notion 凭据不进入规划和 Agent JSON 备份。

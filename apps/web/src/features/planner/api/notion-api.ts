@@ -22,6 +22,15 @@ export type NotionStructureProgress = {
   completedSteps: string[];
 };
 
+export type NotionRestoreStructureReview = {
+  workspaceId: string;
+  checkedAt: string;
+  outcome: "matches" | "needs_review";
+  checks: Array<{ step: string;
+    result: "matches" | "record_incomplete" | "identity_mismatch" | "schema_mismatch" | "trashed" |
+      "permission" | "rate_limited" | "unreadable" | "not_checked" }>;
+};
+
 export type NotionReadStatus = {
   workspaceId: string;
   connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
@@ -80,6 +89,8 @@ export const notionApi = {
   reconcileStructure: (workspaceId: string, step: NonNullable<NotionStructureProgress["nextStep"]>,
     attemptedAt: string) => post<NotionStructureProgress>(
     `/connections/${encodeURIComponent(workspaceId)}/structure/reconcile`, { step, attemptedAt }),
+  verifyRestoredStructure: (workspaceId: string) => post<NotionRestoreStructureReview>(
+    `/connections/${encodeURIComponent(workspaceId)}/structure/restore/verify`, {}),
   readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
   scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
   syncStatus: (workspaceId: string) => request<NotionSyncStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/sync`),

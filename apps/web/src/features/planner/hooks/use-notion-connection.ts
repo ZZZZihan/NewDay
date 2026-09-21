@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructureProgress,
-  type NotionSyncStatus } from "../api/notion-api";
+  type NotionRestoreStructureReview, type NotionSyncStatus } from "../api/notion-api";
 
 const oauthFragment = /^#notion-oauth=(ready|cancelled|error):([A-Za-z0-9_-]{43})(?::([A-Za-z0-9_-]{43}))?$/;
 
@@ -28,6 +28,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   const [structures, setStructures] = useState<Record<string, NotionStructureProgress>>({});
   const [reads, setReads] = useState<Record<string, NotionReadStatus>>({});
   const [syncs, setSyncs] = useState<Record<string, NotionSyncStatus>>({});
+  const [restoreStructureReviews, setRestoreStructureReviews] = useState<Record<string, NotionRestoreStructureReview>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const refreshRevision = useRef(0);
@@ -56,6 +57,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
       setStructures(nextStructures);
       setReads(nextReads);
       setSyncs(nextSyncs);
+      setRestoreStructureReviews({});
       onAvailabilityChanged?.(writableNotionWorkspaces(next, nextStructures, nextReads, nextSyncs)
         .map((item) => item.workspaceId));
     }
@@ -254,6 +256,23 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     finally { setBusy(false); await refresh(); }
   }
 
+  async function verifyRestoredStructure(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    setMessage("正在只读核对恢复记录和远端 Notion 结构…");
+    try {
+      const result = await notionApi.verifyRestoredStructure(workspaceId);
+      refreshRevision.current += 1;
+      setRestoreStructureReviews((current) => ({ ...current, [workspaceId]: result }));
+      setMessage(result.outcome === "matches"
+        ? "九项结构在本次读回中一致；恢复隔离仍有效，当前不能同步。"
+        : "结构记录存在差异或远端读取不完整；恢复隔离仍有效，请逐项核对。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法核对恢复后的 Notion 结构");
+      await refresh();
+    } finally { setBusy(false); }
+  }
+
   async function resume(workspaceId: string) {
     if (busy) return;
     setBusy(true);
@@ -266,6 +285,6 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     finally { setBusy(false); await refresh(); }
   }
 
-  return { status, structures, reads, syncs, message, busy, refresh, start, disconnect, retryRefresh,
-    initializeStructure, scan, drain, pause, reconcile, reconcileRestore, resume };
+  return { status, structures, reads, syncs, restoreStructureReviews, message, busy, refresh, start, disconnect,
+    retryRefresh, initializeStructure, verifyRestoredStructure, scan, drain, pause, reconcile, reconcileRestore, resume };
 }

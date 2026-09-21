@@ -124,6 +124,7 @@ test("Notion panel shows which isolated operations remain in the current outbox 
   const workspaceId = "workspace-restored";
   let latestReview: object | undefined;
   let readOnlyAudits = 0;
+  let structureReviews = 0;
   await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
     workspaceId, workspaceName: "恢复测试空间", botId: "bot-test", status: "active",
     updatedAt: "2026-09-21T00:00:00.000Z",
@@ -131,6 +132,12 @@ test("Notion panel shows which isolated operations remain in the current outbox 
   await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) =>
     route.fulfill({ json: { workspaceId, state: "paused_after_restore", nextStep: null, reviewReason: null,
       retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/restore/verify`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({});
+    structureReviews += 1;
+    return route.fulfill({ json: { workspaceId, checkedAt: "2026-09-21T00:06:00.000Z", outcome: "needs_review",
+      checks: [{ step: "root", result: "matches" }, { step: "tasks_rule", result: "schema_mismatch" }] } });
+  });
   await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null, sources: [] } }));
   const syncStatus = () => ({ workspaceId, connectionStatus: "paused_after_restore", pauseReason: null,
@@ -168,6 +175,11 @@ test("Notion panel shows which isolated operations remain in the current outbox 
   await expect(page.getByText(/位置 当前 outbox 与隔离账本/)).toBeVisible();
   await expect(page.getByText(/稳定键 newday:old-install:old-task/)).toBeVisible();
   await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
+  await page.getByRole("button", { name: "只读核对恢复结构" }).click();
+  await expect(page.getByLabel("恢复后结构只读核对结果")).toContainText("任务关联规则：字段或关联契约不一致");
+  await expect(page.getByLabel("恢复后结构只读核对结果")).toContainText("不会解除恢复隔离");
+  await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
+  expect(structureReviews).toBe(1);
   await page.getByRole("button", { name: "只读核对隔离操作" }).first().click();
   await expect(page.getByLabel("恢复隔离操作")).toContainText("远端当前值与原意图不同");
   await expect(page.getByLabel("恢复隔离操作")).toContainText("远端较新值");

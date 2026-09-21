@@ -57,6 +57,15 @@ export type NotionStructureProgress = {
   completedSteps: NotionInitializationStepName[];
 };
 
+export type NotionRestoreStructureReview = {
+  workspaceId: string;
+  checkedAt: string;
+  outcome: "matches" | "needs_review";
+  checks: Array<{ step: NotionInitializationStepName;
+    result: "matches" | "record_incomplete" | "identity_mismatch" | "schema_mismatch" | "trashed" |
+      "permission" | "rate_limited" | "unreadable" | "not_checked" }>;
+};
+
 /** One mutation per request keeps each browser/API request bounded. After an
  * ambiguous create, subsequent requests only read remote state. */
 export class NotionStructureService {
@@ -95,6 +104,115 @@ export class NotionStructureService {
    * create step. The attempt identity is checked again in recordAttempt. */
   async reconcile(workspaceId: string, step: NotionInitializationStepName, attemptedAt: string): Promise<NotionStructureProgress> {
     return this.withWorkspaceLock(workspaceId, () => this.advanceLocked(workspaceId, { step, attemptedAt }));
+  }
+
+  /** Compare the restored identities with current remote objects. This path
+   * never confirms steps, changes the connection, or releases the restore fence. */
+  async verifyRestoredStructure(workspaceId: string): Promise<NotionRestoreStructureReview> {
+    return this.withWorkspaceLock(workspaceId, async () => {
+      const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
+      const connection = await this.store.getNotionConnection(workspaceId);
+      if (!connection || connection.status !== "paused_after_restore") {
+        throw new ApiError(409, "当前工作区不处于备份恢复隔离状态");
+      }
+      const steps = await this.store.listNotionInitializationSteps(workspaceId);
+      const credential = this.vault.getCredential(workspaceId);
+      if (!credential || credential.workspace_id !== workspaceId) {
+        throw new ApiError(409, "当前工作区尚无可用授权；请重新授权后核对");
+      }
+      const checks: NotionRestoreStructureReview["checks"] = [];
+      let sharedRemoteFailure: "permission" | "rate_limited" | null = null;
+      const propertyReads = new Map<string, Promise<Record<string, StructureProperty>>>();
+      const propertiesOf = (dataSourceId: string, databaseId: string) => {
+        const key = JSON.stringify([databaseId, dataSourceId]);
+        const existing = propertyReads.get(key);
+        if (existing) return existing;
+        const pending = this.gateway.getDataSourceProperties(credential.access_token, dataSourceId, databaseId);
+        propertyReads.set(key, pending);
+        return pending;
+      };
+      const recorded = (name: NotionInitializationStepName, title: string, parentId: string | null,
+        schemaFingerprint: string, remoteId: string | null) => {
+        const step = steps.find((value) => value.step === name);
+        if (!step || step.status !== "confirmed" || !step.remoteId || !remoteId) return "record_incomplete" as const;
+        if (step.remoteId !== remoteId || step.parentId !== parentId || step.expectedTitle !== title) {
+          return "identity_mismatch" as const;
+        }
+        return step.schemaFingerprint === schemaFingerprint ? "matches" as const : "schema_mismatch" as const;
+      };
+      const read = async (step: NotionInitializationStepName,
+        local: NotionRestoreStructureReview["checks"][number]["result"],
+        remote: () => Promise<NotionRestoreStructureReview["checks"][number]["result"]>) => {
+        if (local !== "matches") { checks.push({ step, result: local }); return; }
+        if (sharedRemoteFailure) { checks.push({ step, result: "not_checked" }); return; }
+        try { checks.push({ step, result: await remote() }); }
+        catch (error) {
+          const status = error && typeof error === "object" && "status" in error ? Number(error.status) : NaN;
+          const result = status === 401 || status === 403 ? "permission"
+            : status === 429 || status === 529 ? "rate_limited" : "unreadable";
+          if (result === "permission" || result === "rate_limited") sharedRemoteFailure = result;
+          checks.push({ step, result });
+        }
+      };
+
+      const rootId = connection.rootPageId;
+      const rootTitle = `NewDay (${connection.installationId})`;
+      await read("root", recorded("root", rootTitle, null,
+        fingerprint({ kind: "workspace-page", title: rootTitle }), rootId), async () => {
+        const root = await this.gateway.getRoot(credential.access_token, rootId!);
+        if (root.inTrash) return "trashed";
+        return root.id === rootId && root.title === rootTitle && root.workspaceParent
+          ? "matches" : "identity_mismatch";
+      });
+
+      for (const name of tableOrder) {
+        const source = connection.dataSources[name];
+        const schema = tableSchemas[name];
+        const local = recorded(name, schema.title, rootId,
+          fingerprint({ kind: "data-source", name, schema: schema.expected }), source?.databaseId ?? null);
+        await read(name, !rootId || !source?.dataSourceId ? "record_incomplete" :
+          source.schemaFingerprint !== fingerprint({ kind: "data-source", name, schema: schema.expected })
+            ? "schema_mismatch" : local, async () => {
+          const database = await this.gateway.getDatabase(credential.access_token, source!.databaseId);
+          if (database.inTrash) return "trashed";
+          if (database.id !== source!.databaseId || database.title !== schema.title ||
+            database.parentPageId !== rootId || database.dataSourceIds.length !== 1 ||
+            database.dataSourceIds[0] !== source!.dataSourceId) return "identity_mismatch";
+          const properties = await propertiesOf(source!.dataSourceId, source!.databaseId);
+          const propertyIds = basePropertyIds(properties, schema.expected);
+          if (!propertyIds || Object.entries(propertyIds).some(([property, id]) => source!.propertyIds[property] !== id)) {
+            return "schema_mismatch";
+          }
+          return "matches";
+        });
+      }
+
+      for (const name of relationOrder) {
+        const relation = relations[name];
+        const source = connection.dataSources[relation.source];
+        const target = connection.dataSources[relation.target];
+        const expectedId = source?.propertyIds[relation.name] ?? null;
+        const local = !source?.dataSourceId || !target?.dataSourceId ? "record_incomplete" :
+          recorded(name, relation.name, source.dataSourceId,
+            fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), expectedId);
+        await read(name, local, async () => {
+          const property = (await propertiesOf(source!.dataSourceId, source!.databaseId))[relation.name];
+          return property?.id === expectedId && property.type === "relation" &&
+            property.relationTarget === target!.dataSourceId ? "matches" : "schema_mismatch";
+        });
+      }
+
+      const currentCredential = this.vault.getCredential(workspaceId);
+      if ((await this.store.getPlanningVersion()).datasetEpoch !== epoch ||
+        JSON.stringify(await this.store.getNotionConnection(workspaceId)) !== JSON.stringify(connection) ||
+        JSON.stringify(await this.store.listNotionInitializationSteps(workspaceId)) !== JSON.stringify(steps) ||
+        !currentCredential || currentCredential.workspace_id !== credential.workspace_id ||
+        currentCredential.bot_id !== credential.bot_id || currentCredential.access_token !== credential.access_token) {
+        throw new ApiError(409, "核对期间数据或授权发生变化；请重新读取状态后核对");
+      }
+      return { workspaceId, checkedAt: this.timestamp(),
+        outcome: checks.every((item) => item.result === "matches") ? "matches" : "needs_review", checks };
+    });
   }
 
   private async advanceLocked(workspaceId: string,
@@ -208,7 +326,7 @@ export class NotionStructureService {
         sameTitleCount += 1;
         if (database.dataSourceIds.length !== 1) { invalidSchema = true; continue; }
         const dataSourceId = database.dataSourceIds[0];
-        const properties = await this.gateway.getDataSourceProperties(token, dataSourceId);
+        const properties = await this.gateway.getDataSourceProperties(token, dataSourceId, database.id);
         const propertyIds = basePropertyIds(properties, schema.expected);
         if (propertyIds) matchingTitle.push({ id: database.id, dataSourceId, propertyIds });
         else invalidSchema = true;
@@ -232,14 +350,16 @@ export class NotionStructureService {
       fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), review);
     try {
       if (created) {
-        const existing = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
+        const existing = (await this.gateway.getDataSourceProperties(
+          token, source.dataSourceId, source.databaseId))[relation.name];
         if (existing && (existing.type !== "relation" || existing.relationTarget !== target.dataSourceId)) {
           await this.markReview(step, "schema_mismatch");
           return;
         }
         if (!existing) await this.gateway.addRelation(token, source.dataSourceId, relation.name, target.dataSourceId);
       }
-      const property = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
+      const property = (await this.gateway.getDataSourceProperties(
+        token, source.dataSourceId, source.databaseId))[relation.name];
       if (!property || property.type !== "relation" || property.relationTarget !== target.dataSourceId) {
         await this.markReview(step, "schema_mismatch");
         return;

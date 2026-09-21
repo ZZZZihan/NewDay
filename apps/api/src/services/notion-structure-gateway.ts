@@ -1,9 +1,9 @@
 import { Client, type CreateDatabaseParameters } from "@notionhq/client";
 
 export type StructureProperty = { id: string; type: string; options?: string[]; relationTarget?: string };
-export type StructurePage = { id: string; title: string; workspaceParent: boolean };
+export type StructurePage = { id: string; title: string; workspaceParent: boolean; inTrash: boolean };
 export type StructureDatabase = {
-  id: string; title: string; parentPageId: string; dataSourceIds: string[];
+  id: string; title: string; parentPageId: string; dataSourceIds: string[]; inTrash: boolean;
 };
 
 /** The only T3 adapter allowed to use an access token. No token enters the
@@ -15,7 +15,7 @@ export interface NotionStructureGateway {
   createDatabase(token: string, parentPageId: string, title: string, properties: Record<string, unknown>): Promise<string>;
   listChildDatabases(token: string, parentPageId: string): Promise<string[]>;
   getDatabase(token: string, databaseId: string): Promise<StructureDatabase>;
-  getDataSourceProperties(token: string, dataSourceId: string): Promise<Record<string, StructureProperty>>;
+  getDataSourceProperties(token: string, dataSourceId: string, databaseId: string): Promise<Record<string, StructureProperty>>;
   addRelation(token: string, dataSourceId: string, name: string, targetDataSourceId: string): Promise<void>;
 }
 
@@ -51,12 +51,16 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
 
   async getRoot(token: string, pageId: string): Promise<StructurePage> {
     const page = await this.client(token).pages.retrieve({ page_id: pageId });
-    if (!("parent" in page) || !("properties" in page)) throw new Error("Notion returned an inaccessible root page");
+    if (!("parent" in page) || !("properties" in page) || page.id !== pageId ||
+      !("in_trash" in page) || typeof page.in_trash !== "boolean") {
+      throw new Error("Notion returned an inaccessible root page");
+    }
     const properties = page.properties as Record<string, unknown>;
     const titleProperty = properties.title;
     const title = titleProperty && typeof titleProperty === "object" && "title" in titleProperty
       ? richText(titleProperty.title) : "";
-    return { id: page.id, title, workspaceParent: page.parent.type === "workspace" && page.parent.workspace === true };
+    return { id: page.id, title, workspaceParent: page.parent.type === "workspace" && page.parent.workspace === true,
+      inTrash: page.in_trash };
   }
 
   async createDatabase(token: string, parentPageId: string, title: string, properties: Record<string, unknown>): Promise<string> {
@@ -89,19 +93,27 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
 
   async getDatabase(token: string, databaseId: string): Promise<StructureDatabase> {
     const database = await this.client(token).databases.retrieve({ database_id: databaseId });
-    if (!("data_sources" in database) || !("parent" in database) || !("title" in database) ||
+    if (database.id !== databaseId || !("data_sources" in database) || !("parent" in database) ||
+      !("title" in database) || !("in_trash" in database) || typeof database.in_trash !== "boolean" ||
       database.parent.type !== "page_id") throw new Error("Notion returned an incomplete database");
     return {
       id: database.id,
       title: richText(database.title),
       parentPageId: database.parent.page_id,
       dataSourceIds: database.data_sources.map((item) => item.id),
+      inTrash: database.in_trash,
     };
   }
 
-  async getDataSourceProperties(token: string, dataSourceId: string): Promise<Record<string, StructureProperty>> {
+  async getDataSourceProperties(token: string, dataSourceId: string,
+    databaseId: string): Promise<Record<string, StructureProperty>> {
     const dataSource = await this.client(token).dataSources.retrieve({ data_source_id: dataSourceId });
-    if (!("properties" in dataSource)) throw new Error("Notion returned an incomplete data source");
+    if (dataSource.id !== dataSourceId || !("parent" in dataSource) ||
+      dataSource.parent.type !== "database_id" || dataSource.parent.database_id !== databaseId ||
+      !("properties" in dataSource) ||
+      !("in_trash" in dataSource) || dataSource.in_trash !== false) {
+      throw new Error("Notion returned an inaccessible data source");
+    }
     const result: Record<string, StructureProperty> = {};
     for (const [name, value] of Object.entries(dataSource.properties)) {
       if (!value || typeof value !== "object" || typeof value.id !== "string" || typeof value.type !== "string") continue;

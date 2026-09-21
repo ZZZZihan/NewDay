@@ -320,3 +320,29 @@ test("Worker responses are byte-bounded and credential persistence is allowliste
       error instanceof ApiError && error.statusCode === 502);
   } finally { vault.close(); }
 });
+
+test("Worker response metadata rejection cancels bodies and preserves sanitized errors", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const scenarios: Array<{ status: number; headers: Record<string, string>; cancellationFails: boolean }> = [
+    { status: 200, headers: { "content-type": "text/plain" }, cancellationFails: true },
+    { status: 200, headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) }, cancellationFails: false },
+    { status: 503, headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) }, cancellationFails: false },
+  ];
+  try {
+    for (const scenario of scenarios) {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+          if (scenario.cancellationFails) throw new Error("simulated cancellation failure");
+        },
+      }, { highWaterMark: 0 });
+      const service = new NotionOAuthService(origin, workerApiKey, vault,
+        async () => new Response(body, { status: scenario.status, headers: scenario.headers }));
+      await assert.rejects(service.start(), (error: unknown) =>
+        error instanceof ApiError && error.statusCode === 502 &&
+        error.message === "Notion 授权服务返回无效响应");
+      assert.equal(cancelled, true);
+    }
+  } finally { vault.close(); }
+});

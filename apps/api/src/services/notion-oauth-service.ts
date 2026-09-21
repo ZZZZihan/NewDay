@@ -154,14 +154,22 @@ function boundedString(value: unknown, maxLength: number): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null;
 }
 
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  try { await body.cancel(); }
+  catch { /* Preserve the original sanitized rejection. */ }
+}
+
 async function readWorkerJson(response: Response): Promise<Record<string, unknown>> {
   if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
+    await cancelBody(response.body);
     throw new ApiError(502, "Notion 授权服务返回无效响应");
   }
   const declaredLength = response.headers.get("content-length");
   if (declaredLength !== null) {
     const length = Number(declaredLength);
     if (!Number.isInteger(length) || length < 0 || length > MAX_WORKER_RESPONSE_BYTES) {
+      await cancelBody(response.body);
       throw new ApiError(502, "Notion 授权服务返回无效响应");
     }
   }
@@ -175,13 +183,16 @@ async function readWorkerJson(response: Response): Promise<Record<string, unknow
       if (done) break;
       byteLength += value.byteLength;
       if (byteLength > MAX_WORKER_RESPONSE_BYTES) {
-        await reader.cancel();
+        try { await reader.cancel(); }
+        catch { /* Preserve the original sanitized rejection. */ }
         throw new ApiError(502, "Notion 授权服务返回无效响应");
       }
       chunks.push(value);
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    try { await reader.cancel(); }
+    catch { /* The stream is already errored or closed. */ }
     throw new ApiError(502, "Notion 授权服务返回无效响应");
   }
   const bytes = new Uint8Array(byteLength);

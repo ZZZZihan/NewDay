@@ -28,12 +28,14 @@ describe("OAuth Worker handoff", () => {
 
   it("rejects oversized JSON before consuming a declared body", async () => {
     let bodyRead = false;
+    let cancelled = false;
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         bodyRead = true;
         controller.enqueue(new TextEncoder().encode("{}"));
         controller.close();
       },
+      cancel() { cancelled = true; },
     }, { highWaterMark: 0 });
     const response = await handleOAuthRequest(new Request("https://oauth.example.test/oauth/start", {
       method: "POST",
@@ -46,6 +48,7 @@ describe("OAuth Worker handoff", () => {
     }), workerEnv);
     expect(response.status).toBe(400);
     expect(bodyRead).toBe(false);
+    expect(cancelled).toBe(true);
   });
 
   it("rejects chunked JSON as soon as it exceeds the byte limit", async () => {
@@ -157,6 +160,39 @@ describe("OAuth Worker handoff", () => {
       expect(cancelled).toBe(true);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("cancels token response bodies rejected before streaming", async () => {
+    const scenarios: Array<{ status: number; headers: Record<string, string>; cancellationFails: boolean }> = [
+      { status: 400, headers: { "content-type": "application/json" }, cancellationFails: false },
+      { status: 200, headers: { "content-type": "text/plain" }, cancellationFails: true },
+      { status: 200, headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) }, cancellationFails: false },
+    ];
+    for (const scenario of scenarios) {
+      const verifier = "r".repeat(43);
+      const started = await post("/oauth/start", { challenge: await hash(verifier) });
+      const { state } = await started.json() as { state: string };
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+          if (scenario.cancellationFails) throw new Error("simulated cancellation failure");
+        },
+      }, { highWaterMark: 0 });
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(body, {
+        status: scenario.status,
+        headers: scenario.headers,
+      })));
+      try {
+        const callback = await handleOAuthRequest(new Request(
+          `https://oauth.example.test/oauth/callback?state=${state}&code=test-code`), workerEnv);
+        expect(callback.headers.get("location")).toBe(
+          `http://127.0.0.1:3000/#notion-oauth=error:${state}`);
+        expect(cancelled).toBe(true);
+      } finally {
+        vi.unstubAllGlobals();
+      }
     }
   });
 

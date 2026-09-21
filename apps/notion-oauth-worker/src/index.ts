@@ -185,13 +185,25 @@ async function readSmallJson(request: Request): Promise<Record<string, unknown> 
   return readJsonObject(request.body, request.headers, MAX_JSON_BODY_BYTES);
 }
 
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  try { await body.cancel(); }
+  catch { /* Preserve the original sanitized rejection. */ }
+}
+
 async function readJsonObject(body: ReadableStream<Uint8Array> | null, headers: Headers,
   maxBytes: number): Promise<Record<string, unknown> | null> {
-  if (!/^application\/json(?:\s*;|$)/i.test(headers.get("content-type") ?? "")) return null;
+  if (!/^application\/json(?:\s*;|$)/i.test(headers.get("content-type") ?? "")) {
+    await cancelBody(body);
+    return null;
+  }
   const declaredLength = headers.get("content-length");
   if (declaredLength !== null) {
     const length = Number(declaredLength);
-    if (!Number.isInteger(length) || length < 0 || length > maxBytes) return null;
+    if (!Number.isInteger(length) || length < 0 || length > maxBytes) {
+      await cancelBody(body);
+      return null;
+    }
   }
   if (!body) return null;
 
@@ -204,12 +216,15 @@ async function readJsonObject(body: ReadableStream<Uint8Array> | null, headers: 
       if (done) break;
       byteLength += value.byteLength;
       if (byteLength > maxBytes) {
-        await reader.cancel();
+        try { await reader.cancel(); }
+        catch { /* Preserve the original sanitized rejection. */ }
         return null;
       }
       chunks.push(value);
     }
   } catch {
+    try { await reader.cancel(); }
+    catch { /* The stream is already errored or closed. */ }
     return null;
   }
 
@@ -304,7 +319,10 @@ async function exchangeToken(env: Env, payload: Record<string, string>): Promise
       body: JSON.stringify(payload),
     });
   } catch { return null; }
-  if (!response.ok) return null;
+  if (!response.ok) {
+    await cancelBody(response.body);
+    return null;
+  }
   const token = await readJsonObject(response.body, response.headers, MAX_UPSTREAM_JSON_BYTES);
   return token ? parseCredential(token) : null;
 }

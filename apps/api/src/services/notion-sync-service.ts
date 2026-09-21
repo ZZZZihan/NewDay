@@ -23,12 +23,13 @@ export class NotionSyncService {
       retryAfterAt: connection.retryAfterAt ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
-      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt, latestReview }) => ({
+      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt, source, latestReview }) => ({
         sourceEpoch: operation.datasetEpoch, operationId: operation.operationId,
         localTaskId: operation.localTaskId, originalStatus: operation.status,
         attemptCount: operation.attemptCount, lastAttemptAt: operation.lastAttemptAt,
         dataSourceId: mapping.dataSourceId, remotePageId: mapping.remotePageId,
         clientKey: mapping.clientKey, quarantinedAt,
+        ...(source ? { source } : {}),
         desired: operation.desired, baseline: operation.baseline,
         ...(latestReview ? { latestReview } : {}),
       })),

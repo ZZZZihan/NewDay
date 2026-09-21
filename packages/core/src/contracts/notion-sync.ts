@@ -223,6 +223,9 @@ export const notionRestoreQuarantineSchema = z.object({
   operation: notionOutboxOperationSchema,
   mapping: notionTaskMappingSchema,
   quarantinedAt: z.string().datetime({ offset: true }),
+  // Older v6 backups have no source marker. The marker describes where the
+  // quarantined record came from, not whether a remote write was confirmed.
+  source: z.enum(["pre_restore_send", "imported_backup"]).optional(),
   // A read-only observation, never permission to replay or release the fence.
   latestReview: notionRestoreReviewSchema.optional(),
 }).strict().superRefine((entry, context) => {

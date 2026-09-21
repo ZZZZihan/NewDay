@@ -811,7 +811,15 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         "SELECT payload FROM notion_outbox WHERE status IN ('sending','unknown','quarantined')")) {
         const mapping = await this.getNotionTaskMapping(operation.localTaskId);
         if (!mapping) throw new Error("Notion unresolved send lost its mapping");
-        this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
+        const prior = this.one<NotionRestoreQuarantine>(
+          "SELECT payload FROM notion_restore_quarantine WHERE source_epoch=? AND operation_id=?",
+          operation.datasetEpoch, operation.operationId);
+        if (prior) {
+          this.assertSameNotionRestoreIntent(prior, operation, mapping);
+        } else {
+          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt,
+            ...(operation.status === "quarantined" ? {} : { source: "pre_restore_send" as const }) });
+        }
       }
       await this.rotateDatasetEpoch();
       this.database.exec("DELETE FROM notion_read_task_contexts; DELETE FROM notion_read_nodes; DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_rule_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
@@ -852,6 +860,22 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       }
       for (const context of sync.readTaskContexts ?? []) await this.putNotionReadTaskContext(context);
       for (const item of sync.restoreQuarantine) this.putNotionRestoreQuarantine(item);
+      // Imported unfinished operations are quarantined in the current outbox,
+      // but must also retain their original intent and mapping for read-only
+      // review. Existing audit records from a previous restore take priority.
+      for (const operation of sync.outbox) {
+        if (["confirmed", "superseded"].includes(operation.status)) continue;
+        const mapping = await this.getNotionTaskMapping(operation.localTaskId);
+        if (!mapping) throw new Error("Notion imported operation lost its mapping");
+        const prior = this.one<NotionRestoreQuarantine>(
+          "SELECT payload FROM notion_restore_quarantine WHERE source_epoch=? AND operation_id=?",
+          operation.datasetEpoch, operation.operationId);
+        if (prior) {
+          this.assertSameNotionRestoreIntent(prior, operation, mapping);
+        } else {
+          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt, source: "imported_backup" });
+        }
+      }
       await this.recordMutation("dataset_replaced");
     });
   }
@@ -879,6 +903,25 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     this.database.prepare(`INSERT INTO notion_restore_quarantine(source_epoch,operation_id,workspace_id,local_task_id,payload)
       VALUES(?,?,?,?,?)`).run(item.operation.datasetEpoch, item.operation.operationId,
         item.operation.workspaceId, item.operation.localTaskId, JSON.stringify(item));
+  }
+
+  private assertSameNotionRestoreIntent(prior: NotionRestoreQuarantine,
+    operation: NotionOutboxOperation, mapping: NotionTaskMapping): void {
+    if (prior.operation.workspaceId !== operation.workspaceId ||
+      prior.operation.localTaskId !== operation.localTaskId ||
+      prior.operation.createdAt !== operation.createdAt ||
+      JSON.stringify(prior.operation.desired) !== JSON.stringify(operation.desired) ||
+      JSON.stringify(prior.operation.baseline) !== JSON.stringify(operation.baseline) ||
+      prior.mapping.workspaceId !== mapping.workspaceId ||
+      prior.mapping.localTaskId !== mapping.localTaskId ||
+      prior.mapping.dataSourceId !== mapping.dataSourceId ||
+      prior.mapping.clientKey !== mapping.clientKey ||
+      prior.mapping.rulePageId !== mapping.rulePageId ||
+      prior.mapping.occurrenceKey !== mapping.occurrenceKey ||
+      (prior.mapping.remotePageId !== null && mapping.remotePageId !== null &&
+        prior.mapping.remotePageId !== mapping.remotePageId)) {
+      throw new Error("Notion imported operation conflicts with restore quarantine identity");
+    }
   }
 
   /** This marker survives replacement so old browser data cannot overwrite a restore. */

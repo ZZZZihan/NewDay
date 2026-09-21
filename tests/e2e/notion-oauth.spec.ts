@@ -120,7 +120,7 @@ test("Notion panel exposes a manual pause and explicit resume", async ({ page })
   await expect(page.getByText("写回：可发送")).toBeVisible();
 });
 
-test("Notion panel shows pre-restore sends that are absent from the current outbox", async ({ page }) => {
+test("Notion panel distinguishes pre-restore and imported operations and keeps writes fenced", async ({ page }) => {
   const workspaceId = "workspace-restored";
   let latestReview: object | undefined;
   let readOnlyAudits = 0;
@@ -134,13 +134,21 @@ test("Notion panel shows pre-restore sends that are absent from the current outb
   await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null, sources: [] } }));
   const syncStatus = () => ({ workspaceId, connectionStatus: "paused_after_restore", pauseReason: null,
-      retryAfterAt: null, operations: [], restoreQuarantine: [{
+      retryAfterAt: null, operations: [{ operationId: "imported-operation", localTaskId: "imported-task",
+        status: "quarantined", attemptCount: 0, createdAt: "2026-09-21T00:00:00.000Z", lastAttemptAt: null }],
+      restoreQuarantine: [{
         sourceEpoch: "old-epoch", operationId: "old-operation", localTaskId: "old-task",
         originalStatus: "sending", attemptCount: 1, lastAttemptAt: "2026-09-21T00:00:00.000Z",
         dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:old-task",
-        quarantinedAt: "2026-09-21T00:05:00.000Z",
+        quarantinedAt: "2026-09-21T00:05:00.000Z", source: "pre_restore_send",
         desired: { title: "原意图", date: ["2026-09-21", "2026-09-21"], completed: false },
         ...(latestReview ? { latestReview } : {}),
+      }, {
+        sourceEpoch: "imported-epoch", operationId: "imported-operation", localTaskId: "imported-task",
+        originalStatus: "pending", attemptCount: 0, lastAttemptAt: null,
+        dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:imported-task",
+        quarantinedAt: "2026-09-21T00:05:00.000Z", source: "imported_backup",
+        desired: { title: "备份意图", date: ["2026-09-22", "2026-09-22"], completed: false },
       }], conflicts: [] });
   await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
     route.fulfill({ json: syncStatus() }));
@@ -153,13 +161,16 @@ test("Notion panel shows pre-restore sends that are absent from the current outb
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Notion 连接" }).click();
-  await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
+  await expect(page.getByText("恢复隔离 2 项")).toBeVisible();
   await expect(page.getByText(/操作 old-operation · 原状态 sending/)).toBeVisible();
+  await expect(page.getByText(/来源 恢复前本机未结算操作/)).toBeVisible();
+  await expect(page.getByText(/操作 imported-operation · 原状态 pending/)).toBeVisible();
+  await expect(page.getByText(/来源 导入备份的待处理操作/)).toBeVisible();
   await expect(page.getByText(/稳定键 newday:old-install:old-task/)).toBeVisible();
   await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
-  await page.getByRole("button", { name: "只读核对恢复前操作" }).click();
-  await expect(page.getByLabel("恢复前隔离操作")).toContainText("远端当前值与原意图不同");
-  await expect(page.getByLabel("恢复前隔离操作")).toContainText("远端较新值");
+  await page.getByRole("button", { name: "只读核对隔离操作" }).first().click();
+  await expect(page.getByLabel("恢复隔离操作")).toContainText("远端当前值与原意图不同");
+  await expect(page.getByLabel("恢复隔离操作")).toContainText("远端较新值");
   await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
   expect(readOnlyAudits).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -194,7 +205,7 @@ test("manual drain stays hidden until the API confirms an empty restore quaranti
     dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:old-task",
     quarantinedAt: "2026-09-21T00:05:00.000Z" }];
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
+  await expect(page.getByText("恢复隔离 1 项")).toBeVisible();
   await expect(page.getByText("写回：恢复隔离待核对，不能发送")).toBeVisible();
   await expect(page.getByRole("button", { name: "发送待同步任务" })).toHaveCount(0);
 

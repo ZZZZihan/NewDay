@@ -1435,47 +1435,6 @@ html:fullscreen .planner-frame {
   line-height: 1.65;
 }
 
-@media (min-width: 1100px) {
-  html:fullscreen .planner-frame {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  }
-
-  html:fullscreen .time-panel {
-    padding: clamp(2rem, 3vw, 5rem);
-  }
-
-  html:fullscreen .time-panel__clock {
-    margin-top: clamp(4rem, 14dvh, 11rem);
-    text-align: center;
-  }
-
-  html:fullscreen .hero-clock {
-    justify-content: center;
-    font-size: clamp(8rem, 12.5vw, 20rem);
-  }
-
-  html:fullscreen .hero-date {
-    max-width: none;
-    margin-top: 1rem;
-    font-size: clamp(1rem, 1.2vw, 1.4rem);
-  }
-
-  html:fullscreen .time-panel__bottom {
-    width: 100%;
-    max-width: 32rem;
-    align-self: center;
-    margin-top: clamp(2.5rem, 6dvh, 5rem);
-  }
-
-  html:fullscreen .schedule-panel {
-    padding: clamp(2.5rem, 4vw, 6rem);
-  }
-
-  html:fullscreen .schedule-heading {
-    max-width: none;
-  }
-}
-
 @media (max-width: 900px) {
   .day-page {
     padding-top: max(1rem, env(safe-area-inset-top));

@@ -25,3 +25,74 @@
 **主要通过率的分母固定为计划的 120 条 heldout trial**：最终得到合约有效终态的 trial 数 / 120，目标至少 95%；429、超时、无响应、未完成澄清和格式修复失败都留在分母内，不能用补跑替换或从分母剔除。另分别报告：首轮有模型输出时的原始结构有效数 / 首轮有输出数、provider 故障数 / 120、宿主拦截数 / 有模型输出数、可用终态数 / 120；分母为零时填“不适用”，并列出每类原始计数。人评事实支持和建议效用仅对确实有可评输出的 trial 打分，无输出记“不适用”且不计作成功。未拦截的无效任务或越权写必须为 0，硬约束例需人工复核，并写出相对规则基线的可解释优势或不足。
 
 达到预先冻结的调用/费用上限、提供方或模型版本漂移、意外接触真实用户数据、任何业务写入、证据缺失或无法解释的重复请求时立即停止，保留已经发生的试验和未知项。停机后的补跑须记录原因和新批次边界，不能覆盖原始记录。最终报告列出分母、每个场景三次结果、失败/中断与费用未知数；只有完整证据和人工评审后才给 G3 结论。G4 的人工基线与七天实际使用另按 COL-24 记录。
+
+## 受控执行命令
+
+`pnpm agent:evaluation:trial` 每次只接受一个场景和一个重复序号，不能批量启动 120 条 trial。命令不会接收任务数据库、proposal apply 服务或任何个人数据路径；它从冻结 fixture 通过生产快照转换器建立脱离业务存储的 snapshot，并只把 snapshot、已审核的澄清回答及一次可选格式修复交给模型。
+
+执行前先创建一份放在私有目录中的 `newday-agent-evaluation-freeze` JSON。冻结文件必须包含并锁定：明确的批准人、时间和批准引用，候选 Git SHA，manifest/corpus 哈希，完整 heldout 场景 ID，provider HTTPS origin 和 base URL 哈希，精确模型 ID，reasoning effort、token/timeout 上限，prompt/schema 版本及哈希，真实出站调用总上限，费用上限或未知费用逐命令复核策略，全部停机条件，人工评分人，以及仓库外的私有证据绝对路径。`approved` 只有在调用范围、费用和停止条件得到明确授权后才可设为 `true`；生成文件本身不是调用许可。
+
+运行零调用核对：
+
+```bash
+FREEZE=/absolute/private/path/freeze.json
+EVIDENCE=/absolute/private/path/evidence
+FREEZE_SHA=$(shasum -a 256 "$FREEZE" | awk '{print $1}')
+
+pnpm agent:evaluation:trial -- \
+  --freeze "$FREEZE" \
+  --acknowledge-freeze-sha256 "$FREEZE_SHA" \
+  --reviewed-ledger-sha256 new \
+  --evidence "$EVIDENCE" \
+  --scenario H-N01 \
+  --repetition 1 \
+  --verify-only
+```
+
+真正执行时去掉 `--verify-only`。首次执行使用 `--reviewed-ledger-sha256 new`；以后每条命令先人工查看当前 `ledger.json` 和上一条报告，再把 `shasum -a 256 "$EVIDENCE/ledger.json"` 的精确结果传入。即使费用定价未知，也不能跳过该逐命令复核。环境文件只提供已冻结的 provider 配置和 API key；报告不记录 key、Authorization header 或原始错误响应。
+
+```bash
+LEDGER_SHA=$(shasum -a 256 "$EVIDENCE/ledger.json" | awk '{print $1}')
+
+pnpm agent:evaluation:trial -- \
+  --freeze "$FREEZE" \
+  --acknowledge-freeze-sha256 "$FREEZE_SHA" \
+  --reviewed-ledger-sha256 "$LEDGER_SHA" \
+  --evidence "$EVIDENCE" \
+  --scenario H-N01 \
+  --repetition 1
+```
+
+执行器在出站前先以原子写入方式保留调用名额；进程崩溃后该名额仍计入上限，不能用重跑覆盖。证据目录和 `trials/` 为 `0700`，ledger、freeze、mapping 和 trial 报告应为 `0600`。同一 trial ID 一旦存在便拒绝重新开始；只有状态精确为 `operator_action_required` 的 H-P05 报告才能携带单独 mapping 文件续跑。报告 SHA 记录在 ledger 中，续跑时报告、ledger、snapshot、freeze 与调用序列必须全部一致。若证据写入失败且停机状态也无法落盘，执行器保留 `.evaluation.lock`；只有核对进程已终止、保守计入可能发生的调用并修复 ledger 后，才能人工移除该锁。
+
+H-P05 mapping 文件格式如下；`questionId` 和 `questionText` 必须逐字来自第一轮报告，`semanticKey` 和 `answer` 必须逐字来自冻结 fixture，评审人必须与 freeze 一致：
+
+```json
+{
+  "format": "newday-agent-evaluation-clarification-mapping",
+  "version": 1,
+  "trialId": "heldout:H-P05:1",
+  "semanticKey": "priority",
+  "questionId": "第一轮报告里的精确 ID",
+  "questionText": "第一轮报告里的精确问题原文",
+  "answer": "不知道",
+  "reviewer": "冻结的 primaryReviewer",
+  "rationale": "说明该问题为何唯一地询问两个整理任务的优先顺序",
+  "decidedAt": "2026-09-21T00:00:00.000Z"
+}
+```
+
+续跑仍是一条单独命令，并继续使用同一 trial 的三次总调用上限：
+
+```bash
+pnpm agent:evaluation:trial -- \
+  --freeze "$FREEZE" \
+  --acknowledge-freeze-sha256 "$FREEZE_SHA" \
+  --reviewed-ledger-sha256 "$LEDGER_SHA" \
+  --evidence "$EVIDENCE" \
+  --scenario H-P05 \
+  --repetition 1 \
+  --mapping /absolute/private/path/H-P05-1-mapping.json
+```
+
+执行器只记录宿主验证结果、provider 返回的模型标识、usage、调用数、延迟、原始结构化输出和错误终态。所有人工评分字段保持 `pending/null`；命令成功也只证明该条合成 trial 留下了受控证据，不能单独声称 G3 通过。

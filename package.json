@@ -21,6 +21,7 @@
     "test:agent:integration": "tsx --test tests/agent/integration/*.test.ts",
     "agent:smoke": "tsx tooling/agent-live-smoke.ts",
     "agent:evaluation:preflight": "tsx tooling/agent-evaluation-preflight.ts",
+    "agent:evaluation:trial": "tsx tooling/agent-evaluation-trial.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "notion:acceptance:proxy": "node tooling/notion-live-fault-proxy.mjs",

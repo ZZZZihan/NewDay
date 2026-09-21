@@ -144,7 +144,7 @@ test("a failed remote preflight pauses sending but keeps later linked local chan
 
     await planner.commands([{ type: "updateTaskDetails", input: {
       taskId: "offline-one", title: "离线改名", now: at,
-    } }], "test-client");
+    } }], "test-client", { expectedTask: (await store.getTask("offline-one"))! });
     await store.putNotionScanWatermark({ workspaceId, dataSourceId: "tasks-source",
       completedThrough: at, lastAttemptAt: at, lastSuccessAt: at,
       lastError: "local", lastErrorAt: at });
@@ -202,7 +202,7 @@ test("linked edits and undo enqueue the final intent without a stale remote writ
     const edit = await planner.commands([
       { type: "updateTaskDetails", input: { taskId, title: "改名", now: at } },
       { type: "rescheduleTask", input: { taskId, startDate: "2026-09-22", endDate: "2026-09-22", now: at } },
-    ], "test-client");
+    ], "test-client", { expectedTask: (await store.getTask(taskId))! });
     assert.ok(edit.receipt);
     assert.equal((await store.listNotionOutboxOperations()).filter((item) => item.status === "pending").length, 1);
     await planner.undo(edit.receipt!, "test-client");

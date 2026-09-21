@@ -397,7 +397,7 @@ export function DayPlanner() {
 
       {editingTask && (!editingTask.seriesId || editingSeries) ? (
         <TaskEditor
-          key={`${editingTask.id}:${editingSeries?.updatedAt ?? "one-off"}`}
+          key={`${editingTask.id}:${editingSeries?.id ?? "one-off"}`}
           task={editingTask}
           linked={editingTaskLinked}
           series={editingSeries}

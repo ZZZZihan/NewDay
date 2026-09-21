@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DayPlan, RecurrenceSeries } from "@newday/core/domain/planner-model";
-import { plannerApi } from "../api/planner-api";
+import type { DayPlan } from "@newday/core/domain/planner-model";
+import { plannerApi, type RecurrenceSeriesSnapshot } from "../api/planner-api";
 import { usePlannerData, usePlannerSeries } from "./use-planner-data";
 
 vi.mock("../api/planner-api", () => ({ plannerApi: { day: vi.fn(), series: vi.fn() } }));
@@ -64,11 +64,12 @@ describe("planner API data lifecycle", () => {
   });
 
   it("never exposes an old series as editable after a task revision changes or its request fails", async () => {
-    const oldSeries: RecurrenceSeries = {
+    const oldSeries: RecurrenceSeriesSnapshot = {
       id: "series", logicalSeriesId: "series", title: "重复任务", notes: "",
       startDate: "2026-09-08", effectiveEndDate: null, pattern: { kind: "daily" },
       end: { kind: "never" }, excludedDates: [],
       createdAt: "2026-09-08T01:00:00.000Z", updatedAt: "2026-09-08T01:00:00.000Z",
+      tailRevision: "a".repeat(64),
     };
     let failReload!: (error: Error) => void;
     vi.mocked(plannerApi.series).mockResolvedValueOnce(oldSeries)
@@ -88,13 +89,14 @@ describe("planner API data lifecycle", () => {
   });
 
   it("checks series again after a day refresh while keeping the editor mounted and mutations blocked", async () => {
-    const oldSeries: RecurrenceSeries = {
+    const oldSeries: RecurrenceSeriesSnapshot = {
       id: "series", logicalSeriesId: "series", title: "重复任务", notes: "",
       startDate: "2026-09-08", effectiveEndDate: null, pattern: { kind: "daily" },
       end: { kind: "never" }, excludedDates: [],
       createdAt: "2026-09-08T01:00:00.000Z", updatedAt: "2026-09-08T01:00:00.000Z",
+      tailRevision: "a".repeat(64),
     };
-    let finishReload!: (series: RecurrenceSeries) => void;
+    let finishReload!: (series: RecurrenceSeriesSnapshot) => void;
     vi.mocked(plannerApi.series).mockResolvedValueOnce(oldSeries)
       .mockImplementationOnce(() => new Promise((resolve) => { finishReload = resolve; }));
     const { result, rerender } = renderHook(
@@ -105,7 +107,11 @@ describe("planner API data lifecycle", () => {
     rerender({ day: plan("2026-09-08") });
     expect(result.current.series).toEqual(oldSeries);
     expect(result.current.loading).toBe(true);
-    const stoppedSeries: RecurrenceSeries = { ...oldSeries, end: { kind: "onDate", date: "2026-09-08" } };
+    const stoppedSeries: RecurrenceSeriesSnapshot = {
+      ...oldSeries,
+      end: { kind: "onDate", date: "2026-09-08" },
+      tailRevision: "b".repeat(64),
+    };
     await act(async () => { finishReload(stoppedSeries); });
     expect(result.current.loading).toBe(false);
     expect(result.current.series?.end).toEqual(stoppedSeries.end);

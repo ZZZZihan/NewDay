@@ -3,7 +3,12 @@ import { parsePlannerBackup } from "@newday/core/contracts/planner-backup";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
 import { shiftDate, todayKey } from "@newday/core/domain/planner-date";
 import { hasTaskDates, type DatedTask, type RecurrenceSeries, type Task } from "@newday/core/domain/planner-model";
-import { plannerApi, type CommandReceipt } from "../api/planner-api";
+import {
+  plannerApi,
+  type CommandPreconditions,
+  type CommandReceipt,
+  type RecurrenceSeriesSnapshot,
+} from "../api/planner-api";
 import type { TaskEditorValues } from "../components/task-editor";
 import { downloadBackup } from "../lib/backup-download";
 import { useLegacyMigration } from "../migration/use-legacy-migration";
@@ -38,8 +43,11 @@ export function useDayPlanner() {
   const [dateOverride, setDateOverride] = useState<string | null>(null);
   const selectedDate = dateOverride ?? (hydrated && planningClock.ready ? today : null);
   const [quickTitle, setQuickTitle] = useState("");
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [externalEditingTask, setExternalEditingTask] = useState<Task | null>(null);
+  const [editingTaskId, setEditingTaskIdState] = useState<string | null>(null);
+  // Polls may replace task props while this editor is open. Keep the opening
+  // snapshot stable so the API can reject a save based on stale input.
+  const [editingTaskSnapshot, setEditingTaskSnapshot] = useState<Task | null>(null);
+  const [editingSeriesSnapshot, setEditingSeriesSnapshot] = useState<RecurrenceSeriesSnapshot | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
@@ -58,12 +66,48 @@ export function useDayPlanner() {
       : [];
     return new Map(items.map(({ task }) => [task.id, task]));
   }, [dayPlan]);
-  const editingTask = editingTaskId ? taskById.get(editingTaskId) ??
-    (externalEditingTask?.id === editingTaskId && hasTaskDates(externalEditingTask) ? externalEditingTask : undefined) : undefined;
+  const editingTask = editingTaskId && editingTaskSnapshot?.id === editingTaskId && hasTaskDates(editingTaskSnapshot)
+    ? editingTaskSnapshot
+    : editingTaskId ? taskById.get(editingTaskId) : undefined;
+
+  function setEditingTaskId(taskId: string | null) {
+    setEditingTaskIdState(taskId);
+    setEditingSeriesSnapshot(null);
+    if (taskId === null) {
+      setEditingTaskSnapshot(null);
+      return;
+    }
+    const task = taskById.get(taskId);
+    setEditingTaskSnapshot(task && hasTaskDates(task) ? task : null);
+  }
   const editingSeriesId = editingTask?.seriesId;
-  const { series: editingSeries, error: seriesError, loading: seriesLoading, retry: retrySeries } = usePlannerSeries(
+  const {
+    series: liveEditingSeries,
+    error: liveSeriesError,
+    loading: liveSeriesLoading,
+    retry: retrySeries,
+  } = usePlannerSeries(
     editingSeriesId, editingTask?.updatedAt, dayPlan,
   );
+  useEffect(() => {
+    if (!editingSeriesId) {
+      setEditingSeriesSnapshot(null);
+      return;
+    }
+    if (liveEditingSeries?.id !== editingSeriesId) return;
+    setEditingSeriesSnapshot((current) =>
+      current?.id === editingSeriesId ? current : liveEditingSeries);
+  }, [editingSeriesId, liveEditingSeries]);
+  const editingSeries: RecurrenceSeriesSnapshot | undefined = editingSeriesId
+    ? editingSeriesSnapshot?.id === editingSeriesId
+      ? editingSeriesSnapshot ?? undefined
+      : liveEditingSeries?.id === editingSeriesId ? liveEditingSeries : undefined
+    : undefined;
+  // Revalidation may discover that a series changed or disappeared. Once the
+  // editor has an opening snapshot, keep the form usable so its save reaches
+  // the transactional conflict check instead of losing the local draft.
+  const seriesLoading = Boolean(editingSeriesId && !editingSeries && liveSeriesLoading);
+  const seriesError = editingSeries ? null : liveSeriesError;
   const editingSeriesActionsAllowed = Boolean(
     editingTask &&
       editingSeries &&
@@ -93,20 +137,25 @@ export function useDayPlanner() {
     setNotice((current) => ({ id, message, receipt: current?.receipt }));
   }
 
-  async function runCommand(command: PlannerCommand, successMessage: string) {
-    return runCommands([command], successMessage);
+  async function runCommand(
+    command: PlannerCommand,
+    successMessage: string,
+    preconditions: CommandPreconditions = {},
+  ) {
+    return runCommands([command], successMessage, preconditions);
   }
 
   async function runCommands(
     commands: readonly PlannerCommand[],
     successMessage: string,
+    preconditions: CommandPreconditions = {},
   ) {
     if (mutationPending.current || migration.checking) return false;
     mutationPending.current = true;
     setIsSaving(true);
 
     try {
-      const { receipt } = await plannerApi.commands(commands);
+      const { receipt } = await plannerApi.commands(commands, preconditions);
       await refresh();
       showNotice(successMessage, receipt ?? undefined);
       return true;
@@ -188,7 +237,7 @@ export function useDayPlanner() {
   async function handleSchedule(task: Task, date: string) {
     return runCommand({ type: "rescheduleTask", input: {
       taskId: task.id, startDate: date, endDate: date, now: new Date().toISOString(),
-    } }, "任务已安排日期，等待 Notion 同步");
+    } }, "任务已安排日期，等待 Notion 同步", { expectedTask: task });
   }
 
   async function handleFocus(task: Task, focused: boolean) {
@@ -240,7 +289,6 @@ export function useDayPlanner() {
       await plannerApi.restore(source);
       await refresh();
       setEditingTaskId(null);
-      setExternalEditingTask(null);
       showNotice(`导入完成：${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料`);
       return true;
     } catch (error) {
@@ -254,7 +302,7 @@ export function useDayPlanner() {
 
   async function saveEditor(
     task: DatedTask,
-    series: RecurrenceSeries | undefined,
+    series: RecurrenceSeriesSnapshot | undefined,
     values: TaskEditorValues,
   ) {
     if (series && (seriesLoading || seriesError)) return false;
@@ -276,6 +324,7 @@ export function useDayPlanner() {
           },
         },
         "重复任务已保存",
+        { expectedTask: task },
       );
       return saved;
     }
@@ -305,6 +354,7 @@ export function useDayPlanner() {
           },
         },
         "后续重复已更新",
+        { expectedSeries: series, expectedSeriesTailRevision: series.tailRevision },
       );
     }
 
@@ -333,19 +383,19 @@ export function useDayPlanner() {
     }
 
     if (commands.length === 0) return true;
-    return runCommands(commands, "任务已保存");
+    return runCommands(commands, "任务已保存", { expectedTask: task });
   }
 
   function moveDate(offset: number) {
     if (!selectedDate) return;
     setDateOverride(shiftDate(selectedDate, offset));
     setEditingTaskId(null);
-    setExternalEditingTask(null);
   }
 
   function openExternalTask(task: Task) {
-    setExternalEditingTask(task);
-    setEditingTaskId(task.id);
+    setEditingSeriesSnapshot(null);
+    setEditingTaskSnapshot(task);
+    setEditingTaskIdState(task.id);
   }
 
   async function deleteEditingTask() {

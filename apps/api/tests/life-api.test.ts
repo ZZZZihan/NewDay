@@ -62,3 +62,44 @@ test("invalid life references reject before changing the workspace", async (cont
   const invalid = await app.inject({ method: "POST", url: "/api/life/inbox", payload: { title: "  ", notes: "" } });
   assert.equal(invalid.statusCode, 400);
 });
+
+test("resource updates require a current opening snapshot and preserve the winning write", async (context) => {
+  let time = Date.parse("2026-09-20T08:00:00.000Z");
+  const app = createApp({ databasePath: ":memory:", clock: () => time });
+  context.after(() => app.close());
+  const post = (path: string, payload: object = {}) => app.inject({ method: "POST", url: `/api/life${path}`, payload });
+  const input = { folderId: null, kind: "note", title: "打开时标题", content: "打开时内容", source: "" } as const;
+  const created = (await post("/resources", input)).json();
+  assert.equal((await post(`/resources/${created.id}/update`, { ...input, title: "缺少前置条件" })).statusCode, 400);
+
+  time += 1_000;
+  const winning = await post(`/resources/${created.id}/update`, {
+    ...input,
+    title: "服务器新标题",
+    content: "服务器新内容",
+    expectedResource: created,
+  });
+  assert.equal(winning.statusCode, 200);
+
+  time += 1_000;
+  const stale = await post(`/resources/${created.id}/update`, {
+    ...input,
+    title: "旧编辑器草稿",
+    content: "旧编辑器内容",
+    expectedResource: created,
+  });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().message, "资料已在其他页面或后台更新；请关闭编辑窗口后重新打开");
+  const current = (await app.inject("/api/life/workspace")).json().resources[0];
+  assert.equal(current.title, "服务器新标题");
+  assert.equal(current.content, "服务器新内容");
+
+  time += 1_000;
+  const fresh = await post(`/resources/${created.id}/update`, {
+    ...input,
+    title: "基于新快照保存",
+    content: "新快照内容",
+    expectedResource: current,
+  });
+  assert.equal(fresh.statusCode, 200);
+});

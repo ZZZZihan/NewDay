@@ -15,7 +15,12 @@ export function registerPlannerRoutes(app: FastifyInstance, planner: PlannerServ
 
   app.post("/api/planner/commands", async (request) => {
     const clientId = clientIdSchema.parse(request.headers["x-newday-client"]);
-    return planner.commands(commandRequestSchema.parse(request.body).commands, clientId);
+    const body = commandRequestSchema.parse(request.body);
+    return planner.commands(body.commands, clientId, {
+      expectedTask: body.expectedTask,
+      expectedSeries: body.expectedSeries,
+      expectedSeriesTailRevision: body.expectedSeriesTailRevision,
+    });
   });
 
   app.post("/api/planner/undo", async (request) => {

@@ -25,8 +25,8 @@ export const lifeApi = {
     return post<LifeFolder>(`/folders/${encodeURIComponent(id)}/rename`, { name });
   },
   createResource(input: ResourceInput) { return post<LifeResource>("/resources", input); },
-  updateResource(id: string, input: ResourceInput) {
-    return post<LifeResource>(`/resources/${encodeURIComponent(id)}/update`, input);
+  updateResource(id: string, input: ResourceInput, expectedResource: LifeResource) {
+    return post<LifeResource>(`/resources/${encodeURIComponent(id)}/update`, { ...input, expectedResource });
   },
   link(resourceId: string, taskId: string) {
     return post<{ ok: true }>(`/resources/${encodeURIComponent(resourceId)}/links`, { taskId });

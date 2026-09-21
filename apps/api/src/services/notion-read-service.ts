@@ -91,8 +91,10 @@ export class NotionReadService {
     let projects: ProjectRow[] = [];
     for (const table of tables) {
       const sourceId = connection.dataSources[table]!.dataSourceId;
-      const startAt = this.timestamp();
-      await this.setWatermark(workspaceId, sourceId, { lastAttemptAt: startAt });
+      const attemptAt = await this.store.beginNotionScanAttempt(workspaceId, sourceId, this.timestamp());
+      // Sample after this scan's earlier tables have committed so their own
+      // rule/task materialization cannot invalidate the Tasks response.
+      const taskVersion = table === "tasks" ? await this.store.getPlanningVersion() : null;
       try {
         const rows = await this.gateway.scan(token, connection, table);
         const expectedKind = { areas: "area", projects: "project", rules: "rule", tasks: "task" }[table];
@@ -105,6 +107,9 @@ export class NotionReadService {
           : table === "rules" ? await this.checkMissingRules(token, existingRules, distinct) : [];
         await this.store.transaction(async () => {
           await this.assertCurrent(connection, credential.revision, epoch);
+          if (!await this.store.isNotionScanAttemptCurrent(workspaceId, sourceId, attemptAt)) {
+            throw new ApiError(409, "Notion 扫描结果已过期；已有更新的扫描请求");
+          }
           if (table === "areas") {
             areas = distinct as AreaRow[];
             await this.applyNodes(connection, table, areas.map((row) => ({
@@ -138,6 +143,11 @@ export class NotionReadService {
             const pendingWrite = (await this.store.listNotionOutboxOperations()).some((operation) =>
               operation.workspaceId === workspaceId && ["pending", "sending", "unknown", "quarantined"].includes(operation.status));
             if (pendingWrite) throw new ApiError(409, "Notion 扫描期间有新的待发送操作；先完成写回再重试读取");
+            const currentVersion = await this.store.getPlanningVersion();
+            if (!taskVersion || currentVersion.datasetEpoch !== taskVersion.datasetEpoch ||
+              currentVersion.plannerRevision !== taskVersion.plannerRevision) {
+              throw new ApiError(409, "Notion 授权或本地数据在扫描期间改变，请重新扫描");
+            }
             const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
             const apply = async () => {
               const changed = await this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects);
@@ -155,13 +165,15 @@ export class NotionReadService {
             }
           }
           await this.assertCurrent(connection, credential.revision, epoch);
-          await this.setWatermark(workspaceId, sourceId, {
-            completedThrough: startAt, lastSuccessAt: this.timestamp(), lastError: null, lastErrorAt: null,
-          });
+          if (!await this.store.updateCurrentNotionScanAttempt(workspaceId, sourceId, attemptAt, {
+            completedThrough: attemptAt, lastSuccessAt: this.timestamp(), lastError: null, lastErrorAt: null,
+          })) throw new ApiError(409, "Notion 扫描结果已过期；已有更新的扫描请求");
         });
       } catch (error) {
         const category = error instanceof NotionReadFailure ? error.category : error instanceof ApiError ? "local" : "local";
-        await this.setWatermark(workspaceId, sourceId, { lastError: category, lastErrorAt: this.timestamp() });
+        await this.store.updateCurrentNotionScanAttempt(workspaceId, sourceId, attemptAt, {
+          lastError: category, lastErrorAt: this.timestamp(),
+        });
         throw error;
       }
     }
@@ -339,17 +351,6 @@ export class NotionReadService {
       !this.vault.matchesCredentialRevision(connection.workspaceId, credentialRevision)) {
       throw new ApiError(409, "Notion 授权或本地数据在扫描期间改变，请重新扫描");
     }
-  }
-
-  private async setWatermark(workspaceId: string, dataSourceId: string, patch: Partial<NotionScanWatermark>): Promise<void> {
-    await this.store.transaction(async () => {
-      const old = (await this.store.listNotionScanWatermarks()).find((item) =>
-        item.workspaceId === workspaceId && item.dataSourceId === dataSourceId);
-      await this.store.putNotionScanWatermark({ workspaceId, dataSourceId,
-        completedThrough: old?.completedThrough ?? null, lastAttemptAt: old?.lastAttemptAt ?? null,
-        lastSuccessAt: old?.lastSuccessAt ?? null, lastError: old?.lastError ?? null,
-        lastErrorAt: old?.lastErrorAt ?? null, ...patch });
-    });
   }
 
   private async withLock<T>(workspaceId: string, action: () => Promise<T>): Promise<T> {

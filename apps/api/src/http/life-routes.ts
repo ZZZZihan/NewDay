@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { lifeResourceSchema } from "@newday/core/domain/life-model";
 import { localDateSchema } from "@newday/core/domain/planner-model";
 import type { LifeService } from "../services/life-service.js";
 
@@ -11,6 +12,7 @@ const folderId = id.nullable();
 const folderName = z.string().trim().min(1).max(80);
 const kind = z.enum(["note", "link"]);
 const resourceInput = z.strictObject({ folderId, kind, title, content: z.string().max(10_000), source: z.string().max(1_000) });
+const resourceUpdateInput = resourceInput.extend({ expectedResource: lifeResourceSchema });
 
 export function registerLifeRoutes(app: FastifyInstance, life: LifeService) {
   app.get("/api/life/workspace", () => life.workspace());
@@ -26,8 +28,10 @@ export function registerLifeRoutes(app: FastifyInstance, life: LifeService) {
   app.post("/api/life/folders/:id/rename", (request) => life.renameFolder(params.parse(request.params).id,
     z.strictObject({ name: folderName }).parse(request.body).name));
   app.post("/api/life/resources", (request) => life.createResource(resourceInput.parse(request.body)));
-  app.post("/api/life/resources/:id/update", (request) => life.updateResource(params.parse(request.params).id,
-    resourceInput.parse(request.body)));
+  app.post("/api/life/resources/:id/update", (request) => {
+    const { expectedResource, ...input } = resourceUpdateInput.parse(request.body);
+    return life.updateResource(params.parse(request.params).id, input, expectedResource);
+  });
   app.post("/api/life/resources/:id/links", (request) => life.link(params.parse(request.params).id,
     z.strictObject({ taskId: id }).parse(request.body).taskId));
   app.post("/api/life/resources/:id/links/:taskId/remove", (request) => {

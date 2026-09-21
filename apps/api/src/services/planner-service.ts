@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ZodError } from "zod";
 import { shiftDate } from "@newday/core/domain/planner-date";
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
@@ -7,7 +8,14 @@ import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@
 import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerCommand } from "@newday/core/application/planner-command";
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
 import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
-import type { Task } from "@newday/core/domain/planner-model";
+import {
+  focusRecordSchema,
+  recurrenceSeriesSchema,
+  taskSchema,
+  type RecurrenceSeries,
+  type Task,
+} from "@newday/core/domain/planner-model";
+import { resourceTaskLinkSchema } from "@newday/core/domain/life-model";
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
@@ -16,6 +24,18 @@ import { ensureLocalRecurrenceOccurrences } from "./local-recurrence-service.js"
 
 export type WireUndoReceipt = { token: string };
 type PendingUndo = { receipt: UndoReceipt; token: string; clientId: string; expiresAt: number };
+type CommandPreconditions = {
+  expectedTask?: Task;
+  expectedSeries?: RecurrenceSeries;
+  expectedSeriesTailRevision?: string;
+};
+
+const TASK_EDIT_COMMANDS = new Set<PlannerCommand["type"]>([
+  "updateTask",
+  "updateTaskDetails",
+  "rescheduleTask",
+  "createRecurrenceSeriesFromTask",
+]);
 
 /** Serializes whole application operations, including undo publication after
  * transactions, so different HTTP requests cannot interleave on one connection. */
@@ -50,11 +70,65 @@ export class PlannerService {
   }
 
   series(id: string) {
-    return this.run(async () => (await this.store.getRecurrenceSeries(id)) ?? null);
+    return this.run(async () => {
+      const series = await this.store.getRecurrenceSeries(id);
+      if (!series) return null;
+      return { ...series, tailRevision: await this.recurrenceTailRevision(series) };
+    });
   }
 
-  commands(commands: readonly PlannerCommand[], clientId: string) {
+  commands(
+    commands: readonly PlannerCommand[],
+    clientId: string,
+    { expectedTask, expectedSeries, expectedSeriesTailRevision }: CommandPreconditions = {},
+  ) {
     return this.run(async () => {
+      const editedTaskIds = new Set(commands.flatMap((command) =>
+        TASK_EDIT_COMMANDS.has(command.type) && "taskId" in command.input
+          ? [command.input.taskId]
+          : []));
+      if (editedTaskIds.size > 0) {
+        if (!expectedTask) {
+          for (const taskId of editedTaskIds) {
+            if (await this.store.getTask(taskId)) {
+              throw new ApiError(409, "任务编辑基线缺失；请刷新后重试");
+            }
+          }
+        } else {
+          if (editedTaskIds.size !== 1 || !editedTaskIds.has(expectedTask.id)) {
+            throw new ApiError(409, "任务编辑基线与修改目标不一致；请刷新后重试");
+          }
+          const current = await this.store.getTask(expectedTask.id);
+          if (!current || !isDeepStrictEqual(taskSchema.parse(current), taskSchema.parse(expectedTask))) {
+            throw new ApiError(409, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+          }
+        }
+      }
+      const editedSeriesIds = new Set(commands.flatMap((command) =>
+        command.type === "updateRecurrenceSeries" ? [command.input.seriesId] : []));
+      if (editedSeriesIds.size > 0) {
+        if (expectedSeries || expectedSeriesTailRevision) {
+          if (!expectedSeries || !expectedSeriesTailRevision) {
+            throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
+          }
+          if (editedSeriesIds.size !== 1 || !editedSeriesIds.has(expectedSeries.id)) {
+            throw new ApiError(409, "重复规则编辑基线与修改目标不一致；请刷新后重试");
+          }
+          const current = await this.store.getRecurrenceSeries(expectedSeries.id);
+          if (!current || !isDeepStrictEqual(
+            recurrenceSeriesSchema.parse(current),
+            recurrenceSeriesSchema.parse(expectedSeries),
+          ) || await this.recurrenceTailRevision(current) !== expectedSeriesTailRevision) {
+            throw new ApiError(409, "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+          }
+        } else {
+          for (const seriesId of editedSeriesIds) {
+            if (await this.store.getRecurrenceSeries(seriesId)) {
+              throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
+            }
+          }
+        }
+      }
       const today = await this.configuredToday();
       const at = new Date(this.clock()).toISOString();
       const normalized = today ? commands.map((command) => {
@@ -245,6 +319,37 @@ export class PlannerService {
     const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
     if (!preferences?.timeZone) return undefined;
     return { date: dateInTimeZone(this.clock(), preferences.timeZone), timeZone: preferences.timeZone };
+  }
+
+  /** Hash the complete tail write set used by updateRecurrenceSeries. This is
+   * intentionally broader than the source segment: the command may replace
+   * successor segments and rewrite or delete their occurrences, focus records,
+   * and resource links. Callers compare this inside the same outer transaction
+   * that performs the command. */
+  private async recurrenceTailRevision(source: RecurrenceSeries) {
+    const chain = await this.store.listRecurrenceSeriesByLogicalSeriesId(source.logicalSeriesId);
+    const sourceIndex = chain.findIndex((series) => series.id === source.id);
+    if (sourceIndex < 0) {
+      throw new Error(`重复系列谱系不完整：${source.logicalSeriesId}`);
+    }
+    const series = chain.slice(sourceIndex).map((item) => recurrenceSeriesSchema.parse(item));
+    const tasks = (await Promise.all(series.map((item) => this.store.listTasksBySeries(item.id))))
+      .flat()
+      .map((task) => taskSchema.parse(task))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const focusRecords = (await Promise.all(tasks.map((task) => this.store.listFocusRecordsForTask(task.id))))
+      .flat()
+      .map((record) => focusRecordSchema.parse(record))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const resourceTaskLinks = this.store.listResourceTaskLinksForTask
+      ? (await Promise.all(tasks.map((task) => this.store.listResourceTaskLinksForTask!(task.id))))
+        .flat()
+        .map((link) => resourceTaskLinkSchema.parse(link))
+        .sort((left, right) => `${left.taskId}\0${left.resourceId}`.localeCompare(`${right.taskId}\0${right.resourceId}`))
+      : [];
+    return createHash("sha256")
+      .update(JSON.stringify({ series, tasks, focusRecords, resourceTaskLinks }))
+      .digest("hex");
   }
 
   /** A failed preflight read has sent no write. The workspace remains paused

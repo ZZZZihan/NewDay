@@ -15,6 +15,7 @@ const completionSchema = z.object({
 
 export type OpenAICompatibleModelOptions = {
   apiKey: string; modelId: string; baseUrl?: string; maxOutputTokens?: number; fetch?: typeof globalThis.fetch;
+  requestProfile?: "openai-structured" | "deepseek-json";
   allowHttpOrigin?: string;
   reasoningEffort?: "none" | "low" | "medium" | "high";
 };
@@ -69,6 +70,7 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
   readonly modelId: string;
   private readonly endpoint: string;
   private readonly maxCompletionTokens: number;
+  private readonly requestProfile: NonNullable<OpenAICompatibleModelOptions["requestProfile"]>;
   private readonly reasoningEffort: OpenAICompatibleModelOptions["reasoningEffort"];
   private readonly fetch: typeof globalThis.fetch;
 
@@ -93,6 +95,9 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
       throw new Error("Invalid planning provider output token limit");
     if (options.reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(options.reasoningEffort))
       throw new Error("Invalid planning provider reasoning effort");
+    if (options.requestProfile !== undefined && !["openai-structured", "deepseek-json"].includes(options.requestProfile))
+      throw new Error("Invalid planning provider request profile");
+    this.requestProfile = options.requestProfile ?? "openai-structured";
     this.reasoningEffort = options.reasoningEffort;
     this.fetch = options.fetch ?? globalThis.fetch;
   }
@@ -100,13 +105,22 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
   async generate(snapshot: PlanningSnapshot, answers: PlanningAnswers, signal: AbortSignal, repair?: ModelRepair): Promise<ModelGeneration> {
     let response: Response;
     try {
+      const common = {
+        model: this.modelId,
+        messages: planningMessages(snapshot, answers, repair),
+        ...(this.reasoningEffort === undefined ? {} : { reasoning_effort: this.reasoningEffort }),
+      };
+      const body = this.requestProfile === "deepseek-json"
+        ? { ...common, response_format: { type: "json_object" }, max_tokens: this.maxCompletionTokens }
+        : {
+            ...common,
+            response_format: { type: "json_schema", json_schema: { name: "newday_planning_v1", strict: true, schema: planningProviderJsonSchema } },
+            max_completion_tokens: this.maxCompletionTokens, n: 1, store: false,
+          };
       response = await this.fetch(this.endpoint, {
         method: "POST", signal, redirect: "error",
         headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ model: this.modelId, messages: planningMessages(snapshot, answers, repair),
-          response_format: { type: "json_schema", json_schema: { name: "newday_planning_v1", strict: true, schema: planningProviderJsonSchema } },
-          max_completion_tokens: this.maxCompletionTokens, n: 1, store: false,
-          ...(this.reasoningEffort === undefined ? {} : { reasoning_effort: this.reasoningEffort }) }),
+        body: JSON.stringify(body),
       });
     } catch {
       signal.throwIfAborted();

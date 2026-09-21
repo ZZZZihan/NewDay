@@ -87,6 +87,7 @@ export const evaluationFreezeSchema = z.strictObject({
     allowHttpOrigin: providerOrigin.nullable(),
     baseUrlSha256: sha256Schema,
     modelId: nonEmpty,
+    requestProfile: z.enum(["openai-structured", "deepseek-json"]),
     reasoningEffort: z.enum(["provider_default", "none", "low", "medium", "high"]),
     maxOutputTokens: z.number().int().min(100).max(4_000),
     timeoutMs: z.number().int().min(1).max(30_000),
@@ -299,6 +300,7 @@ export type ProviderConfiguration = {
   allowHttpOrigin?: string;
   modelId?: string;
   apiKey?: string;
+  requestProfile: string;
   reasoningEffort?: string;
   maxOutputTokens: number;
   timeoutMs: number;
@@ -313,6 +315,7 @@ export function verifyProviderConfiguration(freeze: EvaluationFreeze, configurat
     ["provider base URL hash", sha256(configuration.baseUrl), freeze.provider.baseUrlSha256],
     ["provider HTTP origin exception", configuration.allowHttpOrigin ?? null, freeze.provider.allowHttpOrigin],
     ["model ID", configuration.modelId, freeze.provider.modelId],
+    ["request profile", configuration.requestProfile, freeze.provider.requestProfile],
     ["reasoning effort", configuration.reasoningEffort ?? "provider_default", freeze.provider.reasoningEffort],
     ["max output tokens", configuration.maxOutputTokens, freeze.provider.maxOutputTokens],
     ["timeout", configuration.timeoutMs, freeze.provider.timeoutMs],

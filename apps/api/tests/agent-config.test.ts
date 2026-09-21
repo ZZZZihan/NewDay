@@ -23,8 +23,15 @@ test("provider-specific transport and reasoning options remain explicit", () => 
   const defaults = loadConfig({}).agent;
   assert.equal(defaults.allowHttpOrigin, undefined);
   assert.equal(defaults.reasoningEffort, undefined);
-  const config = loadConfig({ NEWDAY_AGENT_ALLOW_HTTP_ORIGIN: "http://192.168.1.10:8080", NEWDAY_AGENT_REASONING_EFFORT: "none" });
+  assert.equal(defaults.requestProfile, "openai-structured");
+  const config = loadConfig({
+    NEWDAY_AGENT_ALLOW_HTTP_ORIGIN: "http://192.168.1.10:8080",
+    NEWDAY_AGENT_REASONING_EFFORT: "none",
+    NEWDAY_AGENT_REQUEST_PROFILE: "deepseek-json",
+  });
   assert.equal(config.agent.allowHttpOrigin, "http://192.168.1.10:8080");
   assert.equal(config.agent.reasoningEffort, "none");
+  assert.equal(config.agent.requestProfile, "deepseek-json");
   assert.throws(() => loadConfig({ NEWDAY_AGENT_REASONING_EFFORT: "unlimited" }), /REASONING_EFFORT/);
+  assert.throws(() => loadConfig({ NEWDAY_AGENT_REQUEST_PROFILE: "automatic" }), /REQUEST_PROFILE/);
 });

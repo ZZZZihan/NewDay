@@ -166,6 +166,7 @@ try {
       baseUrl: config.agent.baseUrl,
       apiKey: secret,
       modelId: config.agent.modelId!,
+      requestProfile: config.agent.requestProfile,
       allowHttpOrigin: config.agent.allowHttpOrigin,
       reasoningEffort: config.agent.reasoningEffort,
       maxOutputTokens: config.agent.maxOutputTokens,

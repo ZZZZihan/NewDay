@@ -7,7 +7,7 @@ export function createPlanningModel(config: ApiConfig["agent"]): PlanningModel |
   if (config.provider === "disabled") return undefined;
   if (config.provider === "openai-compatible") return new OpenAICompatiblePlanningModel({
     baseUrl: config.baseUrl, modelId: config.modelId!, apiKey: config.apiKey!, maxOutputTokens: config.maxOutputTokens,
-    allowHttpOrigin: config.allowHttpOrigin, reasoningEffort: config.reasoningEffort,
+    requestProfile: config.requestProfile, allowHttpOrigin: config.allowHttpOrigin, reasoningEffort: config.reasoningEffort,
   });
   // loadConfig permits this mode only with NEWDAY_TEST_RUN and an isolated
   // newday-e2e-* database. It is a transport/UI test double, not AI planning.

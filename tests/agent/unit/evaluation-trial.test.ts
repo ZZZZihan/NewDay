@@ -60,6 +60,7 @@ function freeze(overrides: Record<string, unknown> = {}): EvaluationFreeze {
       allowHttpOrigin: null,
       baseUrlSha256: sha256("https://provider.example/v1"),
       modelId: "frozen-model",
+      requestProfile: "openai-structured",
       reasoningEffort: "none",
       maxOutputTokens: 1200,
       timeoutMs: 30_000,
@@ -160,6 +161,7 @@ describe("guarded real-provider evaluation trial", () => {
       baseUrl: "https://provider.example/v1",
       modelId: "frozen-model",
       apiKey: "top-secret",
+      requestProfile: "openai-structured",
       reasoningEffort: "none",
       maxOutputTokens: 1200,
       timeoutMs: 30_000,
@@ -168,6 +170,8 @@ describe("guarded real-provider evaluation trial", () => {
     expect(() => verifyProviderConfiguration(freeze(), { ...configuration, modelId: "drifted-model" }))
       .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
     expect(() => verifyProviderConfiguration(freeze(), { ...configuration, baseUrl: "https://provider.example/other" }))
+      .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
+    expect(() => verifyProviderConfiguration(freeze(), { ...configuration, requestProfile: "deepseek-json" }))
       .toThrowError(expect.objectContaining({ code: "PROVIDER_CONFIG_DRIFT" }));
   });
 
@@ -186,6 +190,7 @@ describe("guarded real-provider evaluation trial", () => {
       allowHttpOrigin: origin,
       modelId: "frozen-model",
       apiKey: "top-secret",
+      requestProfile: "openai-structured",
       reasoningEffort: "none",
       maxOutputTokens: 1200,
       timeoutMs: 30_000,
@@ -249,6 +254,7 @@ describe("guarded real-provider evaluation trial", () => {
       apiKey,
       modelId: "frozen-model",
       baseUrl: "https://provider.example/v1",
+      requestProfile: "openai-structured",
       reasoningEffort: "none",
       fetch: fakeFetch,
     });

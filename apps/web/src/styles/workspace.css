@@ -564,6 +564,7 @@ html:fullscreen .time-panel__bottom {
   }
 
   html:fullscreen .hero-date {
+    max-width: none;
     margin-top: 1rem;
     font-size: clamp(1rem, 1.2vw, 1.4rem);
   }
@@ -571,6 +572,7 @@ html:fullscreen .time-panel__bottom {
   html:fullscreen .time-panel__bottom {
     width: 100%;
     max-width: 32rem;
+    align-self: center;
     margin-top: clamp(2.5rem, 6dvh, 5rem);
   }
 

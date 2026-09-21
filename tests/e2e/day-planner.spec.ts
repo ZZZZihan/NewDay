@@ -33,17 +33,30 @@ test("fullscreen gives the clock a wide desktop column", async ({ page }) => {
     const frame = document.querySelector(".planner-frame");
     const time = document.querySelector(".time-panel");
     const clock = document.querySelector(".hero-clock");
-    if (!frame || !time || !clock) throw new Error("Fullscreen layout is incomplete");
+    const clockSection = document.querySelector(".time-panel__clock");
+    const date = document.querySelector(".hero-date");
+    const navigation = document.querySelector(".time-panel__bottom");
+    if (!frame || !time || !clock || !clockSection || !date || !navigation) {
+      throw new Error("Fullscreen layout is incomplete");
+    }
+    const centerX = (element: Element) => {
+      const { left, width } = element.getBoundingClientRect();
+      return left + width / 2;
+    };
     return {
       frameWidth: frame.getBoundingClientRect().width,
       timeWidth: time.getBoundingClientRect().width,
       clockSize: Number.parseFloat(getComputedStyle(clock).fontSize),
+      dateOffset: Math.abs(centerX(date) - centerX(clockSection)),
+      navigationOffset: Math.abs(centerX(navigation) - centerX(clockSection)),
     };
   });
   expect(layout.frameWidth).toBeGreaterThan(1800);
   expect(layout.timeWidth / layout.frameWidth).toBeGreaterThan(0.38);
   expect(layout.timeWidth / layout.frameWidth).toBeLessThan(0.42);
   expect(layout.clockSize).toBeGreaterThan(220);
+  expect(layout.dateOffset).toBeLessThan(4);
+  expect(layout.navigationOffset).toBeLessThan(4);
 
   await page.getByRole("button", { name: "退出全屏" }).click();
   await expect(page.getByRole("button", { name: "进入全屏" })).toHaveAttribute("aria-pressed", "false");

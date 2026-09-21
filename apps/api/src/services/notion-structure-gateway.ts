@@ -109,7 +109,8 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
     databaseId: string): Promise<Record<string, StructureProperty>> {
     const dataSource = await this.client(token).dataSources.retrieve({ data_source_id: dataSourceId });
     if (dataSource.id !== dataSourceId || !("parent" in dataSource) ||
-      dataSource.parent.database_id !== databaseId || !("properties" in dataSource) ||
+      dataSource.parent.type !== "database_id" || dataSource.parent.database_id !== databaseId ||
+      !("properties" in dataSource) ||
       !("in_trash" in dataSource) || dataSource.in_trash !== false) {
       throw new Error("Notion returned an inaccessible data source");
     }

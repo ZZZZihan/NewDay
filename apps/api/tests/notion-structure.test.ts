@@ -552,12 +552,16 @@ test("an explicitly incomplete Notion root search cannot identify a unique page"
 
 test("SDK data source readback rejects a different ID or parent database", async () => {
   const gateway = new NotionSdkStructureGateway();
-  let response = { object: "data_source", id: "other-source", in_trash: false,
+  let response: { object: string; id: string; in_trash: boolean;
+    parent: { type: string; database_id: string; data_source_id?: string };
+    properties: { Name: { id: string; type: string } } } = { object: "data_source", id: "other-source", in_trash: false,
     parent: { type: "database_id", database_id: "db-1" },
     properties: { Name: { id: "name-id", type: "title" } } };
   Object.assign(gateway, { client: () => ({ dataSources: { retrieve: async () => response } }) });
   await assert.rejects(gateway.getDataSourceProperties("fake-token", "source-1", "db-1"), /inaccessible data source/);
   response = { ...response, id: "source-1", parent: { type: "database_id", database_id: "db-2" } };
+  await assert.rejects(gateway.getDataSourceProperties("fake-token", "source-1", "db-1"), /inaccessible data source/);
+  response = { ...response, parent: { type: "data_source_id", data_source_id: "other-parent", database_id: "db-1" } };
   await assert.rejects(gateway.getDataSourceProperties("fake-token", "source-1", "db-1"), /inaccessible data source/);
   response = { ...response, parent: { type: "database_id", database_id: "db-1" } };
   assert.deepEqual(await gateway.getDataSourceProperties("fake-token", "source-1", "db-1"),

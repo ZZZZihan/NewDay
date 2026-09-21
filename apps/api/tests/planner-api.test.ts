@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
-import type { Task } from "@newday/core/domain/planner-model";
+import type { RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
 import { createApp } from "../src/app.js";
 import { backup, createTask, now, task, today } from "./fixtures.js";
 
@@ -14,9 +14,19 @@ const client = "client-one";
 const headers = { "x-newday-client": client };
 const dayUrl = `/api/planner/day?selectedDate=${today}&asOfDate=${today}`;
 
-function commands(app: FastifyInstance, values: PlannerCommand[], clientId = client, expectedTask?: Task) {
+type CommandPreconditions = {
+  expectedTask?: Task;
+  expectedSeries?: RecurrenceSeries;
+};
+
+function commands(
+  app: FastifyInstance,
+  values: PlannerCommand[],
+  clientId = client,
+  preconditions: CommandPreconditions = {},
+) {
   return app.inject({ method: "POST", url: "/api/planner/commands", headers: { "x-newday-client": clientId }, payload: {
-    commands: values, ...(expectedTask ? { expectedTask } : {}),
+    commands: values, ...preconditions,
   } });
 }
 
@@ -49,11 +59,42 @@ test("a failed command batch rolls back prior writes and the API remains usable"
   assert.equal((await commands(app, [createTask()])).statusCode, 200);
 });
 
-test("task edits reject an opening snapshot made stale by another writer", async (context) => {
+test("task edits require one target-bound opening snapshot and reject stale writers", async (context) => {
   const app = createApp({ databasePath: ":memory:" });
   context.after(() => app.close());
   assert.equal((await commands(app, [createTask()])).statusCode, 200);
-  const openingSnapshot = (await app.inject(dayUrl)).json().open[0].task as Task;
+  assert.equal((await commands(app, [createTask("task-2")])).statusCode, 200);
+  const openingTasks = (await app.inject("/api/planner/backup")).json().tasks as Task[];
+  const openingSnapshot = openingTasks.find((item) => item.id === "task-1")!;
+  const otherSnapshot = openingTasks.find((item) => item.id === "task-2")!;
+
+  const missing = await commands(app, [{ type: "updateTaskDetails", input: {
+    taskId: openingSnapshot.id,
+    title: "不能无基线保存",
+    now: "2026-09-08T08:00:00.100Z",
+  } }]);
+  assert.equal(missing.statusCode, 409);
+  assert.equal(missing.json().message, "任务编辑基线缺失；请刷新后重试");
+
+  const mismatched = await commands(app, [{ type: "updateTaskDetails", input: {
+    taskId: openingSnapshot.id,
+    title: "不能借用其他任务基线",
+    now: "2026-09-08T08:00:00.200Z",
+  } }], client, { expectedTask: otherSnapshot });
+  assert.equal(mismatched.statusCode, 409);
+  assert.equal(mismatched.json().message, "任务编辑基线与修改目标不一致；请刷新后重试");
+
+  const multipleTargets = await commands(app, [
+    { type: "updateTaskDetails", input: {
+      taskId: openingSnapshot.id, title: "批量修改一", now: "2026-09-08T08:00:00.300Z",
+    } },
+    { type: "rescheduleTask", input: {
+      taskId: otherSnapshot.id, startDate: "2026-09-09", endDate: "2026-09-09",
+      now: "2026-09-08T08:00:00.300Z",
+    } },
+  ], client, { expectedTask: openingSnapshot });
+  assert.equal(multipleTargets.statusCode, 409);
+  assert.equal(multipleTargets.json().message, "任务编辑基线与修改目标不一致；请刷新后重试");
 
   assert.equal((await commands(app, [{ type: "updateTask", input: {
     taskId: openingSnapshot.id,
@@ -62,13 +103,13 @@ test("task edits reject an opening snapshot made stale by another writer", async
     startDate: "2026-09-09",
     endDate: "2026-09-09",
     now: "2026-09-08T08:00:01.000Z",
-  } }])).statusCode, 200);
+  } }], client, { expectedTask: openingSnapshot })).statusCode, 200);
 
   const stale = await commands(app, [{ type: "updateTaskDetails", input: {
     taskId: openingSnapshot.id,
     title: "旧编辑器草稿",
     now: "2026-09-08T08:00:02.000Z",
-  } }], client, openingSnapshot);
+  } }], client, { expectedTask: openingSnapshot });
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().message, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
 
@@ -81,9 +122,45 @@ test("task edits reject an opening snapshot made stale by another writer", async
     taskId: current.id,
     title: "基于新快照保存",
     now: "2026-09-08T08:00:03.000Z",
-  } }], client, current);
+  } }], client, { expectedTask: current });
   assert.equal(fresh.statusCode, 200);
-  assert.equal((await app.inject("/api/planner/backup")).json().tasks[0].title, "基于新快照保存");
+  assert.equal(((await app.inject("/api/planner/backup")).json().tasks as Task[])
+    .find((item) => item.id === current.id)?.title, "基于新快照保存");
+});
+
+test("recurrence edits require a target-bound opening series snapshot", async (context) => {
+  const app = createApp({ databasePath: ":memory:", clock: () => Date.parse(now) });
+  context.after(() => app.close());
+  for (const id of ["daily", "other"]) {
+    assert.equal((await commands(app, [{ type: "createRecurrenceSeries", input: {
+      id, title: `${id} series`, startDate: today,
+      pattern: { kind: "daily" }, end: { kind: "never" }, now,
+    } }])).statusCode, 200);
+  }
+  const openingSnapshot = (await app.inject("/api/planner/series/daily")).json() as RecurrenceSeries;
+  const otherSnapshot = (await app.inject("/api/planner/series/other")).json() as RecurrenceSeries;
+  const update = (newSeriesId: string): PlannerCommand => ({ type: "updateRecurrenceSeries", input: {
+    seriesId: openingSnapshot.id,
+    newSeriesId,
+    title: "更新后的重复规则",
+    materialization: { asOfDate: today, throughDate: "2026-10-08" },
+    now: "2026-09-08T08:00:01.000Z",
+  } });
+
+  const missing = await commands(app, [update("missing-baseline-replacement")]);
+  assert.equal(missing.statusCode, 409);
+  assert.equal(missing.json().message, "重复规则编辑基线缺失；请刷新后重试");
+
+  const mismatched = await commands(app, [update("mismatched-baseline-replacement")], client,
+    { expectedSeries: otherSnapshot });
+  assert.equal(mismatched.statusCode, 409);
+  assert.equal(mismatched.json().message, "重复规则编辑基线与修改目标不一致；请刷新后重试");
+
+  const saved = await commands(app, [update("fresh-replacement")], client,
+    { expectedSeries: openingSnapshot });
+  assert.equal(saved.statusCode, 200);
+  assert.equal((await app.inject("/api/planner/series/fresh-replacement")).json().title,
+    "更新后的重复规则");
 });
 
 test("API-backed tasks persist when the independent backend restarts", async () => {

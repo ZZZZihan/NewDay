@@ -1,11 +1,37 @@
 import type { APIRequestContext } from "@playwright/test";
+import type { RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
 import { expect, test } from "./fixtures";
 
-async function plannerCommands(request: APIRequestContext, commands: unknown[], client: string) {
+type PlannerPreconditions = {
+  expectedTask?: Task;
+  expectedSeries?: RecurrenceSeries;
+};
+
+async function plannerCommands(
+  request: APIRequestContext,
+  commands: unknown[],
+  client: string,
+  preconditions: PlannerPreconditions = {},
+) {
   const response = await request.post("/api/planner/commands", {
-    headers: { "x-newday-client": client }, data: { commands },
+    headers: { "x-newday-client": client }, data: { commands, ...preconditions },
   });
   expect(response.ok(), await response.text()).toBe(true);
+}
+
+async function taskSnapshot(request: APIRequestContext, id: string) {
+  const tasks = ((await (await request.get("/api/planner/backup")).json()).tasks) as Task[];
+  const task = tasks.find((item) => item.id === id);
+  expect(task, `Task ${id} must exist`).toBeDefined();
+  return task!;
+}
+
+async function seriesSnapshot(request: APIRequestContext, id: string) {
+  const response = await request.get(`/api/planner/series/${encodeURIComponent(id)}`);
+  expect(response.ok(), await response.text()).toBe(true);
+  const series = await response.json() as RecurrenceSeries | null;
+  expect(series, `Series ${id} must exist`).not.toBeNull();
+  return series!;
 }
 
 function shiftLocalDate(date: string, days: number) {
@@ -150,11 +176,12 @@ test("the open task table reflects backend changes on its bounded background pol
   await page.getByRole("button", { name: "任务总表", exact: true }).click();
   await expect(page.getByRole("button", { name: /后台轮询前任务/ })).toBeVisible();
 
+  const expectedTask = await taskSnapshot(request, "background-poll-task");
   await plannerCommands(request, [
     { type: "updateTaskDetails", input: { taskId: "background-poll-task", title: "后台轮询后任务", now: changedAt } },
     { type: "rescheduleTask", input: { taskId: "background-poll-task", startDate: tomorrow, endDate: tomorrow, now: changedAt } },
     { type: "completeTask", input: { taskId: "background-poll-task", completedOn: tomorrow, now: changedAt } },
-  ], "life-poll-update");
+  ], "life-poll-update", { expectedTask });
   await page.clock.runFor(30_000);
   const updated = page.getByRole("button", { name: /后台轮询后任务/ });
   await expect(updated).toBeVisible();
@@ -181,12 +208,13 @@ test("background refresh preserves a task draft and rejects its stale save", asy
   await dialog.getByLabel("标题").fill("尚未保存的本地草稿");
   await dialog.getByLabel("备注").fill("尚未保存的本地备注");
 
+  const expectedTask = await taskSnapshot(request, "background-draft-task");
   await plannerCommands(request, [
     { type: "updateTaskDetails", input: { taskId: "background-draft-task",
       title: "后台服务端新标题", notes: "服务端新备注", now: changedAt } },
     { type: "rescheduleTask", input: { taskId: "background-draft-task",
       startDate: tomorrow, endDate: tomorrow, now: changedAt } },
-  ], "life-draft-update");
+  ], "life-draft-update", { expectedTask });
   await page.clock.runFor(30_000);
   await expect(page.getByLabel("搜索任务")).toHaveValue("后台");
   await expect(page.getByLabel("任务状态")).toHaveValue("open");
@@ -203,6 +231,64 @@ test("background refresh preserves a task draft and rejects its stale save", asy
   }>).find((item) => item.id === "background-draft-task");
   expect(task).toEqual(expect.objectContaining({
     title: "后台服务端新标题", notes: "服务端新备注", startDate: tomorrow,
+  }));
+});
+
+test("background refresh preserves a recurring draft and rejects its stale series save", async ({ page, request }) => {
+  await page.clock.install();
+  await page.goto("/");
+  const today = await page.getByLabel("选择日期").inputValue();
+  const now = new Date().toISOString();
+  const changedAt = new Date(Date.parse(now) + 1_000).toISOString();
+  await plannerCommands(request, [{ type: "createTask", input: {
+    id: "background-series-task", title: "后台重复草稿", notes: "打开时备注",
+    startDate: today, endDate: today, now,
+  } }], "series-draft-seed");
+  const expectedTask = await taskSnapshot(request, "background-series-task");
+  await plannerCommands(request, [{ type: "createRecurrenceSeriesFromTask", input: {
+    taskId: expectedTask.id,
+    seriesId: "background-series",
+    pattern: { kind: "daily" },
+    end: { kind: "never" },
+    now,
+  } }], "series-draft-create", { expectedTask });
+
+  await page.reload();
+  await page.getByRole("button", { name: "编辑任务：后台重复草稿" }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑任务" });
+  await expect(dialog.getByLabel("编辑范围")).toBeVisible();
+  await dialog.getByLabel("编辑范围").selectOption("series");
+  await dialog.getByLabel("标题").fill("尚未保存的重复草稿");
+  await dialog.getByLabel("备注").fill("尚未保存的重复备注");
+
+  const expectedSeries = await seriesSnapshot(request, "background-series");
+  await plannerCommands(request, [{ type: "updateRecurrenceSeries", input: {
+    seriesId: expectedSeries.id,
+    newSeriesId: "background-series-server",
+    title: "后台服务端重复标题",
+    notes: "后台服务端重复备注",
+    pattern: { kind: "daily" },
+    end: { kind: "never" },
+    effectiveDate: today,
+    materialization: { asOfDate: today, throughDate: shiftLocalDate(today, 31) },
+    now: changedAt,
+  } }], "series-draft-update", { expectedSeries });
+
+  await page.clock.runFor(30_000);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("编辑范围")).toHaveValue("series");
+  await expect(dialog.getByLabel("标题")).toHaveValue("尚未保存的重复草稿");
+  await expect(dialog.getByLabel("备注")).toHaveValue("尚未保存的重复备注");
+
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("app-notice")).toContainText(
+    "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开",
+  );
+  await expect(dialog.getByLabel("标题")).toHaveValue("尚未保存的重复草稿");
+  await expect(dialog.getByLabel("备注")).toHaveValue("尚未保存的重复备注");
+  const current = await seriesSnapshot(request, "background-series-server");
+  expect(current).toEqual(expect.objectContaining({
+    title: "后台服务端重复标题", notes: "后台服务端重复备注",
   }));
 });
 

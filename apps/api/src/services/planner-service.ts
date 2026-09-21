@@ -8,7 +8,12 @@ import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@
 import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerCommand } from "@newday/core/application/planner-command";
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
 import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
-import { taskSchema, type Task } from "@newday/core/domain/planner-model";
+import {
+  recurrenceSeriesSchema,
+  taskSchema,
+  type RecurrenceSeries,
+  type Task,
+} from "@newday/core/domain/planner-model";
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
@@ -17,6 +22,17 @@ import { ensureLocalRecurrenceOccurrences } from "./local-recurrence-service.js"
 
 export type WireUndoReceipt = { token: string };
 type PendingUndo = { receipt: UndoReceipt; token: string; clientId: string; expiresAt: number };
+type CommandPreconditions = {
+  expectedTask?: Task;
+  expectedSeries?: RecurrenceSeries;
+};
+
+const TASK_EDIT_COMMANDS = new Set<PlannerCommand["type"]>([
+  "updateTask",
+  "updateTaskDetails",
+  "rescheduleTask",
+  "createRecurrenceSeriesFromTask",
+]);
 
 /** Serializes whole application operations, including undo publication after
  * transactions, so different HTTP requests cannot interleave on one connection. */
@@ -54,12 +70,48 @@ export class PlannerService {
     return this.run(async () => (await this.store.getRecurrenceSeries(id)) ?? null);
   }
 
-  commands(commands: readonly PlannerCommand[], clientId: string, expectedTask?: Task) {
+  commands(
+    commands: readonly PlannerCommand[],
+    clientId: string,
+    { expectedTask, expectedSeries }: CommandPreconditions = {},
+  ) {
     return this.run(async () => {
-      if (expectedTask) {
-        const current = await this.store.getTask(expectedTask.id);
-        if (!current || !isDeepStrictEqual(taskSchema.parse(current), taskSchema.parse(expectedTask))) {
-          throw new ApiError(409, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+      const editedTaskIds = new Set(commands.flatMap((command) =>
+        TASK_EDIT_COMMANDS.has(command.type) && "taskId" in command.input
+          ? [command.input.taskId]
+          : []));
+      if (editedTaskIds.size > 0) {
+        if (!expectedTask) {
+          for (const taskId of editedTaskIds) {
+            if (await this.store.getTask(taskId)) {
+              throw new ApiError(409, "任务编辑基线缺失；请刷新后重试");
+            }
+          }
+        } else {
+          if (editedTaskIds.size !== 1 || !editedTaskIds.has(expectedTask.id)) {
+            throw new ApiError(409, "任务编辑基线与修改目标不一致；请刷新后重试");
+          }
+          const current = await this.store.getTask(expectedTask.id);
+          if (!current || !isDeepStrictEqual(taskSchema.parse(current), taskSchema.parse(expectedTask))) {
+            throw new ApiError(409, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+          }
+        }
+      }
+      const editedSeriesIds = new Set(commands.flatMap((command) =>
+        command.type === "updateRecurrenceSeries" ? [command.input.seriesId] : []));
+      if (editedSeriesIds.size > 0) {
+        if (!expectedSeries) {
+          throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
+        }
+        if (editedSeriesIds.size !== 1 || !editedSeriesIds.has(expectedSeries.id)) {
+          throw new ApiError(409, "重复规则编辑基线与修改目标不一致；请刷新后重试");
+        }
+        const current = await this.store.getRecurrenceSeries(expectedSeries.id);
+        if (!current || !isDeepStrictEqual(
+          recurrenceSeriesSchema.parse(current),
+          recurrenceSeriesSchema.parse(expectedSeries),
+        )) {
+          throw new ApiError(409, "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
         }
       }
       const today = await this.configuredToday();

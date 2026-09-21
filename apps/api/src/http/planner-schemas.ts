@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { instantSchema, localDateSchema, recurrenceEndSchema, recurrencePatternSchema, taskSchema } from "@newday/core/domain/planner-model";
+import {
+  instantSchema,
+  localDateSchema,
+  recurrenceEndSchema,
+  recurrencePatternSchema,
+  recurrenceSeriesSchema,
+  taskSchema,
+} from "@newday/core/domain/planner-model";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
 
 const identifier = z.string().min(1).max(512);
@@ -75,6 +82,7 @@ const commandSchema: z.ZodType<PlannerCommand> = z.discriminatedUnion("type", [
 export const commandRequestSchema = z.strictObject({
   commands: z.array(commandSchema).min(1).max(100),
   expectedTask: taskSchema.optional(),
+  expectedSeries: recurrenceSeriesSchema.optional(),
 });
 export const dayQuerySchema = z.strictObject({ selectedDate: localDateSchema, asOfDate: localDateSchema });
 export const seriesParamsSchema = z.strictObject({ id: identifier });

@@ -209,7 +209,7 @@ test("a scan begun before a local linked edit cannot overwrite that pending writ
     const planner = new PlannerService(store, () => Date.parse(at));
     await planner.commands([{ type: "updateTaskDetails", input: {
       taskId: mapping.localTaskId, title: "本机最新标题", now: at,
-    } }], "test-client");
+    } }], "test-client", { expectedTask: (await store.getTask(mapping.localTaskId))! });
     release();
     await assert.rejects(inFlight, /新的待发送操作/);
     assert.equal((await store.getTask(mapping.localTaskId))?.title, "本机最新标题");
@@ -257,7 +257,7 @@ test("a cloned stale task scan cannot overwrite a local edit after the real disp
     const planner = new PlannerService(store, () => now);
     await planner.commands([{ type: "updateTaskDetails", input: {
       taskId: mapping.localTaskId, title: "本机已确认标题", now: new Date(now).toISOString(),
-    } }], "confirmed-race-client");
+    } }], "confirmed-race-client", { expectedTask: (await store.getTask(mapping.localTaskId))! });
     const [operation] = await store.listNotionOutboxOperations();
     assert.equal(operation?.status, "pending");
 
@@ -364,7 +364,9 @@ for (const scenario of ["complete", "reopen", "reschedule"] as const) {
         now: new Date(now).toISOString() } };
       else command = { type: "rescheduleTask", input: { taskId: mapping.localTaskId,
         startDate: "2026-09-24", endDate: "2026-09-25", now: new Date(now).toISOString() } };
-      await planner.commands([command], `confirmed-${scenario}-client`);
+      await planner.commands([command], `confirmed-${scenario}-client`, {
+        expectedTask: (await store.getTask(mapping.localTaskId))!,
+      });
       const operation = (await store.listNotionOutboxOperations()).filter((item) => item.status === "pending").at(-1);
       assert.ok(operation);
       assert.equal(await dispatcher.dispatch(operation.operationId), "confirmed");
@@ -506,7 +508,9 @@ test("a confirmed A-to-B-to-A edit still invalidates a value-identical stale tas
     for (const title of ["临时标题 B", "读书"]) {
       now += 1_000;
       await planner.commands([{ type: "updateTaskDetails", input: { taskId: mapping.localTaskId,
-        title, now: new Date(now).toISOString() } }], `aba-${title}`);
+        title, now: new Date(now).toISOString() } }], `aba-${title}`, {
+        expectedTask: (await store.getTask(mapping.localTaskId))!,
+      });
       const pending = (await store.listNotionOutboxOperations()).find((item) => item.status === "pending");
       assert.ok(pending);
       assert.equal(await dispatcher.dispatch(pending.operationId), "confirmed");
@@ -626,7 +630,9 @@ for (const writeState of ["sending", "unknown"] as const) {
 
       const planner = new PlannerService(store, () => now);
       await planner.commands([{ type: "updateTaskDetails", input: { taskId: mapping.localTaskId,
-        title: `${writeState} 本机标题`, now: new Date(now).toISOString() } }], `${writeState}-read-fence`);
+        title: `${writeState} 本机标题`, now: new Date(now).toISOString() } }], `${writeState}-read-fence`, {
+        expectedTask: (await store.getTask(mapping.localTaskId))!,
+      });
       const operation = (await store.listNotionOutboxOperations()).find((item) => item.status === "pending");
       assert.ok(operation);
       let remotePage: NotionTaskPage = { workspaceId, dataSourceId: mapping.dataSourceId,

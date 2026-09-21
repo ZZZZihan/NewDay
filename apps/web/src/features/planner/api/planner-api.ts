@@ -7,6 +7,10 @@ import type {
 import type { DayPlan, RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
 
 export type CommandReceipt = { token: string };
+export type CommandPreconditions = {
+  expectedTask?: Task;
+  expectedSeries?: RecurrenceSeries;
+};
 export type MigrationResult = {
   status: "imported" | "already-imported" | "server-not-empty";
 };
@@ -33,10 +37,10 @@ export const plannerApi = {
   series(id: string, signal?: AbortSignal) {
     return request<RecurrenceSeries | null>(`/series/${encodeURIComponent(id)}`, { signal });
   },
-  commands(commands: readonly PlannerCommand[], expectedTask?: Task) {
+  commands(commands: readonly PlannerCommand[], preconditions: CommandPreconditions = {}) {
     return post<{ receipt: CommandReceipt | null }>("/commands", {
       commands,
-      ...(expectedTask ? { expectedTask } : {}),
+      ...preconditions,
     });
   },
   undo(receipt: CommandReceipt) {

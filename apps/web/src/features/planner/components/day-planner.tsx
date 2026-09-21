@@ -27,7 +27,6 @@ export function DayPlanner() {
   const [view, setView] = useState<"today" | LifeView | "notion">("today");
   const life = useLifeWorkspace(view !== "today" && view !== "notion");
   const onNotionReturn = useCallback(() => setView("notion"), []);
-  const notion = useNotionConnection(onNotionReturn);
   const {
     now, today, timeZone, selectedDate, setDateOverride, quickTitle, setQuickTitle,
     setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
@@ -36,6 +35,11 @@ export function DayPlanner() {
     handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,
     handleImport, saveEditor, moveDate, deleteEditingTask, stopEditingRecurrence,
   } = useDayPlanner();
+  const refreshLife = life.refresh;
+  const refreshAfterNotionScan = useCallback(async () => {
+    await Promise.all([refresh(), refreshLife()]);
+  }, [refresh, refreshLife]);
+  const notion = useNotionConnection(onNotionReturn, refreshAfterNotionScan);
   if (!selectedDate) return <PlannerLoading />;
 
   const selectedIsToday = selectedDate === today;

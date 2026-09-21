@@ -26,6 +26,9 @@ import { NotionOAuthService } from "./services/notion-oauth-service.js";
 import { registerNotionOAuthRoutes } from "./http/notion-oauth-routes.js";
 import { NotionStructureService } from "./services/notion-structure-service.js";
 import { NotionSdkStructureGateway, type NotionStructureGateway } from "./services/notion-structure-gateway.js";
+import { NotionSdkReadGateway, type NotionReadGateway } from "./services/notion-read-gateway.js";
+import { NotionReadService } from "./services/notion-read-service.js";
+import { registerNotionReadRoutes } from "./http/notion-read-routes.js";
 import type { ApiConfig } from "./config.js";
 
 export type AppOptions = {
@@ -39,6 +42,7 @@ export type AppOptions = {
   notionOAuth?: ApiConfig["notionOAuth"];
   notionFetcher?: typeof fetch;
   notionStructureGateway?: NotionStructureGateway;
+  notionReadGateway?: NotionReadGateway;
 };
 
 export function createApp(options: AppOptions = {}) {
@@ -52,6 +56,9 @@ export function createApp(options: AppOptions = {}) {
     : null;
   const notionStructure = notionVault
     ? new NotionStructureService(store, notionVault, options.notionStructureGateway ?? new NotionSdkStructureGateway(), options.clock)
+    : null;
+  const notionRead = notionVault
+    ? new NotionReadService(store, notionVault, options.notionReadGateway ?? new NotionSdkReadGateway(), options.clock)
     : null;
   const planner = new PlannerService(store, options.clock);
   const life = new LifeService(store, options.clock);
@@ -93,8 +100,8 @@ export function createApp(options: AppOptions = {}) {
     return reply.code(500).send({ message: "服务器暂时无法完成请求", ...(request.url.startsWith("/api/agent/") ? { code: "INTERNAL_ERROR", status: 500, retryable: true } : {}) });
   });
 
-  app.addHook("onReady", () => runs.initialize());
-  app.addHook("onClose", async () => { await runs.close(); notionVault?.close(); store.close(); });
+  app.addHook("onReady", async () => { await runs.initialize(); notionRead?.startPolling(); });
+  app.addHook("onClose", async () => { notionRead?.close(); await runs.close(); notionVault?.close(); store.close(); });
   registerPlannerRoutes(app, planner);
   registerLifeRoutes(app, life);
   registerAgentRunRoutes(app, runs);
@@ -103,6 +110,7 @@ export function createApp(options: AppOptions = {}) {
   registerAgentPreferencesRoutes(app, preferences);
   registerAgentHistoryRoutes(app, history);
   registerNotionOAuthRoutes(app, notionOAuth, notionStructure);
+  registerNotionReadRoutes(app, notionRead);
   app.get("/api/agent/status", () => store.transaction(async () => {
     const prefs = await preferences.getPreferences();
     return { configured: runs.isConfigured(), modelId: model?.modelId ?? null, timeZone: prefs.timeZone,

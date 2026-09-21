@@ -275,6 +275,19 @@ function validatePlannerBackup(backup: PlannerBackup) {
   }
   const resourceIds = new Set(backup.resources.map((resource) => resource.id));
   const taskIds = new Set(backup.tasks.map((task) => task.id));
+  const linkedTaskIds = new Set(backup.version === 6
+    ? backup.notionSync.taskMappings.map((mapping) => mapping.localTaskId) : []);
+  for (const task of backup.tasks) {
+    if (task.startDate === null && !linkedTaskIds.has(task.id)) {
+      throw new Error(`未关联 Notion 的任务必须有计划日期：${task.id}`);
+    }
+    if (task.archived && !linkedTaskIds.has(task.id)) {
+      throw new Error(`未关联 Notion 的任务不能标记为远端归档：${task.id}`);
+    }
+    if (task.status === "completed" && task.completedAt === null && !linkedTaskIds.has(task.id)) {
+      throw new Error(`未关联 Notion 的已完成任务必须有完成时间：${task.id}`);
+    }
+  }
   for (const item of backup.inboxItems) {
     if (item.sourceResourceId !== null && !resourceIds.has(item.sourceResourceId)) {
       throw new Error(`收集箱条目引用了不存在的资料：${item.id}`);
@@ -372,13 +385,13 @@ function validatePlannerBackup(backup: PlannerBackup) {
       throw new Error(`重点记录引用了不存在的任务：${record.taskId}`);
     }
 
-    if (task.status !== "open") {
+    if (task.status !== "open" || task.archived) {
       throw new Error(`已完成任务不能设为今日重点：${task.id}`);
     }
 
-    const visible =
+    const visible = task.startDate !== null && task.endDate !== null && (
       (task.startDate <= record.date && task.endDate >= record.date) ||
-      task.endDate < record.date;
+      task.endDate < record.date);
     if (!visible) {
       throw new Error(`重点任务在对应日期不可见：${task.id}`);
     }
@@ -412,6 +425,8 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   assertUnique(sync.outbox, (value) => value.operationId, "Notion 待发送操作 ID");
   assertUnique(sync.conflicts, (value) => value.id, "Notion 冲突 ID");
   assertUnique(sync.watermarks, (value) => JSON.stringify([value.workspaceId, value.dataSourceId]), "Notion 扫描水位");
+  assertUnique(sync.readNodes ?? [], (value) => JSON.stringify([value.workspaceId, value.dataSourceId, value.remotePageId]), "Notion 主线或项目缓存");
+  assertUnique(sync.readTaskContexts ?? [], (value) => value.localTaskId, "Notion 任务归属缓存");
   assertUnique(sync.restoreQuarantine, (value) => JSON.stringify([value.operation.datasetEpoch, value.operation.operationId]), "Notion 恢复隔离操作");
 
   const connections = new Map(sync.connections.map((value) => [value.workspaceId, value]));
@@ -470,6 +485,19 @@ function validateNotionSyncBackup(backup: Extract<PlannerBackup, { version: 6 }>
   for (const watermark of sync.watermarks) {
     if (!connections.has(watermark.workspaceId)) {
       throw new Error(`Notion 水位引用了不存在的工作区：${watermark.workspaceId}`);
+    }
+  }
+  for (const node of sync.readNodes ?? []) {
+    const connection = connections.get(node.workspaceId);
+    const expected = connection?.dataSources[node.kind === "area" ? "areas" : "projects"]?.dataSourceId;
+    if (!expected || expected !== node.dataSourceId) {
+      throw new Error(`Notion 主线或项目缓存命名空间不匹配：${node.remotePageId}`);
+    }
+  }
+  for (const context of sync.readTaskContexts ?? []) {
+    const mapping = mappings.get(context.localTaskId);
+    if (!mapping || mapping.workspaceId !== context.workspaceId || mapping.remotePageId !== context.remotePageId) {
+      throw new Error(`Notion 任务归属缓存与映射不匹配：${context.localTaskId}`);
     }
   }
   for (const quarantined of sync.restoreQuarantine) {

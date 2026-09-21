@@ -2,12 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
+import type { DatedTask, RecurrenceSeries } from "@newday/core/domain/planner-model";
 import { TaskEditor } from "@/features/planner/components/task-editor";
 
 const NOW = "2026-09-01T08:00:00.000Z";
 
-const task: Task = {
+const task: DatedTask = {
   id: "task-1",
   title: "单项标题",
   notes: "单项备注",

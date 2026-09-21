@@ -102,7 +102,7 @@ export class AgentExecutionService {
     for (const id of taskIds) {
       const candidate = snapshot.candidates.find((entry) => entry.task.id === id);
       const current = await this.store.getTask(id);
-      if (!candidate || !candidate.executable || candidate.blocked || !current || current.status !== "open" || current.startDate > snapshot.date) throw new AgentApiError("PROPOSAL_NOT_EXECUTABLE", 409, "最终选择包含当前不能执行的任务，请重新生成建议");
+      if (!candidate || !candidate.executable || candidate.blocked || !current || current.status !== "open" || current.archived || current.startDate === null || current.startDate > snapshot.date) throw new AgentApiError("PROPOSAL_NOT_EXECUTABLE", 409, "最终选择包含当前不能执行的任务，请重新生成建议");
     }
   }
 
@@ -114,7 +114,7 @@ export class AgentExecutionService {
     if (!sameSet((await this.store.listFocusRecordsForDate(receipt.date)).map((record) => record.taskId), receipt.finalFocusTaskIds)) return false;
     for (const taskId of receipt.beforeFocusTaskIds) {
       const task = await this.store.getTask(taskId);
-      if (!task || task.status !== "open" || task.startDate > receipt.date) return false;
+      if (!task || task.status !== "open" || task.archived || task.startDate === null || task.startDate > receipt.date) return false;
     }
     return true;
   }

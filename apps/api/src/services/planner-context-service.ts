@@ -72,7 +72,7 @@ export class PlannerContextService {
       const version = await this.store.getPlanningVersion();
       const context = await this.readOrCreateContext(version.datasetEpoch, date, timeZone);
       const allTasks = await this.store.listAllTasks();
-      const tasks = allTasks.filter((task) => task.status === "open" && task.startDate <= date);
+      const tasks = allTasks.filter((task) => task.status === "open" && !task.archived && task.startDate !== null && task.startDate <= date);
       if (tasks.length > 100) throw tooLarge();
       const blockedIds = new Set(context.constraints.filter(({ kind }) => kind === "blocked_task").map(({ taskId }) => taskId));
       const facts: PlanningFact[] = [];

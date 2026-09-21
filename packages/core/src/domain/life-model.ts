@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { instantSchema } from "./planner-model";
-import type { Task } from "./planner-model";
+import type { NotionTaskAttribution, Task } from "./planner-model";
 
 const id = z.string().min(1).max(512);
 const title = z.string().trim().min(1).max(200);
@@ -49,4 +49,5 @@ export type LifeWorkspace = {
   resources: LifeResource[];
   resourceTaskLinks: ResourceTaskLink[];
   tasks: Task[];
+  notionByTaskId?: Record<string, NotionTaskAttribution>;
 };

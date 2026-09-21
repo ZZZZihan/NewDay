@@ -20,6 +20,10 @@ export type NotionTaskFields = z.infer<typeof notionTaskFieldsSchema>;
 export type NotionSharedField = keyof NotionTaskFields;
 
 const nonEmptyId = z.string().min(1);
+const notionPageUrl = z.string().url().refine((value) => {
+  const url = new URL(value);
+  return url.protocol === "https:" && (url.hostname === "notion.so" || url.hostname.endsWith(".notion.so"));
+}, "Notion 页面链接必须使用 notion.so 的 HTTPS 地址");
 
 export const notionDataSourceRefSchema = z.object({
   databaseId: nonEmptyId,
@@ -128,8 +132,35 @@ export const notionScanWatermarkSchema = z.object({
   completedThrough: z.string().datetime({ offset: true }).nullable(),
   lastAttemptAt: z.string().datetime({ offset: true }).nullable(),
   lastSuccessAt: z.string().datetime({ offset: true }).nullable(),
+  lastError: z.enum(["authorization", "permission", "rate_limited", "schema", "incomplete", "network", "remote", "local"]).nullable().optional(),
+  lastErrorAt: z.string().datetime({ offset: true }).nullable().optional(),
 }).strict();
 export type NotionScanWatermark = z.infer<typeof notionScanWatermarkSchema>;
+
+/** Read cache is scoped to the exact workspace and data source. It is never
+ * used to infer a remote mapping by name. */
+export const notionReadNodeSchema = z.object({
+  workspaceId: nonEmptyId,
+  dataSourceId: nonEmptyId,
+  remotePageId: nonEmptyId,
+  kind: z.enum(["area", "project"]),
+  title: z.string().trim().min(1).max(200),
+  url: notionPageUrl,
+  areaPageId: nonEmptyId.nullable(),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export type NotionReadNode = z.infer<typeof notionReadNodeSchema>;
+
+export const notionReadTaskContextSchema = z.object({
+  localTaskId: nonEmptyId,
+  workspaceId: nonEmptyId,
+  remotePageId: nonEmptyId,
+  url: notionPageUrl,
+  projectPageId: nonEmptyId.nullable(),
+  areaPageId: nonEmptyId.nullable(),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export type NotionReadTaskContext = z.infer<typeof notionReadTaskContextSchema>;
 
 export const notionRestoreQuarantineSchema = z.object({
   operation: notionOutboxOperationSchema,
@@ -146,12 +177,14 @@ export const notionSyncArchiveSchema = z.object({
   outbox: z.array(notionOutboxOperationSchema),
   conflicts: z.array(notionConflictRecordSchema),
   watermarks: z.array(notionScanWatermarkSchema),
+  readNodes: z.array(notionReadNodeSchema).optional(),
+  readTaskContexts: z.array(notionReadTaskContextSchema).optional(),
   restoreQuarantine: z.array(notionRestoreQuarantineSchema),
 }).strict();
 export type NotionSyncArchive = z.infer<typeof notionSyncArchiveSchema>;
 
 export function emptyNotionSyncArchive(): NotionSyncArchive {
-  return { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [] };
+  return { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], readNodes: [], readTaskContexts: [], restoreQuarantine: [] };
 }
 
 /** The rich-text key is stable across retries and a restored installation. */

@@ -1,7 +1,9 @@
 import {
   localDateSchema,
+  hasTaskDates,
   type DayPlan,
   type DayPlanItem,
+  type DatedTask,
   type FocusRecord,
   type LocalDate,
   type Task,
@@ -20,7 +22,7 @@ export async function getDayPlan(
   const selectedDate = localDateSchema.parse(input.selectedDate);
   const asOfDate = localDateSchema.parse(input.asOfDate);
   const isToday = selectedDate === asOfDate;
-  const tasks = await store.listAllTasks();
+  const tasks = (await store.listAllTasks()).filter((task) => !task.archived).filter(hasTaskDates);
   const scheduledTasks = tasks.filter(
     (task) => task.startDate <= selectedDate && task.endDate >= selectedDate,
   );
@@ -83,7 +85,7 @@ export async function getDayPlan(
 
 function focusedItems(
   records: FocusRecord[],
-  tasks: Task[],
+  tasks: DatedTask[],
   visibleOpenIds: Set<string>,
   asOfDate: LocalDate,
 ): DayPlanItem[] {
@@ -106,7 +108,7 @@ function focusedItems(
     });
 }
 
-function uniqueTasks(tasks: Task[]) {
+function uniqueTasks(tasks: DatedTask[]) {
   return [...new Map(tasks.map((task) => [task.id, task])).values()];
 }
 

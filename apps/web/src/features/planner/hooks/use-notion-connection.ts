@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { notionApi, type NotionStatus, type NotionStructureProgress } from "../api/notion-api";
+import { notionApi, type NotionReadStatus, type NotionStatus, type NotionStructureProgress } from "../api/notion-api";
 
 const oauthFragment = /^#notion-oauth=(ready|cancelled|error):([A-Za-z0-9_-]{43})(?::([A-Za-z0-9_-]{43}))?$/;
 
-export function useNotionConnection(onReturn: () => void) {
+export function useNotionConnection(onReturn: () => void, onScanComplete: () => Promise<void>) {
   const [status, setStatus] = useState<NotionStatus | null>(null);
   const [structures, setStructures] = useState<Record<string, NotionStructureProgress>>({});
+  const [reads, setReads] = useState<Record<string, NotionReadStatus>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -19,6 +20,11 @@ export function useNotionConnection(onReturn: () => void) {
         catch { return null; }
       }));
       setStructures(Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+      const readEntries = await Promise.all(next.connections.map(async (item) => {
+        try { return [item.workspaceId, await notionApi.readStatus(item.workspaceId)] as const; }
+        catch { return null; }
+      }));
+      setReads(Object.fromEntries(readEntries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
     }
     catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态"); }
   }, []);
@@ -41,7 +47,7 @@ export function useNotionConnection(onReturn: () => void) {
     }
     queueMicrotask(() => setBusy(true));
     void notionApi.claim(state, ticket)
-      .then(() => setMessage("已保存 Notion 授权。远端结构和任务同步尚未启用。"))
+      .then(() => setMessage("已保存 Notion 授权。完成结构初始化后可开始只读同步。"))
       .catch((error: unknown) => setMessage(error instanceof Error ? error.message : "授权结果领取失败，请重新授权"))
       .finally(() => { setBusy(false); void refresh(); });
   }, [onReturn, refresh]);
@@ -98,7 +104,7 @@ export function useNotionConnection(onReturn: () => void) {
         const result = await notionApi.advanceStructure(workspaceId);
         setStructures((current) => ({ ...current, [workspaceId]: result }));
         if (result.state === "ready") {
-          setMessage("Notion 私有根页面、四张表和关联字段已读回确认；任务同步尚未启用。");
+          setMessage("Notion 私有根页面、四张表和关联字段已读回确认；可开始只读扫描。");
           return;
         }
         if (result.state === "needs_review") {
@@ -113,5 +119,20 @@ export function useNotionConnection(onReturn: () => void) {
     } finally { setBusy(false); }
   }
 
-  return { status, structures, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure };
+  async function scan(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    setMessage("正在读取 Notion 主线、项目和一次性任务…");
+    try {
+      const result = await notionApi.scan(workspaceId);
+      setReads((current) => ({ ...current, [workspaceId]: result }));
+      await onScanComplete();
+      setMessage("只读扫描已完成；联动任务会显示在对应日期，修改仍请前往 Notion。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Notion 扫描失败；已有本地任务保持原样，可检查状态后重试");
+      await refresh();
+    } finally { setBusy(false); }
+  }
+
+  return { status, structures, reads, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure, scan };
 }

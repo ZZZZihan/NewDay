@@ -1,5 +1,5 @@
 import { formatDayShort, parseLocalDate } from "@newday/core/domain/planner-date";
-import type { DayPlanItem, Task } from "@newday/core/domain/planner-model";
+import type { DatedTask, DayPlanItem } from "@newday/core/domain/planner-model";
 
 export function formatClockTime(date: Date | null, timeZone?: string) {
   if (!date) return "--:--";
@@ -24,7 +24,7 @@ export function formatClockDate(date: Date | null, timeZone?: string) {
   }).format(date);
 }
 
-export function formatTaskRange(task: Task) {
+export function formatTaskRange(task: DatedTask) {
   if (task.startDate === task.endDate) return formatDayShort(task.startDate);
 
   const sameYear = task.startDate.slice(0, 4) === task.endDate.slice(0, 4);
@@ -50,5 +50,9 @@ export function taskMetadata(item: DayPlanItem) {
   ];
 
   if (task.seriesId) parts.push(task.isSeriesException ? "重复 · 已单独修改" : "重复");
+  if (item.notion) {
+    parts.push([item.notion.areaName, item.notion.projectName].filter(Boolean).join(" / ") || "Notion 联动");
+    parts.push("只读");
+  }
   return parts.join(" · ");
 }

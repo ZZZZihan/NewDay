@@ -73,7 +73,7 @@ describe("taskSchema", () => {
     expect(result.error?.issues[0]?.message).toBe("截止日期不能早于开始日期");
   });
 
-  it("enforces open and completed metadata while allowing legacy completedOn null", () => {
+  it("enforces open metadata and allows an unknown remote completion time", () => {
     expect(
       taskSchema.safeParse({
         ...OPEN_TASK,
@@ -86,13 +86,9 @@ describe("taskSchema", () => {
         completedOn: "2026-09-01",
       }).success,
     ).toBe(false);
-    expect(
-      taskSchema.safeParse({
-        ...OPEN_TASK,
-        status: "completed",
-        completedAt: null,
-      }).success,
-    ).toBe(false);
+    expect(taskSchema.parse({ ...OPEN_TASK, status: "completed", completedAt: null }).completedOn).toBeNull();
+    expect(taskSchema.safeParse({ ...OPEN_TASK, status: "completed", completedAt: null,
+      completedOn: "2026-09-01" }).success).toBe(false);
     expect(
       taskSchema.parse({
         ...OPEN_TASK,

@@ -174,7 +174,7 @@ export class NotionOutboxDispatcher {
       }
       const task = await this.store.getTask(operation.localTaskId);
       if (!task || !sameFields({
-        title: task.title, date: [task.startDate, task.endDate], completed: task.status === "completed",
+        title: task.title, date: task.startDate === null || task.endDate === null ? null : [task.startDate, task.endDate], completed: task.status === "completed",
       }, operation.desired)) {
         // A newer local command can commit after the earlier preflight check.
         // This transaction still holds the send before any external HTTP.

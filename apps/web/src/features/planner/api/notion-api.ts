@@ -21,6 +21,20 @@ export type NotionStructureProgress = {
   completedSteps: string[];
 };
 
+export type NotionReadStatus = {
+  workspaceId: string;
+  connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
+  sources: Array<{
+    table: "areas" | "projects" | "tasks";
+    dataSourceId: string | null;
+    watermark: {
+      completedThrough: string | null; lastAttemptAt: string | null; lastSuccessAt: string | null;
+      lastError?: "authorization" | "permission" | "rate_limited" | "schema" | "incomplete" | "network" | "remote" | "local" | null;
+      lastErrorAt?: string | null;
+    } | null;
+  }>;
+};
+
 function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(`/api/notion${path}`, { method: "POST", body: JSON.stringify(body) });
 }
@@ -34,4 +48,6 @@ export const notionApi = {
   refresh: (workspaceId: string) => post<{ connection: NotionConnection }>(`/connections/${encodeURIComponent(workspaceId)}/refresh`, {}),
   structure: (workspaceId: string) => request<NotionStructureProgress>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/structure`),
   advanceStructure: (workspaceId: string) => post<NotionStructureProgress>(`/connections/${encodeURIComponent(workspaceId)}/structure/advance`, {}),
+  readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
+  scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
 };

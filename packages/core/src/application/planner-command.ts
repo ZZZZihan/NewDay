@@ -403,11 +403,11 @@ async function applyPlannerCommand(
       const focusedAt = instantSchema.parse(input.now);
       const task = await requireTask(store, input.taskId);
 
-      if (task.status !== "open") {
+      if (task.status !== "open" || task.archived) {
         throw new Error("只有未完成任务可以设为今日重点");
       }
 
-      if (task.startDate > date) {
+      if (task.startDate === null || task.endDate === null || task.startDate > date) {
         throw new Error("任务在该日期不可见");
       }
 
@@ -473,7 +473,7 @@ async function applyPlannerCommand(
       const now = instantSchema.parse(input.now);
       const task = await requireTask(store, input.taskId);
 
-      if (task.startDate !== task.endDate) {
+      if (task.startDate === null || task.endDate === null || task.startDate !== task.endDate) {
         throw new Error("只有单日任务可以设为重复任务");
       }
       if (task.seriesId) {

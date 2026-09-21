@@ -11,10 +11,10 @@ import { TextField } from "@heroui/react/textfield";
 import { parseLocalDate } from "@newday/core/domain/planner-date";
 import type {
   IsoWeekday,
+  DatedTask,
   RecurrenceEnd,
   RecurrencePattern,
   RecurrenceSeries,
-  Task,
 } from "@newday/core/domain/planner-model";
 
 const WEEKDAYS: { value: IsoWeekday; label: string }[] = [
@@ -55,7 +55,7 @@ export function TaskEditor({
   onDelete,
   onStopRecurrence,
 }: {
-  task: Task;
+  task: DatedTask;
   series?: RecurrenceSeries;
   allowSeriesActions?: boolean;
   busy: boolean;

@@ -22,7 +22,7 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
   }
 
   async findByClientKey(connection: NotionConnection, mapping: NotionTaskMapping) {
-    const client = this.client(connection, mapping);
+    const { client, revision } = this.client(connection, mapping);
     await assertRuleSourceReadable(client, connection);
     const propertyId = this.propertyId(connection, "NewDay Key");
     const pages: NotionTaskPage[] = [];
@@ -33,19 +33,30 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
       const response = await client.dataSources.query({ data_source_id: mapping.dataSourceId,
         filter: { property: propertyId, rich_text: { equals: mapping.clientKey } },
         page_size: 100, result_type: "page", ...(cursor ? { start_cursor: cursor } : {}) });
-      if (response.request_status?.type === "incomplete") return { complete: false, pages };
+      if (response.request_status?.type === "incomplete") {
+        this.assertCredentialCurrent(connection, revision);
+        return { complete: false, pages };
+      }
       for (const raw of response.results) {
         if (raw.object !== "page" || !("properties" in raw) || !("parent" in raw)) {
+          this.assertCredentialCurrent(connection, revision);
           return { complete: false, pages };
         }
         if (ids.has(raw.id)) continue;
         ids.add(raw.id);
         const page = await this.parseTarget(client, connection, mapping, raw);
-        if (page.clientKey !== mapping.clientKey) return { complete: false, pages };
+        if (page.clientKey !== mapping.clientKey) {
+          this.assertCredentialCurrent(connection, revision);
+          return { complete: false, pages };
+        }
         pages.push(page);
       }
-      if (!response.has_more) return { complete: true, pages };
+      if (!response.has_more) {
+        this.assertCredentialCurrent(connection, revision);
+        return { complete: true, pages };
+      }
       if (!response.next_cursor || cursors.has(response.next_cursor) || ids.size >= 10_000) {
+        this.assertCredentialCurrent(connection, revision);
         return { complete: false, pages };
       }
       cursor = response.next_cursor;
@@ -55,21 +66,24 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
 
   async readPage(connection: NotionConnection, mapping: NotionTaskMapping) {
     if (!mapping.remotePageId) return null;
-    const client = this.client(connection, mapping);
+    const { client, revision } = this.client(connection, mapping);
     await assertRuleSourceReadable(client, connection);
     const raw = await client.pages.retrieve({ page_id: mapping.remotePageId });
     if (!("properties" in raw) || !("parent" in raw)) {
       throw new NotionReadFailure("incomplete", "Notion returned a partial task page");
     }
-    return this.parseTarget(client, connection, mapping, raw);
+    const page = await this.parseTarget(client, connection, mapping, raw);
+    this.assertCredentialCurrent(connection, revision);
+    return page;
   }
 
   async createPage(connection: NotionConnection, mapping: NotionTaskMapping, fields: NotionTaskFields) {
     if (mapping.remotePageId) throw new Error("Notion mapping already has a page");
     let client: Client;
+    let revision: number;
     let properties: Properties;
     try {
-      client = this.client(connection, mapping);
+      ({ client, revision } = this.client(connection, mapping));
       properties = this.sharedProperties(connection, notionTaskFieldsSchema.parse(fields));
       properties[this.propertyId(connection, "NewDay Key")] = {
         rich_text: [{ type: "text", text: { content: mapping.clientKey } }],
@@ -86,14 +100,16 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
     // readTarget already checked Rules accessibility. Keep no asynchronous
     // preflight between the dispatcher's epoch fence and the page request.
     await client.pages.create({ parent: { type: "data_source_id", data_source_id: mapping.dataSourceId }, properties });
+    this.assertCredentialCurrent(connection, revision!);
   }
 
   async updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>) {
     if (!mapping.remotePageId) throw new Error("Notion mapping has no page");
     let client: Client;
+    let revision: number;
     let properties: Properties;
     try {
-      client = this.client(connection, mapping);
+      ({ client, revision } = this.client(connection, mapping));
       properties = this.sharedProperties(connection, patch);
       if (!Object.keys(properties).length) throw new Error("Notion update has no shared fields");
     } catch {
@@ -101,16 +117,25 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
     }
     await client.pages.update({ page_id: mapping.remotePageId,
       properties: properties as NonNullable<UpdatePageParameters["properties"]> });
+    this.assertCredentialCurrent(connection, revision!);
   }
 
-  private client(connection: NotionConnection, mapping: NotionTaskMapping): Client {
+  private client(connection: NotionConnection, mapping: NotionTaskMapping): { client: Client; revision: number } {
     if (mapping.workspaceId !== connection.workspaceId ||
       mapping.dataSourceId !== connection.dataSources.tasks?.dataSourceId) {
       throw new Error("Notion task mapping is outside the confirmed data source");
     }
-    const token = this.vault.getCredential(connection.workspaceId)?.access_token;
-    if (!token) throw new Error("Notion credential is unavailable");
-    return this.makeClient(token);
+    const lease = this.vault.getCredentialLease(connection.workspaceId);
+    if (!lease || connection.status !== "paused_after_restore" && connection.credentialRevision !== lease.revision) {
+      throw new Error("Notion credential revision is unavailable or changed");
+    }
+    return { client: this.makeClient(lease.credential.access_token), revision: lease.revision };
+  }
+
+  private assertCredentialCurrent(connection: NotionConnection, revision: number): void {
+    if (!this.vault.matchesCredentialRevision(connection.workspaceId, revision)) {
+      throw new Error("Notion credential changed during remote request");
+    }
   }
 
   private propertyId(connection: NotionConnection, name: string): string {

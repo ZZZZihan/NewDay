@@ -58,6 +58,38 @@ test("authorized workspace shows explicit structure creation and readback progre
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
+test("reauthorized partial structure shows every read-only check and can continue initialization", async ({ page }) => {
+  const workspaceId = "workspace-partial-reconnect";
+  const connection = { workspaceId, workspaceName: "部分初始化空间", botId: "bot-test",
+    status: "active", updatedAt: "2026-09-21T00:00:00.000Z" };
+  const disconnected = { workspaceId, state: "disconnected", nextStep: "projects", reviewReason: null,
+    retryAfterAt: null, reviewAttemptedAt: null, rootPageId: "root-id", dataSources: {},
+    completedSteps: ["root", "areas"] };
+  const continued = { ...disconnected, state: "in_progress", nextStep: "projects" };
+  let current = disconnected;
+  await page.route("**/api/notion/status", (route) =>
+    route.fulfill({ json: { configured: true, connections: [connection] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) => route.fulfill({ json: current }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/reconnect`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({});
+    current = continued;
+    return route.fulfill({ json: { progress: continued,
+      review: { workspaceId, checkedAt: "2026-09-21T00:05:00.000Z", outcome: "matches",
+        checks: [{ step: "root", result: "matches" }, { step: "areas", result: "matches" }] } } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "核对并重新连接" }).click();
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("已记录的 2 项结构一致");
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("私有根页面：远端与恢复记录一致");
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("主线表：远端与恢复记录一致");
+  await expect(page.getByText("已确认的 2 项结构均已读回一致")).toBeVisible();
+  await expect(page.getByRole("button", { name: "建立或继续结构" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+});
+
 test("structure review uses one read-only reconcile before the next creation step", async ({ page }) => {
   const workspaceId = "workspace-review";
   await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{

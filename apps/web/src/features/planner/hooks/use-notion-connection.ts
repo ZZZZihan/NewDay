@@ -29,6 +29,7 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   const [reads, setReads] = useState<Record<string, NotionReadStatus>>({});
   const [syncs, setSyncs] = useState<Record<string, NotionSyncStatus>>({});
   const [restoreStructureReviews, setRestoreStructureReviews] = useState<Record<string, NotionRestoreStructureReview>>({});
+  const [reconnectStructureReviews, setReconnectStructureReviews] = useState<Record<string, NotionRestoreStructureReview>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const refreshRevision = useRef(0);
@@ -276,13 +277,16 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   async function reconnectStructure(workspaceId: string) {
     if (busy) return;
     setBusy(true);
-    setMessage("正在只读核对原有九项 Notion 结构…");
+    setMessage("正在只读核对当前已记录的 Notion 结构…");
     try {
       const result = await notionApi.reconnectStructure(workspaceId);
       refreshRevision.current += 1;
       setStructures((current) => ({ ...current, [workspaceId]: result.progress }));
+      setReconnectStructureReviews((current) => ({ ...current, [workspaceId]: result.review }));
       setMessage(result.review.outcome === "matches"
-        ? "原有九项结构已逐项读回一致；此工作区已恢复同步连接。"
+        ? result.progress.state === "ready"
+          ? "原有九项结构已逐项读回一致；此工作区已恢复同步连接。"
+          : `已确认的 ${result.review.checks.length} 项结构均已读回一致；可从第 ${result.progress.completedSteps.length + 1} 步继续初始化。`
         : "原有结构与当前 Notion 不完全一致；连接保持断开，请逐项检查后重试。");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "无法核对重新授权后的 Notion 结构");
@@ -301,7 +305,8 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     finally { setBusy(false); await refresh(); }
   }
 
-  return { status, structures, reads, syncs, restoreStructureReviews, message, busy, refresh, start, disconnect,
+  return { status, structures, reads, syncs, restoreStructureReviews, reconnectStructureReviews,
+    message, busy, refresh, start, disconnect,
     retryRefresh, initializeStructure, verifyRestoredStructure, reconnectStructure, scan, drain, pause, reconcile,
     reconcileRestore, resume };
 }

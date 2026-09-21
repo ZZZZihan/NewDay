@@ -28,7 +28,7 @@ function connection(): NotionConnection {
   const ref = (name: string) => ({ databaseId: `${name}-database`, dataSourceId: `${name}-source`,
     propertyIds: { Name: `${name}-name` }, schemaFingerprint: `${name}-fingerprint` });
   return { workspaceId, installationId: "rules-installation", rootPageId: "rules-root",
-    status: "active", updatedAt: at, dataSources: {
+    credentialRevision: 2, status: "active", updatedAt: at, dataSources: {
       areas: ref("areas"), projects: ref("projects"), rules: ref("rules"), tasks: ref("tasks"),
     } };
 }

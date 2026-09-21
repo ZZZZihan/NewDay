@@ -43,6 +43,9 @@ export const notionConnectionSchema = z.object({
     tasks: notionDataSourceRefSchema.optional(),
     rules: notionDataSourceRefSchema.optional(),
   }).strict(),
+  // Local credential revisions are deliberately portable as evidence only.
+  // A restored or legacy connection must be rebound by an exact readback.
+  credentialRevision: z.number().int().positive().optional(),
   status: z.enum(["disconnected", "active", "paused", "paused_after_restore", "paused_unknown"]),
   pauseReason: z.enum(["preflight_read", "manual"]).optional(),
   retryAfterAt: z.string().datetime({ offset: true }).optional(),

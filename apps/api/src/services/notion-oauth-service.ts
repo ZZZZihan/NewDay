@@ -16,6 +16,7 @@ export class NotionOAuthService {
     private readonly vault: NotionCredentialVault,
     private readonly fetcher: typeof fetch = fetch,
     private readonly now: () => number = Date.now,
+    private readonly onCredentialChanged?: (workspaceId: string) => Promise<void>,
   ) {}
 
   listConnections(): NotionCredentialSummary[] { return this.vault.list(); }
@@ -61,6 +62,7 @@ export class NotionOAuthService {
       catch { /* The rejected token remains unusable locally. */ }
       throw new ApiError(409, "授权会话已取消、过期或该工作区已断开，请重新开始授权");
     }
+    await this.onCredentialChanged?.(summary.workspaceId);
     // The Worker can safely redeliver the same claim until this ACK. If the
     // ACK is lost, the temporary copy expires; local storage is authoritative.
     try { await this.request("/oauth/ack", { state, ticket, verifier }); }
@@ -95,7 +97,11 @@ export class NotionOAuthService {
       this.vault.requireReauthorization(workspaceId, attempt.attemptId, new Date(this.now()).toISOString());
       throw new ApiError(409, "Notion 凭据刷新结果无法确认，需要重新授权");
     }
-    try { return this.vault.completeRefresh(workspaceId, attempt.attemptId, credential, new Date(this.now()).toISOString()); }
+    try {
+      const summary = this.vault.completeRefresh(workspaceId, attempt.attemptId, credential, new Date(this.now()).toISOString());
+      await this.onCredentialChanged?.(workspaceId);
+      return summary;
+    }
     catch {
       this.vault.requireReauthorization(workspaceId, attempt.attemptId, new Date(this.now()).toISOString());
       throw new ApiError(409, "Notion 连接在刷新期间已改变，需要重新授权");

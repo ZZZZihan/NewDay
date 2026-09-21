@@ -21,7 +21,7 @@ function connection(): NotionConnection {
     propertyIds, schemaFingerprint: `fingerprint-${name}`,
   });
   return { workspaceId: "proxy-workspace", installationId: "proxy-install", rootPageId: "proxy-root",
-    status: "active", updatedAt: at, dataSources: {
+    credentialRevision: 2, status: "active", updatedAt: at, dataSources: {
       areas: ref("areas", { Name: "area-title" }),
       projects: ref("projects", { Name: "project-title", Area: "project-area" }),
       tasks: ref("tasks", { Name: "task-title", "Plan Date": "task-date", Completed: "task-completed",

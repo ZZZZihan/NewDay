@@ -495,6 +495,81 @@ test("reauthorized workspace reconnects only after exact read-only verification 
   }
 });
 
+test("reauthorized partial initialization verifies its confirmed prefix and then continues without duplicate creates", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-reconnect-partial-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const base = `/api/notion/connections/${workspaceId}`;
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      const response = await app.inject({ method: "POST", url: `${base}/structure/advance`, payload: {} });
+      assert.equal(response.statusCode, 200, response.body);
+    }
+    assert.deepEqual(fake.creates, { root: 1, database: 2, relation: 0 });
+    assert.equal((await app.inject({ method: "POST", url: `${base}/disconnect`, payload: {} })).statusCode, 200);
+    const replacement = new NotionCredentialVault(vaultPath, credentialKey);
+    try { assert.ok(claimVault(replacement, "v")); } finally { replacement.close(); }
+
+    const reconnected = await app.inject({ method: "POST", url: `${base}/structure/reconnect`, payload: {} });
+    assert.equal(reconnected.statusCode, 200, reconnected.body);
+    assert.equal(reconnected.json().review.outcome, "matches");
+    assert.deepEqual(reconnected.json().review.checks.map((check: { step: string }) => check.step),
+      ["root", "areas", "projects"]);
+    assert.equal(reconnected.json().progress.state, "in_progress");
+    assert.equal(reconnected.json().progress.nextStep, "tasks");
+    assert.deepEqual(fake.creates, { root: 1, database: 2, relation: 0 });
+
+    const continued = await app.inject({ method: "POST", url: `${base}/structure/advance`, payload: {} });
+    assert.equal(continued.statusCode, 200, continued.body);
+    assert.equal(continued.json().nextStep, "rules");
+    assert.deepEqual(fake.creates, { root: 1, database: 3, relation: 0 });
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("credential revisions fence reconnect races and later cross-process token replacement", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-reconnect-revision-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const base = `/api/notion/connections/${workspaceId}`;
+  const replaceCredential = (stateCharacter: string) => {
+    const replacement = new NotionCredentialVault(vaultPath, credentialKey);
+    try { assert.ok(claimVault(replacement, stateCharacter)); } finally { replacement.close(); }
+  };
+  try {
+    for (let index = 0; index < 9; index += 1) {
+      assert.equal((await app.inject({ method: "POST", url: `${base}/structure/advance`, payload: {} })).statusCode, 200);
+    }
+    assert.equal((await app.inject({ method: "POST", url: `${base}/disconnect`, payload: {} })).statusCode, 200);
+    replaceCredential("w");
+    fake.beforeGetDatabase = async () => {
+      fake.beforeGetDatabase = null;
+      replaceCredential("x");
+    };
+    const raced = await app.inject({ method: "POST", url: `${base}/structure/reconnect`, payload: {} });
+    assert.equal(raced.statusCode, 409, raced.body);
+    assert.equal((await app.inject(`${base}/structure`)).json().state, "disconnected");
+
+    const stable = await app.inject({ method: "POST", url: `${base}/structure/reconnect`, payload: {} });
+    assert.equal(stable.statusCode, 200, stable.body);
+    assert.equal(stable.json().progress.state, "ready");
+
+    replaceCredential("y");
+    const staleAdvance = await app.inject({ method: "POST", url: `${base}/structure/advance`, payload: {} });
+    assert.equal(staleAdvance.statusCode, 409, staleAdvance.body);
+    assert.equal((await app.inject(`${base}/structure`)).json().state, "disconnected");
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("database creation detects a matching sibling already under the root", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-structure-"));
   const vaultPath = join(directory, "vault.sqlite");

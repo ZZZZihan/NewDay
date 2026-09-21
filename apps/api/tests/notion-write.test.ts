@@ -28,7 +28,7 @@ function connection(): NotionConnection {
       schemaFingerprint: "test-fingerprint", propertyIds };
   };
   return { workspaceId, installationId: "test-installation", rootPageId: "test-root",
-    status: "active", updatedAt: at, dataSources: {
+    credentialRevision: 2, status: "active", updatedAt: at, dataSources: {
       areas: source("areas"), projects: source("projects"), tasks: source("tasks"), rules: source("rules"),
     } };
 }
@@ -37,6 +37,16 @@ async function seedReady(store: SQLitePlannerStore) {
   await store.putNotionConnection(connection());
   await store.putNotionScanWatermark({ workspaceId, dataSourceId: "tasks-source",
     completedThrough: at, lastAttemptAt: at, lastSuccessAt: at, lastError: null, lastErrorAt: null });
+}
+
+function seedCredential(path: string, key: Buffer): void {
+  const credentials = new NotionCredentialVault(path, key);
+  try {
+    const state = "v".repeat(43);
+    credentials.putPending(state, "verifier", Date.parse(at) + 60_000, Date.parse(at));
+    credentials.storeClaimed(state, { access_token: "test-access", refresh_token: "test-refresh",
+      bot_id: "test-bot", workspace_id: workspaceId, workspace_name: "隔离测试" }, at);
+  } finally { credentials.close(); }
 }
 
 function transport() {
@@ -219,10 +229,13 @@ test("HTTP command and sync status routes expose a confirmed write across the SQ
   const seed = new SQLitePlannerStore(databasePath);
   await seedReady(seed);
   seed.close();
+  const vaultPath = join(directory, "vault.sqlite");
+  const vaultKey = Buffer.alloc(32, 17);
+  seedCredential(vaultPath, vaultKey);
   const remote = transport();
   const app = createApp({ databasePath, planningModel: null, notionTaskTransport: remote.fake,
     notionOAuth: { workerOrigin: "https://worker.example", workerApiKey: "test-key",
-      vaultPath: join(directory, "vault.sqlite"), encryptionKey: Buffer.alloc(32, 17) } });
+      vaultPath, encryptionKey: vaultKey } });
   try {
     await app.ready();
     const created = await app.inject({ method: "POST", url: "/api/planner/commands",
@@ -247,10 +260,13 @@ test("HTTP pause persists a send fence until explicit resume", async () => {
   const seed = new SQLitePlannerStore(databasePath);
   await seedReady(seed);
   seed.close();
+  const vaultPath = join(directory, "vault.sqlite");
+  const vaultKey = Buffer.alloc(32, 18);
+  seedCredential(vaultPath, vaultKey);
   const remote = transport();
   const app = createApp({ databasePath, planningModel: null, notionTaskTransport: remote.fake,
     notionOAuth: { workerOrigin: "https://worker.example", workerApiKey: "test-key",
-      vaultPath: join(directory, "vault.sqlite"), encryptionKey: Buffer.alloc(32, 18) } });
+      vaultPath, encryptionKey: vaultKey } });
   try {
     await app.ready();
     const created = await app.inject({ method: "POST", url: "/api/planner/commands",

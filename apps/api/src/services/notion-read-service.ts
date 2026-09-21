@@ -68,14 +68,18 @@ export class NotionReadService {
 
   private async scanLocked(workspaceId: string): Promise<void> {
     const connection = await this.store.getNotionConnection(workspaceId);
-    const credential = this.vault.getCredential(workspaceId);
+    const credential = this.vault.getCredentialLease(workspaceId);
     if (!connection || connection.status !== "active" || !credential) {
       throw new ApiError(409, "Notion 尚未完成授权和结构初始化，或同步已暂停");
+    }
+    if (connection.credentialRevision !== credential.revision) {
+      await this.store.putNotionConnection({ ...connection, status: "disconnected", updatedAt: this.timestamp() });
+      throw new ApiError(409, "Notion 授权已变化；请先只读核对原有结构并重新连接");
     }
     if (tables.some((table) => !connection.dataSources[table]) || !connection.dataSources.rules) {
       throw new ApiError(409, "Notion 数据源结构尚未齐备");
     }
-    const token = credential.access_token;
+    const token = credential.credential.access_token;
     const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
     const existingMappings = (await this.store.listNotionTaskMappings()).filter((mapping) => mapping.workspaceId === workspaceId);
     const existingRules = await this.store.listNotionRuleMappings(workspaceId);
@@ -100,7 +104,7 @@ export class NotionReadService {
           ? await this.checkMissingTasks(token, existingMappings, distinct)
           : table === "rules" ? await this.checkMissingRules(token, existingRules, distinct) : [];
         await this.store.transaction(async () => {
-          await this.assertCurrent(connection, token, epoch);
+          await this.assertCurrent(connection, credential.revision, epoch);
           if (table === "areas") {
             areas = distinct as AreaRow[];
             await this.applyNodes(connection, table, areas.map((row) => ({
@@ -150,7 +154,7 @@ export class NotionReadService {
               clearUndoReceipts(this.store);
             }
           }
-          await this.assertCurrent(connection, token, epoch);
+          await this.assertCurrent(connection, credential.revision, epoch);
           await this.setWatermark(workspaceId, sourceId, {
             completedThrough: startAt, lastSuccessAt: this.timestamp(), lastError: null, lastErrorAt: null,
           });
@@ -327,11 +331,12 @@ export class NotionReadService {
     return archived;
   }
 
-  private async assertCurrent(connection: NotionConnection, token: string, epoch: string): Promise<void> {
+  private async assertCurrent(connection: NotionConnection, credentialRevision: number, epoch: string): Promise<void> {
     const current = await this.store.getNotionConnection(connection.workspaceId);
     if (!current || current.status !== "active" || current.installationId !== connection.installationId ||
       (await this.store.getPlanningVersion()).datasetEpoch !== epoch ||
-      this.vault.getCredential(connection.workspaceId)?.access_token !== token) {
+      current.credentialRevision !== credentialRevision ||
+      !this.vault.matchesCredentialRevision(connection.workspaceId, credentialRevision)) {
       throw new ApiError(409, "Notion 授权或本地数据在扫描期间改变，请重新扫描");
     }
   }

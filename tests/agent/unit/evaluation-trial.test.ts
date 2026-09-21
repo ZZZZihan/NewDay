@@ -269,6 +269,45 @@ describe("guarded real-provider evaluation trial", () => {
     expect(evidence).not.toMatch(/authorization/i);
   });
 
+  it("gives DeepSeek the frozen output contract and repairs one valid-JSON contract failure", async () => {
+    let calls = 0;
+    const fakeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls++;
+      const body = JSON.parse(String(init?.body));
+      const userMessage = JSON.parse(body.messages[1].content);
+      expect(body.response_format).toEqual({ type: "json_object" });
+      expect(userMessage.outputContract.jsonSchema).toEqual(planningProviderJsonSchema);
+      if (calls === 1) {
+        expect(userMessage.formatRepair).toBeUndefined();
+        return Response.json({
+          model: "frozen-model",
+          choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+            output: { kind: "ready", selections: [], assumptions: [] },
+          }), refusal: null } }],
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+        });
+      }
+      expect(userMessage.formatRepair.issues.length).toBeGreaterThan(0);
+      return Response.json({
+        model: "frozen-model",
+        choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ output: noAction }), refusal: null } }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+    });
+    const model = new OpenAICompatiblePlanningModel({
+      apiKey: "fake-provider-secret",
+      modelId: "frozen-model",
+      baseUrl: "https://provider.example/v1",
+      requestProfile: "deepseek-json",
+      reasoningEffort: "none",
+      fetch: fakeFetch,
+    });
+    const { result } = await run(model, { secrets: ["fake-provider-secret"] });
+    expect(result.status).toBe("validated");
+    expect(result.calls.map(({ outcome }) => outcome)).toEqual(["validation_error", "validated"]);
+    expect(fakeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("redacts secrets and bearer values from model failures", async () => {
     const apiKey = "never-persist-this";
     const { result } = await run(scriptedModel([new Error(`transport failed with Bearer ${apiKey} and ${apiKey}`)]), { secrets: [apiKey] });

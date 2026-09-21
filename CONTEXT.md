@@ -95,7 +95,7 @@ A completion, reopen, reschedule, deletion or restoration event recorded after a
 _Avoid_: Historical state inferred from current data
 
 **Agent Backup（Agent 备份）**:
-A separate `newday-agent` v1 archive containing Agent records and explicit preferences; task backup v4 remains unchanged. Import stores source records in read-only namespaces, preserves original archives, and never replays execution IDs or activates imported daily contexts. Preference import is an explicit choice and creates a current preference revision.
+A separate `newday-agent` v1 archive containing Agent records and explicit preferences; the current business backup is `newday-backup` v6 and remains separate. Import stores source Agent records in read-only namespaces, preserves original archives, and never replays execution IDs or activates imported daily contexts. Preference import is an explicit choice and creates a current preference revision.
 _Avoid_: Task restore, executable replay
 
 ## 运行与目录边界

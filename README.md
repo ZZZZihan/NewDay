@@ -2,25 +2,13 @@
 
 NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需要看到这件事”，不提供小时级时间轴。项目采用独立的 Next.js 前端和 Fastify 后端，任务保存在后端 SQLite 中；前端通过 HTTP 读写任务。可选的规划助手根据当天目标和限制，从已有任务中建议今日重点，由用户预览和确认后应用。
 
-## 项目管理
+## 当前状态与项目管理
 
-需求、进度和验收统一放在 [Linear · NewDay](https://linear.app/colife/project/newday-aa09602a66c8)，代码、分支、提交与 PR 放在 [GitHub · ZZZZihan/NewDay](https://github.com/ZZZZihan/NewDay)。后续开发先关联 Linear issue，再以 `COL-编号` 串起分支、提交和 PR；具体步骤见 [Linear + Git 工作流](./docs/project-management.md)。
+先看 [2026-09-22 项目状态入口](./docs/project-state.md)：它在一页内区分已合并 `main`、当前候选、源码验证、hosted CI、隔离 Notion 验收、G3/G4、部署和个人正式工作区授权。该页是带核对时间的快照；实时变更仍以 [GitHub · ZZZZihan/NewDay](https://github.com/ZZZZihan/NewDay) 和 [Linear · NewDay](https://linear.app/colife/project/newday-aa09602a66c8) 为准。
 
-## 交付状态（2026-09-20 快照）
+截至该次核对，PR #1～#11、#14～#20 已合并到 `main`，因此 Next.js/Fastify/SQLite、Agent、生活管理和 Notion 工程实现不再是“尚未进入主线”的候选。当前 [PR #21 · COL-40](https://github.com/ZZZZihan/NewDay/pull/21) 单独收尾同步竞态、任务总表后台刷新、CI/门禁和恢复设计。合并不等于部署，也不等于完整 G3、G4 或个人正式工作区验收。
 
-以下功能说明对应尚未合并的候选分支，不代表 `main`、已部署服务或个人真实数据已经验收。实时状态以各 PR 与 Linear 为准。
-
-| 层级 | 候选与已核实结果 | 尚需完成 |
-| --- | --- | --- |
-| `main` | `1de8e6c088f08f229e49b21b3469f6259e51bcdb`；仍是基础前端版本 | 本页描述的 API/SQLite、Agent 和生活管理候选尚未合入 |
-| [PR #1 · COL-22](https://github.com/ZZZZihan/NewDay/pull/1) | `61be91776160e2aa6028f75840d2cd26bea39df0`，Next.js/Fastify/SQLite 重构与 Agent 软件链路；隔离复跑 `pnpm check`、`pnpm build`、Chrome/Safari WebKit E2E 56/56 通过 | 代码与数据恢复审查、人工流程验收、用户批准合并 |
-| [PR #2 · COL-26～30](https://github.com/ZZZZihan/NewDay/pull/2) | `1a64aed1e9928d4491ef92eb439a0352081879bc`，收集箱、任务总表及资料库候选；相同命令隔离复跑，E2E 62/62 通过 | 依赖 PR #1；备份恢复和撤销后的跨视图刷新修复见 [PR #4](https://github.com/ZZZZihan/NewDay/pull/4) `c4c00da`，该修复候选独立复跑 Chrome/WebKit E2E 66/66；按 PR #1 实际合并结果整理分支后重验并获批准合并 |
-| [PR #3 · COL-32](https://github.com/ZZZZihan/NewDay/pull/3) | Notion 联动契约及合成 fixture 候选，见 [契约说明](./docs/notion-sync-contract.md) | OAuth、真实隔离工作区、同步与恢复尚未实现或验收 |
-| [COL-23](https://linear.app/colife/issue/COL-23) / [COL-24](https://linear.app/colife/issue/COL-24) | Agent 的真实模型 G3 与连续七天使用 G4 尚未执行 | 分别按冻结协议和真实记录验收；软件测试不能替代 |
-
-以上复跑使用独立工作树、端口 `3100/3002` 和临时 SQLite；GitHub 当前未返回候选 Check Runs 或审查结论。替换导入前下载安全备份及 JSON 备份恢复属于候选实现，尚未在个人真实数据上试用。NewDay/Notion 联动的完整进度由 [COL-31](https://linear.app/colife/issue/COL-31) 跟踪，T1～T8 分项为 COL-32～COL-39。COL-33 的 OAuth 隔离候选配置与未验收边界见 [Notion OAuth 运维说明](./docs/notion-oauth-operations.md)。
-
-2026-09-21 的后续候选为 [PR #6 OAuth](https://github.com/ZZZZihan/NewDay/pull/6)、[PR #7 结构](https://github.com/ZZZZihan/NewDay/pull/7)、[PR #8 读取](https://github.com/ZZZZihan/NewDay/pull/8)、[PR #5 同步底座](https://github.com/ZZZZihan/NewDay/pull/5)、[PR #9 一次性任务写回](https://github.com/ZZZZihan/NewDay/pull/9)、[PR #10 重复实例](https://github.com/ZZZZihan/NewDay/pull/10)及[PR #11 暂停与验收手册](https://github.com/ZZZZihan/NewDay/pull/11)。这些 PR 仍为未合并候选；真实隔离 Notion 工作区尚未验收。执行矩阵、已知限制和恢复步骤见 [COL-39 真实验收记录](./docs/notion-live-acceptance.md)。本段是后续快照，不覆盖上表 2026-09-20 的历史证据。
+后续开发先关联 Linear issue，再以 `COL-编号` 串起分支、提交和 PR；具体步骤见 [Linear + Git 工作流](./docs/project-management.md)。
 
 ## 核心功能
 
@@ -41,6 +29,7 @@ NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需�
 - 无需账号，当前面向本机单人使用
 - 兼容旧版浏览器数据：首次连接空服务端时迁移，旧版单日任务转换为开始日期和截止日期相同的任务
 - 旧浏览器数据支持单独下载备份，下载后可手动清除旧 IndexedDB
+- 可选的 Notion 联动提供隔离 OAuth、结构核对、任务/重复规则读写、持久暂停和恢复后隔离；它默认不代表个人正式工作区已授权，恢复隔离目前也不会自动解除
 
 ## 今日规划助手
 
@@ -195,8 +184,8 @@ data/                      运行时 SQLite，已被 Git 忽略
 
 旧版 `newday` IndexedDB 的迁移读取不升级、不修改原数据库。服务端为空且尚未记录旧数据迁移时才接收；服务端已有数据时会提示冲突，并保留浏览器原数据供下载。迁移本身不会自动删除旧库；“下载旧浏览器备份”后可使用“清除旧浏览器数据”，仅清除此浏览器的旧任务库。
 
-新版导出格式版本为 `4`，包含任务、分段重复规则和今日重点记录。导入仍兼容旧版 `1`、`2` 与 `3` 格式：旧任务会补齐日期范围与完成日期字段，旧重复系列会补齐稳定逻辑标识和规则段边界。
+当前业务导出格式为 `newday-backup` v6，包含任务、分段重复规则、今日重点、生活管理数据及不含凭据的 Notion 同步元数据。导入仍兼容 v1～v5；旧任务会补齐日期范围与完成日期字段，旧重复系列会补齐稳定逻辑标识和规则段边界，缺少的生活管理或 Notion 数据按对应旧版本语义补空。
 
-任务备份 v4 不包含 Agent 数据。Agent 上下文、偏好、运行、提案、反馈、事件和回执有单独的 `newday-agent` v1 JSON 格式，目前通过 `/api/agent/backup` API 导出和导入。独立导入保留来源数据集的只读历史及原始归档，不按同名任务 ID 关联当前任务，不重建可执行操作，也不激活导入的当天上下文。可明确选择是否导入偏好；导入后生成新数据集 epoch，使原活动提案和恢复资格失效，任务数据保持原样。
+业务备份 v6 不包含 OAuth 凭据，也不包含 Agent 数据。Agent 上下文、偏好、运行、提案、反馈、事件和回执有单独的 `newday-agent` v1 JSON 格式，目前通过 `/api/agent/backup` API 导出和导入。独立导入保留来源数据集的只读历史及原始归档，不按同名任务 ID 关联当前任务，不重建可执行操作，也不激活导入的当天上下文。可明确选择是否导入偏好；导入后生成新数据集 epoch，使原活动提案和恢复资格失效，任务数据保持原样。
 
 `DELETE /api/agent/history` 可清除 Agent 展示历史和上下文，保留任务、显式偏好，以及操作 ID、请求摘要、数据集归属和执行终态组成的最小去重账本。已清理操作仍返回 `details_deleted` 终态，不能因删除详情而重新执行。关闭历史参考与清除历史是两项独立操作；详细接口见 [架构说明](./docs/architecture.md)。

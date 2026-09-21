@@ -1,5 +1,7 @@
 # Agent 开发执行记录
 
+> **历史证据。** 本文保留 2026-09-08 的执行过程、当时的本机状态与真实 smoke 记录，不是当前 GitHub、部署或 G3/G4 状态页。当前核对结论见[项目状态入口](./project-state.md)；COL-23/COL-24 的实时状态以 Linear 为准。
+
 2026-09-08 按 `agent-development-plan.md` v2 执行。G0、G1、G2 已通过；真实模型质量 G3 与七天使用效果 G4 尚未执行。以下结果来自合并后的原工作区，不以各线单测代替整体结果。
 
 ## 冻结的基础
@@ -13,7 +15,7 @@
 
 ## 并行工作线
 
-工作树位于 `/Users/xuzihan/.codex/worktrees/newday-agent-20260908/`，每条线仅提交独占文件；共享依赖补丁由集成者同步，不纳入接收方的提交。
+工作树位于仓库外的隔离 worktree，每条线仅提交独占文件；共享依赖补丁由集成者同步，不纳入接收方的提交。原始绝对路径不再写入公开文档。
 
 | 工作线 | 分支 | 当前交付 |
 | --- | --- | --- |
@@ -34,7 +36,7 @@
 | `pnpm build` | API 生产包与 Next.js 生产构建通过 |
 | `pnpm test:e2e` | Chrome / Safari WebKit 共 56/56 通过，1.6 分钟；其中 Agent 旅程 6 项，既有清单/重复/迁移/备份流程 50 项 |
 
-原始日志和内容摘要保存在 `/Users/xuzihan/.codex/worktrees/newday-agent-20260908/evidence/g2/`。该目录下的 `integration.json` 记录最终快照 SHA、tree、分线 HEAD、文件列表摘要和日志 SHA-256；集成快照另保存在本地 `codex/agent-integration-20260908` 分支。原 `feature/simple-daily-planner` 分支、HEAD 与暂存区不变，未提交迁移和实现保留在原工作区。未推送或部署。
+原始日志和内容摘要保存在仓库外的受控 `evidence/g2` bundle。其 `integration.json` 记录最终快照 SHA、tree、分线 HEAD、文件列表摘要和日志 SHA-256；集成快照另保存在本地 `codex/agent-integration-20260908` 分支。原 `feature/simple-daily-planner` 分支、HEAD 与暂存区不变，未提交迁移和实现保留在原工作区。未推送或部署。
 
 证据包括真实临时 SQLite 的 COMMIT 前/后子进程退出及重启查询；同键异请求、并发重复投递、事件/回执写入失败的事务回滚；成功 COMMIT 后主动断开 HTTP 应答再查询原操作；手动变更、上下文/偏好、时区、午夜和导入 epoch 的冲突保护；清理详情后原请求不重放；慢模型期间人工任务操作可继续。脚本模型和假 fetch 覆盖限流、超时、畸形输出与晚响应，不代表真实模型行为。
 
@@ -46,7 +48,7 @@
 
 - 页面提供当天输入、持久时区/偏好、带来源的建议、最多一轮澄清、最终 1–3 项集合预览、用户采纳/拒绝、反馈、历史和条件恢复。Agent 唯一业务写入为今日重点集合；无动作保留已有重点。
 - 网络恢复使用原 request/operation ID。同一标签页刷新可以恢复；关闭标签页后不承诺自动继续，服务端历史仍可查询。任务人工短时 Undo 与 Agent 持久 operation 恢复分别处理。
-- Agent 备份 v1、只读导入及历史清理当前通过 API 提供，尚无独立界面。任务菜单仍使用原任务备份 v4；明细清理不删除最小执行去重账本。
+- Agent 备份 v1、只读导入及历史清理当时通过 API 提供，尚无独立界面。当时任务菜单使用任务备份 v4；当前业务备份已为 v6，详见 README。明细清理不删除最小执行去重账本。
 - 默认 `NEWDAY_AGENT_PROVIDER=disabled`；上述 G2 工程验收阶段真实 provider 调用为 **0**。后续按用户要求复用 PaperTrail 配置的真实接入另记于下文。启用配置见 `.env.example` 和 `docs/architecture.md`；G3 批量评测需要固定 provider/模型、可发送数据范围与费用上限。请求超时、输出 token 限制及最多 3 次调用不等于金额预算。
 - G3 已冻结 12 个开发场景与 40 个保留场景，尚未运行 40 × 3 = 120 次真实 trial。保留集仓库可见，不声称盲测；自由理由的完整事实支持、自然语言约束理解、建议效用与真实延迟/成本均未验收。
 - G4 的人工基线与七天实用记录尚未收集。工程测试通过不能证明模型建议有用或已经满足个人长期使用目标。
@@ -67,7 +69,7 @@
 | 3 | HTTP 200、完整 `stop`、187 输出 tokens；响应包解析失败 | 已捕获合成建议用于离线重放；复现并修复 nullable tool_calls 兼容问题 |
 | 4 | HTTP 200，真实包中明确观测到 `tool_calls: null`，run `ready` | **真实生成 smoke 通过**；选择两项 must_include 任务，理由引用通过本地校验 |
 
-第 4 次模型返回 ID 为 `gpt-5.6-sol`，运行耗时 **8722 ms**，整个 smoke **9025 ms**，输入 **2614 tokens**、输出 **187 tokens**，只发出一次模型请求且未触发修复。任务、已有重点、重复规则、事件、执行账本及规划版本在生成前后完全相同，执行回执为 0。报告保存在 `/Users/xuzihan/.codex/worktrees/newday-agent-20260908/evidence/live-sol-smoke-4/report.json`，前三次报告同级分别为 `live-sol-smoke-1` 至 `live-sol-smoke-3`。
+第 4 次模型返回 ID 为 `gpt-5.6-sol`，运行耗时 **8722 ms**，整个 smoke **9025 ms**，输入 **2614 tokens**、输出 **187 tokens**，只发出一次模型请求且未触发修复。任务、已有重点、重复规则、事件、执行账本及规划版本在生成前后完全相同，执行回执为 0。报告保存在仓库外受控 bundle 的 `live-sol-smoke-4/report.json`，前三次报告同级分别为 `live-sol-smoke-1` 至 `live-sol-smoke-3`。
 
 这次结果证明真实服务能完成一次受约束的合成规划请求；费用仍为未知，没有将 token 用量或失败请求记为零费用。没有启动 G3 的 120 trials，也没有把一次成功当作稳定性、建议效用或七天使用验收。整个实现及配置代码的新快照和回归证据集中保存于 `evidence/live-model/`；不含密钥或开发数据库。
 

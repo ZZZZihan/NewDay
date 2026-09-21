@@ -143,6 +143,12 @@ describe("guarded real-provider evaluation trial", () => {
     expect(evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
       stopConditions: ["outbound_call_cap_reached"],
     })).success).toBe(false);
+    expect(() => evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
+      provider: { origin: "not-a-url" },
+    }))).not.toThrow();
+    expect(evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
+      provider: { origin: "not-a-url" },
+    })).success).toBe(false);
     expect(() => verifyCandidateState(freeze(), "b".repeat(40), "")).toThrowError(expect.objectContaining({ code: "CANDIDATE_SHA_MISMATCH" }));
     expect(() => verifyCandidateState(freeze(), "a".repeat(40), "?? stray.txt")).toThrowError(expect.objectContaining({ code: "DIRTY_WORKTREE" }));
     expect(() => verifyCandidateState(freeze(), "a".repeat(40), "")).not.toThrow();

@@ -117,7 +117,10 @@ export const evaluationFreezeSchema = z.strictObject({
   if (conditions.size !== value.stopConditions.length) {
     context.addIssue({ code: "custom", path: ["stopConditions"], message: "stop conditions must be unique" });
   }
-  const providerUrl = new URL(value.provider.origin);
+  let providerUrl: URL;
+  try { providerUrl = new URL(value.provider.origin); }
+  catch { return; }
+  if (!["http:", "https:"].includes(providerUrl.protocol) || providerUrl.origin !== value.provider.origin) return;
   const providerIsLoopback = ["localhost", "127.0.0.1", "[::1]"].includes(providerUrl.hostname);
   if (providerUrl.protocol === "http:" && !providerIsLoopback && value.provider.allowHttpOrigin !== value.provider.origin) {
     context.addIssue({

@@ -286,6 +286,17 @@ test("explicitly unavailable refresh requires reauthorization, and config requir
   assert.throws(() => loadConfig({ NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey, NEWDAY_NOTION_CREDENTIAL_KEY: "bad" }), /32-byte/);
   const valid = loadConfig({ NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey, NEWDAY_NOTION_CREDENTIAL_KEY: key.toString("base64url") });
   assert.equal(valid.notionOAuth?.workerOrigin, origin);
+  const credentials = { NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey,
+    NEWDAY_NOTION_CREDENTIAL_KEY: key.toString("base64url") };
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1" }), /requires NEWDAY_NOTION_API_BASE_URL/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_API_BASE_URL: "http://127.0.0.1:3012" }), /explicit acceptance/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "http://localhost:3012" }), /loopback HTTP origin/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "https://127.0.0.1:3012" }), /loopback HTTP origin/);
+  const proxied = loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "http://127.0.0.1:3012" });
+  assert.equal(proxied.notionOAuth?.apiBaseUrl, "http://127.0.0.1:3012");
 });
 
 test("Worker responses are byte-bounded and credential persistence is allowlisted", async () => {

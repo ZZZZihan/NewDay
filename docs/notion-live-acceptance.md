@@ -1,6 +1,6 @@
 # NewDay / Notion 真实验收与恢复记录（COL-39）
 
-记录日期：2026-09-21。本文是 T8 的执行清单。首轮真实执行、修复、逐项结论和 NO-GO 门禁见[隔离工作区真实验收报告](./notion-live-acceptance-2026-09-21.md)；清单本身不代表已经完成真实验收。所有 Notion 请求须先指定**独立测试工作区**、Public OAuth connection、Worker 地址和允许修改的测试数据范围；令牌、服务密钥、真实任务正文和完整工作区 ID 不写入仓库、PR 或 Linear。
+记录日期：2026-09-21。本文是 T8 的执行清单。首轮真实执行、修复、逐项结论和 NO-GO 门禁见[隔离工作区真实验收报告](./notion-live-acceptance-2026-09-21.md)；A3/R2/W2 的后续真实故障注入使用[回环 Notion 故障代理协议](./notion-live-fault-proxy.md)，普通 fake gateway 结果不计入这些门禁。清单本身不代表已经完成真实验收。所有 Notion 请求须先指定**独立测试工作区**、Public OAuth connection、Worker 地址和允许修改的测试数据范围；令牌、服务密钥、真实任务正文和完整工作区 ID 不写入仓库、PR 或 Linear。
 
 ## 当前候选与证据边界
 

@@ -6,14 +6,20 @@ import { NotionWritePreflightFailure, type NotionTaskPage, type NotionTaskTransp
 import { NotionReadFailure, assertRuleSourceReadable, parseRow } from "./notion-read-gateway.js";
 
 type Properties = NonNullable<CreatePageParameters["properties"]>;
+type ClientFactory = (token: string) => Client;
 
 /** Writes only the three shared fields. The token stays in the local vault;
  * SDK retries are disabled because a lost create response must be reconciled
  * by its stable key before any subsequent write. */
 export class NotionSdkTaskTransport implements NotionTaskTransport {
+  private readonly makeClient: ClientFactory;
+
   constructor(private readonly vault: NotionCredentialVault,
-    private readonly makeClient: (token: string) => Client = (token) =>
-      new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000 })) {}
+    factoryOrOptions: ClientFactory | { baseUrl?: string } = {}) {
+    this.makeClient = typeof factoryOrOptions === "function" ? factoryOrOptions : (token) =>
+      new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000,
+        ...(factoryOrOptions.baseUrl ? { baseUrl: factoryOrOptions.baseUrl } : {}) });
+  }
 
   async findByClientKey(connection: NotionConnection, mapping: NotionTaskMapping) {
     const client = this.client(connection, mapping);

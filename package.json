@@ -23,6 +23,7 @@
     "agent:evaluation:preflight": "tsx tooling/agent-evaluation-preflight.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "notion:acceptance:proxy": "node tooling/notion-live-fault-proxy.mjs",
     "check": "pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {

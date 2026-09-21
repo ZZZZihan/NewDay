@@ -15,6 +15,7 @@ export type ApiConfig = {
     workerApiKey: string;
     vaultPath: string;
     encryptionKey: Buffer;
+    apiBaseUrl?: string;
   } | null;
   agent: {
     provider: "disabled" | "openai-compatible" | "scripted";
@@ -61,6 +62,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
   const workerOrigin = environment.NEWDAY_NOTION_WORKER_ORIGIN;
   const rawKey = environment.NEWDAY_NOTION_CREDENTIAL_KEY;
   const workerApiKey = environment.NEWDAY_NOTION_WORKER_API_KEY;
+  const notionApiBaseUrl = acceptanceNotionApiBaseUrl(environment);
   if ([workerOrigin, rawKey, workerApiKey].some(Boolean) && ![workerOrigin, rawKey, workerApiKey].every(Boolean)) {
     throw new Error("Notion OAuth requires NEWDAY_NOTION_WORKER_ORIGIN, NEWDAY_NOTION_WORKER_API_KEY and NEWDAY_NOTION_CREDENTIAL_KEY");
   }
@@ -82,7 +84,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
     }
     const vaultPath = resolve(repositoryRoot, environment.NEWDAY_NOTION_CREDENTIAL_PATH ?? "data/notion-vault/credentials.sqlite");
     if (vaultPath === resolvedDatabasePath) throw new Error("Notion credential vault must be separate from the planner database");
-    notionOAuth = { workerOrigin, workerApiKey, vaultPath, encryptionKey };
+    notionOAuth = { workerOrigin, workerApiKey, vaultPath, encryptionKey,
+      ...(notionApiBaseUrl ? { apiBaseUrl: notionApiBaseUrl } : {}) };
+  } else if (notionApiBaseUrl) {
+    throw new Error("Notion acceptance proxy requires configured Notion OAuth credentials");
   }
 
   return {
@@ -100,6 +105,24 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
       maxOutputTokens: integerSetting(environment.NEWDAY_AGENT_MAX_OUTPUT_TOKENS, 1200, 100, 4000, "NEWDAY_AGENT_MAX_OUTPUT_TOKENS"),
     },
   };
+}
+
+function acceptanceNotionApiBaseUrl(environment: NodeJS.ProcessEnv): string | undefined {
+  const raw = environment.NEWDAY_NOTION_API_BASE_URL;
+  const enabled = environment.NEWDAY_NOTION_ACCEPTANCE_PROXY;
+  if (!raw) {
+    if (enabled !== undefined) throw new Error("NEWDAY_NOTION_ACCEPTANCE_PROXY requires NEWDAY_NOTION_API_BASE_URL");
+    return undefined;
+  }
+  if (enabled !== "1") {
+    throw new Error("NEWDAY_NOTION_API_BASE_URL is restricted to explicit acceptance proxy sessions");
+  }
+  const url = new URL(raw);
+  if (url.protocol !== "http:" || !["127.0.0.1", "[::1]"].includes(url.hostname) ||
+    url.origin !== raw || url.username || url.password || url.search || url.hash) {
+    throw new Error("NEWDAY_NOTION_API_BASE_URL must be an exact loopback HTTP origin");
+  }
+  return url.origin;
 }
 
 function integerSetting(raw: string | undefined, fallback: number, min: number, max: number, name: string) {

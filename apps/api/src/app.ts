@@ -60,14 +60,16 @@ export function createApp(options: AppOptions = {}) {
     ? new NotionOAuthService(notionOptions.workerOrigin, notionOptions.workerApiKey, notionVault, options.notionFetcher, options.clock)
     : null;
   const notionStructure = notionVault
-    ? new NotionStructureService(store, notionVault, options.notionStructureGateway ?? new NotionSdkStructureGateway(), options.clock)
+    ? new NotionStructureService(store, notionVault, options.notionStructureGateway ??
+      new NotionSdkStructureGateway({ baseUrl: notionOptions?.apiBaseUrl }), options.clock)
     : null;
   const notionRead = notionVault
-    ? new NotionReadService(store, notionVault, options.notionReadGateway ?? new NotionSdkReadGateway(), options.clock)
+    ? new NotionReadService(store, notionVault, options.notionReadGateway ??
+      new NotionSdkReadGateway(undefined, { baseUrl: notionOptions?.apiBaseUrl }), options.clock)
     : null;
   const notionSync = notionVault
     ? new NotionSyncService(store, new NotionOutboxDispatcher(store,
-      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault),
+      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault, { baseUrl: notionOptions?.apiBaseUrl }),
       () => new Date((options.clock ?? Date.now)()).toISOString()))
     : null;
   const planner = new PlannerService(store, options.clock);

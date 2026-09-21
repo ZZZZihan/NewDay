@@ -20,8 +20,11 @@ export interface NotionStructureGateway {
 }
 
 export class NotionSdkStructureGateway implements NotionStructureGateway {
+  constructor(private readonly options: { baseUrl?: string } = {}) {}
+
   private client(token: string): Client {
-    return new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000 });
+    return new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000,
+      ...(this.options.baseUrl ? { baseUrl: this.options.baseUrl } : {}) });
   }
 
   async createRoot(token: string, title: string): Promise<string> {

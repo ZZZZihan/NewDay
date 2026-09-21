@@ -11,10 +11,10 @@ import { getDayPlan } from "@newday/core/application/day-plan";
 import { executePlannerCommands } from "@newday/core/application/planner-command";
 import type { NotionConnection } from "@newday/core/contracts/notion-sync";
 
-import { PlannerService } from "../src/services/planner-service.js";
 import { NotionReadFailure, NotionSdkReadGateway, type AreaRow, type NotionReadGateway, type ProjectRow,
   type ReadRow, type ReadTable, type TaskRow } from "../src/services/notion-read-gateway.js";
 import { NotionReadService } from "../src/services/notion-read-service.js";
+import { PlannerService } from "../src/services/planner-service.js";
 import { recordedOutcome } from "../src/services/planner-history-service.js";
 import { NotionCredentialVault } from "../src/storage/notion-credential-vault.js";
 import { SQLitePlannerStore } from "../src/storage/sqlite-planner-store.js";
@@ -91,9 +91,6 @@ test("full read keeps a stable mapping, refreshes ownership, and clears a date w
     await service.scan(workspaceId);
     assert.equal((await store.getPlanningVersion()).plannerRevision, revision);
     assert.equal((await store.listNotionTaskMappings()).length, 1);
-    await assert.rejects(new PlannerService(store).commands([{ type: "completeTask", input: {
-      taskId: mapping.localTaskId, now: at, asOfDate: "2026-09-21",
-    } }], "browser"), /只读/);
     await executePlannerCommands(store, [{ type: "setTodayFocus", input: {
       taskId: mapping.localTaskId, date: "2026-09-21", now: at,
     } }]);
@@ -149,6 +146,56 @@ test("incomplete pages retain the old task and watermark; only explicit trash ar
     assert.equal((await getDayPlan(store, { selectedDate: "2026-09-23", asOfDate: "2026-09-23" })).open.length, 0);
     status = await service.status(workspaceId);
     assert.equal(status.sources[2].watermark?.lastError, null);
+  } finally { store.close(); credentials.close(); }
+});
+
+test("a linked page with a changed NewDay Key cannot overwrite its local task", async () => {
+  const credentials = vault();
+  const store = new SQLitePlannerStore(":memory:");
+  const gateway = new FakeReadGateway();
+  try {
+    await store.putNotionConnection(connection());
+    const service = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
+    await service.scan(workspaceId);
+    const [mapping] = await store.listNotionTaskMappings();
+    const success = (await service.status(workspaceId)).sources[2].watermark?.lastSuccessAt;
+    gateway.rows.tasks = [{ ...task(["2026-09-23", "2026-09-23"], "错误归属"), clientKey: "another-installation" }];
+    await assert.rejects(service.scan(workspaceId), /different NewDay Key/);
+    assert.equal((await store.getTask(mapping.localTaskId))?.title, "读书");
+    assert.equal((await service.status(workspaceId)).sources[2].watermark?.lastSuccessAt, success);
+  } finally { store.close(); credentials.close(); }
+});
+
+test("a scan begun before a local linked edit cannot overwrite that pending write", async () => {
+  const credentials = vault();
+  const store = new SQLitePlannerStore(":memory:");
+  const gateway = new FakeReadGateway();
+  try {
+    await store.putNotionConnection(connection());
+    const read = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
+    await read.scan(workspaceId);
+    const [mapping] = await store.listNotionTaskMappings();
+    const previousSuccess = (await read.status(workspaceId)).sources[2].watermark?.lastSuccessAt;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const scan = gateway.scan.bind(gateway);
+    gateway.scan = async (token, connection, table) => {
+      if (table === "tasks") { enter(); await held; }
+      return scan(token, connection, table);
+    };
+    const inFlight = read.scan(workspaceId);
+    await entered;
+    const planner = new PlannerService(store, () => Date.parse(at));
+    await planner.commands([{ type: "updateTaskDetails", input: {
+      taskId: mapping.localTaskId, title: "本机最新标题", now: at,
+    } }], "test-client");
+    release();
+    await assert.rejects(inFlight, /新的待发送操作/);
+    assert.equal((await store.getTask(mapping.localTaskId))?.title, "本机最新标题");
+    assert.equal((await store.listNotionOutboxOperations())[0]?.status, "pending");
+    assert.equal((await read.status(workspaceId)).sources[2].watermark?.lastSuccessAt, previousSuccess);
   } finally { store.close(); credentials.close(); }
 });
 

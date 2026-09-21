@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { executePlannerCommandsWithoutUndo, type PlannerCommand } from "@newday/core/application/planner-command";
+import { clearUndoReceipts } from "@newday/core/application/planner-undo";
 import { reconcileNotionTask } from "@newday/core/application/notion-sync-reconcile";
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
+import { taskSchema } from "@newday/core/domain/planner-model";
 import {
   notionTaskFieldsSchema,
   type NotionFieldConflict,
@@ -35,10 +36,12 @@ export interface NotionTaskTransport {
   updatePage(connection: NotionConnection, mapping: NotionTaskMapping, patch: Partial<NotionTaskFields>): Promise<void>;
 }
 
-type DispatchResult = "confirmed" | "unknown" | "quarantined" | "superseded";
+/** The transport proves that no page write was attempted. */
+export class NotionWritePreflightFailure extends Error {}
 
-/** The product has no transport adapter yet. This coordinates fake-provider
- * fault tests and supplies the send boundary for the later T6 adapter. */
+type DispatchResult = "confirmed" | "unknown" | "quarantined" | "superseded" | "paused";
+
+/** Serializes one local process; SQLite fences unresolved sends across restarts. */
 export class NotionOutboxDispatcher {
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -72,7 +75,7 @@ export class NotionOutboxDispatcher {
 
     let before: Awaited<ReturnType<NotionOutboxDispatcher["readTarget"]>>;
     try { before = await this.readTarget(connection, mapping); }
-    catch { return this.markUnknownOrQuarantined(operation); }
+    catch { return this.pauseBeforeWrite(operation); }
     if (before === "uncertain") return this.markUnknownOrQuarantined(operation);
     if (before && sameFields(before.fields, operation.desired)) return this.confirmOrQuarantine(operation, before);
     try {
@@ -84,7 +87,10 @@ export class NotionOutboxDispatcher {
         return this.markUnknownOrQuarantined(operation);
       }
       try { await this.transport.createPage(connection, mapping, operation.desired); }
-      catch { /* The write may have committed before its response was lost. */ }
+      catch (error) {
+        if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+        // The page write may have committed before its response was lost.
+      }
       return this.readBackAndConfirm(operation, connection, mapping);
     }
 
@@ -110,7 +116,10 @@ export class NotionOutboxDispatcher {
     }).remotePatch;
     if (Object.keys(patch).length === 0) return this.markUnknownOrQuarantined(operation);
     try { await this.transport.updatePage(connection, mapping, patch); }
-    catch { /* Read back before treating an error as a failed write. */ }
+    catch (error) {
+      if (error instanceof NotionWritePreflightFailure) return this.pauseBeforeWrite(operation);
+      // Read back before treating an attempted write as failed.
+    }
     return this.readBackAndConfirm(operation, connection, mapping);
   }
 
@@ -166,7 +175,6 @@ export class NotionOutboxDispatcher {
     merged: NotionTaskFields,
     conflicts: NotionFieldConflict[],
   ): Promise<NotionOutboxOperation | "superseded"> {
-    if (merged.date === null) throw new Error("Undated Notion tasks need the T4 task model");
     const at = this.now();
     return this.store.transaction(async () => {
       if (!this.store.canDispatchNotionOutbox(operation.operationId, operation.datasetEpoch)) {
@@ -181,23 +189,26 @@ export class NotionOutboxDispatcher {
         if (await this.store.supersedeNotionUnsentIfNewer(operation.operationId)) return "superseded";
         throw new Error("Local task changed during Notion preflight");
       }
-      const commands: PlannerCommand[] = [];
-      if (task.title !== merged.title) commands.push({
-        type: "updateTaskDetails", input: { taskId: task.id, title: merged.title, now: at },
-      });
-      if (task.startDate !== merged.date![0] || task.endDate !== merged.date![1]) commands.push({
-        type: "rescheduleTask", input: { taskId: task.id, startDate: merged.date![0], endDate: merged.date![1], now: at },
-      });
-      if ((task.status === "completed") !== merged.completed) {
-        if (merged.completed) {
-          const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
-          if (!preferences?.timeZone) throw new Error("Notion completion needs a configured time zone");
-          commands.push({ type: "completeTask", input: {
-            taskId: task.id, now: at, completedOn: dateInTimeZone(new Date(at), preferences.timeZone),
-          } });
-        } else commands.push({ type: "reopenTask", input: { taskId: task.id, now: at } });
+      const changed = task.title !== merged.title || task.startDate !== (merged.date?.[0] ?? null) ||
+        task.endDate !== (merged.date?.[1] ?? null) || (task.status === "completed") !== merged.completed;
+      if (changed) {
+        const next = taskSchema.parse({ ...task, title: merged.title,
+          startDate: merged.date?.[0] ?? null, endDate: merged.date?.[1] ?? null,
+          status: merged.completed ? "completed" : "open",
+          completedAt: merged.completed && task.status === "completed" ? task.completedAt : null,
+          completedOn: merged.completed && task.status === "completed" ? task.completedOn : null,
+          updatedAt: at });
+        if (task.startDate !== next.startDate || task.endDate !== next.endDate || task.status !== next.status) {
+          for (const record of await this.store.listFocusRecordsForTask(task.id)) await this.store.deleteFocusRecord(record.id);
+        }
+        const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
+        const apply = () => this.store.putTask(next);
+        if (preferences?.timeZone) await this.store.withEventContext({
+          date: dateInTimeZone(new Date(at), preferences.timeZone), at, source: "system", kind: "notion_observed",
+        }, apply);
+        else await apply();
+        clearUndoReceipts(this.store);
       }
-      await executePlannerCommandsWithoutUndo(this.store, commands);
       const rebased = await this.store.rebaseNotionSending(operation.operationId, remote, merged, at);
       for (const conflict of conflicts) {
         await this.store.appendNotionConflict({
@@ -228,6 +239,13 @@ export class NotionOutboxDispatcher {
     } catch {
       return this.quarantineIfRestored(operation);
     }
+  }
+
+  private async pauseBeforeWrite(operation: NotionOutboxOperation): Promise<DispatchResult> {
+    try {
+      if (await this.store.pauseNotionUnsent(operation.operationId, this.now())) return "paused";
+      return this.quarantineIfRestored(operation);
+    } catch { return this.markUnknownOrQuarantined(operation); }
   }
 
   private async quarantineIfRestored(operation: NotionOutboxOperation): Promise<DispatchResult> {

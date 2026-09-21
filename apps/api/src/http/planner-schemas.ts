@@ -33,6 +33,7 @@ const materializationSchema = z.strictObject({
 const commandSchema: z.ZodType<PlannerCommand> = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("createTask"), input: z.strictObject({
     id: identifier, title, notes: notes.optional(), startDate: localDateSchema, endDate: localDateSchema, now,
+    notionWorkspaceId: identifier.optional(),
   }) }),
   z.strictObject({ type: z.literal("updateTask"), input: z.strictObject({
     taskId, ...details, startDate: localDateSchema.optional(), endDate: localDateSchema.optional(), now,

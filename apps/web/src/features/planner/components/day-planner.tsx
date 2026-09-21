@@ -18,13 +18,14 @@ import { PlannerStatus } from "./planner-status";
 import { FullscreenToggle } from "./fullscreen-toggle";
 import { LifePanel, type LifeView } from "./life-panel";
 import { useLifeWorkspace } from "../hooks/use-life-workspace";
-import { useNotionConnection } from "../hooks/use-notion-connection";
+import { useNotionConnection, writableNotionWorkspaces } from "../hooks/use-notion-connection";
 import { NotionConnectionPanel } from "./notion-connection-panel";
 
 const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"] as const;
 
 export function DayPlanner() {
   const [view, setView] = useState<"today" | LifeView | "notion">("today");
+  const [quickWorkspaceId, setQuickWorkspaceId] = useState("");
   const life = useLifeWorkspace(view !== "today" && view !== "notion");
   const onNotionReturn = useCallback(() => setView("notion"), []);
   const {
@@ -32,14 +33,20 @@ export function DayPlanner() {
     setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
     notice, isSaving, isUndoing, quickInputRef, importInputRef,
     dayPlan, dataError, refreshing, refresh, migration, seriesError, seriesLoading, retrySeries,
-    handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,
+    handleUndo, handleQuickAdd, handleComplete, handleSchedule, handleFocus, handleExport,
     handleImport, saveEditor, moveDate, deleteEditingTask, stopEditingRecurrence,
   } = useDayPlanner();
   const refreshLife = life.refresh;
   const refreshAfterNotionScan = useCallback(async () => {
     await Promise.all([refresh(), refreshLife()]);
   }, [refresh, refreshLife]);
-  const notion = useNotionConnection(onNotionReturn, refreshAfterNotionScan);
+  const onNotionAvailabilityChanged = useCallback((workspaceIds: readonly string[]) => {
+    setQuickWorkspaceId((current) => current && !workspaceIds.includes(current) ? "" : current);
+  }, []);
+  const notion = useNotionConnection(onNotionReturn, refreshAfterNotionScan, onNotionAvailabilityChanged);
+  const writableWorkspaces = writableNotionWorkspaces(notion.status, notion.structures, notion.reads, notion.syncs);
+  const quickWorkspaceAvailable = writableWorkspaces.some((item) => item.workspaceId === quickWorkspaceId);
+  const selectedQuickWorkspaceId = quickWorkspaceAvailable ? quickWorkspaceId : "";
   if (!selectedDate) return <PlannerLoading />;
 
   const selectedIsToday = selectedDate === today;
@@ -246,7 +253,10 @@ export function DayPlanner() {
             onRetrySeries={retrySeries}
           />
 
-          <form className="quick-add" onSubmit={handleQuickAdd}>
+          <form className="quick-add" onSubmit={(event) => { void (async () => {
+            await handleQuickAdd(event, selectedQuickWorkspaceId || undefined);
+            if (selectedQuickWorkspaceId) await notion.refresh();
+          })(); }}>
             <Input
               ref={quickInputRef}
               id="quick-task"
@@ -262,6 +272,14 @@ export function DayPlanner() {
             <Button type="submit" variant="primary" size="lg" isIconOnly aria-label="添加任务" isDisabled={!quickTitle.trim() || isSaving || isUndoing || migration.checking}>
               <Plus size={20} />
             </Button>
+            {writableWorkspaces.length ? <label className="editor-select-field">
+              <span>保存位置</span>
+              <select aria-label="保存位置" value={selectedQuickWorkspaceId} onChange={(event) => setQuickWorkspaceId(event.target.value)}>
+                <option value="">仅本机</option>
+                {writableWorkspaces.map((item) => <option key={item.workspaceId} value={item.workspaceId}>
+                  Notion：{item.workspaceName || item.workspaceId}</option>)}
+              </select>
+            </label> : null}
           </form>
 
           <div className="daily-task-list" data-testid="daily-task-list">
@@ -359,7 +377,7 @@ export function DayPlanner() {
               </details>
             ) : null}
           </div>
-        </section> : view === "notion" ? <NotionConnectionPanel connection={notion} /> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onViewChange={setView} />}
+        </section> : view === "notion" ? <NotionConnectionPanel connection={notion} /> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onScheduleTask={handleSchedule} onViewChange={setView} />}
         <aside className="assistant-panel" aria-label="规划助手">
           <AgentPlanner
             selectedDate={selectedDate}
@@ -377,6 +395,9 @@ export function DayPlanner() {
         <TaskEditor
           key={`${editingTask.id}:${editingSeries?.updatedAt ?? "one-off"}`}
           task={editingTask}
+          linked={Boolean(dayPlan && [...dayPlan.focus, ...dayPlan.overdue, ...dayPlan.open, ...dayPlan.completed]
+            .some((item) => item.task.id === editingTask.id && item.notion)) ||
+            Boolean(life.workspace?.notionByTaskId?.[editingTask.id])}
           series={editingSeries}
           allowSeriesActions={editingSeriesActionsAllowed}
           busy={isSaving || isUndoing || seriesLoading || Boolean(seriesError)}

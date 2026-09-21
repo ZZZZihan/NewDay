@@ -149,9 +149,9 @@ Agent 界面在确认前预览新增、保留、移除的重点，收到成功�
 
 Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，跨刷新或 API 重启后仍可查询，但执行时必须仍为同一天、同一时区、同一 epoch，规划版本和当前重点集合未变化，原重点任务仍可执行。恢复只替换重点集合，自身也有独立的幂等 operation 和事件；不恢复或覆盖任务正文、完成状态、日期或重复规则。
 
-### Notion OAuth 候选 API
+### Notion 连接与同步候选 API
 
-`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化；结构请求由本机 API 使用令牌发给 Notion，任务同步仍未启用。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md) 和 [结构初始化说明](./notion-structure-operations.md)。
+`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化。COL-35/COL-37 候选接入一次性任务读取与写回，仍需在隔离 Notion 工作区验收。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md)、[结构初始化说明](./notion-structure-operations.md)和[一次性任务写回说明](./notion-write-operations.md)。
 
 | 方法与路径 | 输入 | 成功响应 |
 | --- | --- | --- |
@@ -163,6 +163,12 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `POST /api/notion/connections/:workspaceId/disconnect` | `{}` | `{ ok: true, removed }`；删除本机凭据 |
 | `GET /api/notion/connections/:workspaceId/structure` | 无 | 当前初始化步骤、读回 ID 与待核对类别，不含令牌 |
 | `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
+| `GET /api/notion/connections/:workspaceId/read` | 无 | 各数据源扫描水位与失败类别 |
+| `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、一次性任务 |
+| `GET /api/notion/connections/:workspaceId/sync` | 无 | 写回操作状态及字段冲突，不含凭据 |
+| `POST /api/notion/connections/:workspaceId/sync/drain` | `{}` | 串行尝试待发送操作，返回最新状态 |
+| `POST /api/notion/connections/:workspaceId/sync/operations/:operationId/reconcile` | `{}` | 对未知操作只读核对；不再次发送 |
+| `POST /api/notion/connections/:workspaceId/sync/resume` | `{}` | 已核对完未知操作或远端预读失败后，恢复待发送队列 |
 
 Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要求 API 服务密钥，Notion 回调仅通过随机 state 找到授权会话。浏览器回调 URL fragment 中只有一次性 ticket；页面清除 fragment 后交给本机 API。`refresh_pending` 阻止旧令牌继续供同步使用。Notion 凭据不进入规划和 Agent JSON 备份。
 
@@ -178,7 +184,7 @@ Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要
 
 用户备份使用可移植的 JSON。当前 T5/T3 组合候选新导出为版本 6，导入兼容 1～6；v1～v5 视作纯本地数据，不按标题或 ID 推断 Notion 映射。旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。v6 保存连接结构 ID、初始化尝试与读回记录、任务映射、逐字段基准、outbox、冲突、水位和恢复隔离记录，不含 OAuth 令牌或 client secret；导入后连接暂停，未完成发送进入隔离，须完成远端核对后才可恢复发送。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
 
-T5 候选新增的 `NotionOutboxDispatcher` 只接收注入的传输接口，尚未接入应用启动、定时器、HTTP 路由或真实 Notion 凭据。假传输测试覆盖成功但响应丢失后的稳定键查询、搜索不完整或重复时拒绝创建、未知结果只读对账、同字段冲突记录、不同字段合并经业务命令推进任务版本、仅发送本次改变的字段，以及恢复前预检与在途发送的隔离。预读期间若本地提交较新意图，尚未发 HTTP 的旧尝试会被标为已取代，不把它当作未知远端写入而暂停整个工作区。恢复先持久暂停新发送，最多等待 5 秒让已知请求完成；超时的发送保留在隔离记录，晚到结果不得写入新数据集。发送记录带有本机进程和存储实例身份：另一活进程打开同一 SQLite 不会误回收其在途操作；发送 Store 关闭时先持久标记未知并暂停，即使其进程仍运行。进程结束或旧记录没有身份时也转为未知并暂停。领取事务内再次检查进程身份，缩小检查后退出的窗口；若发送方恰在最后一次检查后退出，仍需下一次领取或重启才收敛。该判定仅覆盖同一主机，进程号重用仍可能让旧操作保持阻塞，须由后续人工核对或租约机制处理。早期 v6 候选导出的冲突记录若缺少 `winner`，导入时按既有 Notion 优先规则补齐。真实服务尚需实现 provider 适配、完整发送租约、失败分类与退避、恢复隔离记录的人工/自动核销，并在真实隔离工作区验证条件写入能力。无日期联动任务仍依赖 T4 的任务模型扩展；本候选不构成可启用的产品同步。
+T5 的 `NotionOutboxDispatcher` 已由 COL-37 接入本机 API、定时队列、HTTP 状态接口和固定版本的 SDK 传输。任务命令在同一 SQLite 事务提交业务变更、映射和待发送操作；外部请求在事务外执行。成功响应丢失时按稳定键查找并读回，未知结果暂停且只读核对。远端预读失败而尚未发出写请求时，保留待发送操作并暂停，用户可明确恢复重试。较新的本地意图取代尚未发送的旧意图；逐字段共同基准决定合并与冲突记录。扫描在应用任务前再次检查待发送队列，避免并发扫描覆盖本地修改。假传输、HTTP 和 SQLite 测试验证这些路径；真实隔离工作区的 API 响应、限流和条件写入能力尚未验收。恢复隔离记录的人工核销也仍需后续实现。
 
 旧版任务备份 v4 只包含任务、规则和重点，v5 增加生活管理数据，v6 增加无凭据的同步元数据。Agent 使用独立 `newday-agent` v1 格式，声明范围 `agent-history-and-explicit-preferences`，包含上下文、偏好、快照、运行、提案、回执、反馈、事件和来源历史归档，不含 provider 密钥。`importedHistories[].archive` 保留导入的原始记录，包含没有形成提案的失败运行和原始事件，允许再次导出。
 

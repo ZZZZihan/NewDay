@@ -44,6 +44,7 @@ export type TaskEditorValues = {
 export function TaskEditor({
   task,
   series,
+  linked = false,
   allowSeriesActions = true,
   busy,
   loading = false,
@@ -57,6 +58,7 @@ export function TaskEditor({
 }: {
   task: DatedTask;
   series?: RecurrenceSeries;
+  linked?: boolean;
   allowSeriesActions?: boolean;
   busy: boolean;
   loading?: boolean;
@@ -247,7 +249,7 @@ export function TaskEditor({
                       : "任务会显示在开始日期到截止日期之间的每一天。"}
                 </p>
 
-                <fieldset className="recurrence-fields">
+                {linked ? <p className="date-hint">此任务会同步标题、日期和完成状态；归属与重复规则请在 Notion 编辑。备注只保存在 NewDay。</p> : <fieldset className="recurrence-fields">
                   <legend>重复</legend>
 
                   {series && allowSeriesActions ? (
@@ -356,7 +358,7 @@ export function TaskEditor({
                       ) : null}
                     </div>
                   ) : null}
-                </fieldset>
+                </fieldset>}
 
                 {formError ? (
                   <p className="form-error" role="alert">
@@ -378,7 +380,7 @@ export function TaskEditor({
 
             <Modal.Footer className="task-dialog__actions">
               <div>
-                <Button
+                {!linked ? <Button
                   variant="danger-soft"
                   type="button"
                   isDisabled={busy}
@@ -386,7 +388,7 @@ export function TaskEditor({
                 >
                   <Trash2 size={16} />
                   删除
-                </Button>
+                </Button> : null}
                 <Button
                   variant="secondary"
                   type="button"

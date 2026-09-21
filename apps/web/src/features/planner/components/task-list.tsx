@@ -43,7 +43,6 @@ export function TaskRow({
 }) {
   const { task } = item;
   const completed = task.status === "completed";
-  const linked = Boolean(item.notion);
   const focusLabel = focused
     ? `移出今日重点：${task.title}`
     : `设为今日重点：${task.title}`;
@@ -52,7 +51,7 @@ export function TaskRow({
     <article className={`day-task ${completed ? "day-task--completed" : ""} ${item.isOverdue ? "day-task--overdue" : ""}`}>
       <Button
         type="button"
-        isDisabled={busy || linked}
+        isDisabled={busy}
         className="task-check"
         variant="ghost"
         size="sm"
@@ -62,7 +61,7 @@ export function TaskRow({
       >
         {completed ? <Check size={17} /> : <Circle size={18} />}
       </Button>
-      <Button type="button" className="task-main" variant="ghost" isDisabled={busy || linked} onPress={onEdit}>
+      <Button type="button" className="task-main" variant="ghost" isDisabled={busy} onPress={onEdit}>
         <strong>{task.title}</strong>
         <span>{taskMetadata(item)}</span>
       </Button>
@@ -85,7 +84,7 @@ export function TaskRow({
         ) : task.seriesId ? (
           <span className="task-repeat-mark" title="重复任务" aria-hidden="true"><Repeat2 size={15} /></span>
         ) : null}
-        <Button type="button" className="task-edit" variant="ghost" isDisabled={busy || linked} size="sm" isIconOnly aria-label={linked ? `Notion 只读任务：${task.title}` : `编辑任务：${task.title}`} onPress={onEdit}>
+        <Button type="button" className="task-edit" variant="ghost" isDisabled={busy} size="sm" isIconOnly aria-label={`编辑任务：${task.title}`} onPress={onEdit}>
           <Edit3 size={16} />
         </Button>
       </div>

@@ -8,6 +8,7 @@ import { createApp } from "../src/app.js";
 import { NotionSdkStructureGateway, type NotionStructureGateway, type StructureDatabase, type StructurePage,
   type StructureProperty } from "../src/services/notion-structure-gateway.js";
 import { NotionCredentialVault } from "../src/storage/notion-credential-vault.js";
+import { SQLitePlannerStore } from "../src/storage/sqlite-planner-store.js";
 
 const workspaceId = "test-workspace";
 const credentialKey = Buffer.alloc(32, 17);
@@ -149,6 +150,17 @@ test("root response loss survives API restart; four databases and relations are 
     }
     assert.equal(result.dataSources.projects.propertyIds.Area, "relation-Area");
     assert.equal(result.dataSources.tasks.propertyIds.Rule, "relation-Rule");
+    const plannerStore = new SQLitePlannerStore(databasePath);
+    try {
+      const connection = await plannerStore.getNotionConnection(workspaceId);
+      assert.ok(connection);
+      await plannerStore.putNotionConnection({ ...connection, status: "paused",
+        pauseReason: "preflight_read", updatedAt: new Date().toISOString() });
+      assert.equal((await app.inject(`/api/notion/connections/${workspaceId}/structure`)).json().state, "ready");
+      assert.equal((await app.inject(`/api/notion/connections/${workspaceId}/read`)).json().pauseReason, "preflight_read");
+      assert.equal((await app.inject(`/api/notion/connections/${workspaceId}/sync`)).json().pauseReason, "preflight_read");
+      await plannerStore.putNotionConnection({ ...connection, status: "active", updatedAt: new Date().toISOString() });
+    } finally { plannerStore.close(); }
     const backup = (await app.inject("/api/planner/backup")).json();
     assert.equal(backup.version, 6);
     assert.equal(backup.notionSync.initializationSteps.length, 9);

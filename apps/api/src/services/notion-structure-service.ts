@@ -76,7 +76,7 @@ export class NotionStructureService {
     const state = !connection ? "not_started" : connection.status === "paused_after_restore" ? "paused_after_restore"
       : connection.status === "disconnected" ? "disconnected"
         : next?.status === "needs_review" ? "needs_review"
-          : nextStep === null && connection.status === "active" ? "ready" : "in_progress";
+          : nextStep === null ? "ready" : "in_progress";
     return {
       workspaceId, state, nextStep, reviewReason: next?.reviewReason ?? null,
       retryAfterAt: next?.retryAfterAt ?? null,

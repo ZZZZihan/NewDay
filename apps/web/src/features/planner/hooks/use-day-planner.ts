@@ -147,7 +147,7 @@ export function useDayPlanner() {
     }
   }
 
-  async function handleQuickAdd(event: FormEvent<HTMLFormElement>) {
+  async function handleQuickAdd(event: FormEvent<HTMLFormElement>, notionWorkspaceId?: string) {
     event.preventDefault();
     const title = quickTitle.trim();
     if (!selectedDate || !title) return;
@@ -163,9 +163,10 @@ export function useDayPlanner() {
           startDate: selectedDate,
           endDate: selectedDate,
           now: new Date().toISOString(),
+          ...(notionWorkspaceId ? { notionWorkspaceId } : {}),
         },
       },
-      `已添加“${title}”`,
+      notionWorkspaceId ? `已添加“${title}”，等待 Notion 同步` : `已添加“${title}”`,
     );
     if (!saved) setQuickTitle(title);
   }
@@ -182,6 +183,12 @@ export function useDayPlanner() {
       },
       task.status === "completed" ? "任务已恢复" : "任务已完成",
     );
+  }
+
+  async function handleSchedule(task: Task, date: string) {
+    return runCommand({ type: "rescheduleTask", input: {
+      taskId: task.id, startDate: date, endDate: date, now: new Date().toISOString(),
+    } }, "任务已安排日期，等待 Notion 同步");
   }
 
   async function handleFocus(task: Task, focused: boolean) {
@@ -408,7 +415,7 @@ export function useDayPlanner() {
     setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
     notice, isSaving, isUndoing, quickInputRef, importInputRef,
     dayPlan, dataError, refreshing, refresh, migration, seriesError, seriesLoading, retrySeries,
-    handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,
+    handleUndo, handleQuickAdd, handleComplete, handleSchedule, handleFocus, handleExport,
     handleImport, saveEditor, moveDate, deleteEditingTask, stopEditingRecurrence,
   };
 }

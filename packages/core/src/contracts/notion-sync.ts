@@ -43,6 +43,7 @@ export const notionConnectionSchema = z.object({
     rules: notionDataSourceRefSchema.optional(),
   }).strict(),
   status: z.enum(["disconnected", "active", "paused", "paused_after_restore", "paused_unknown"]),
+  pauseReason: z.literal("preflight_read").optional(),
   updatedAt: z.string().datetime({ offset: true }),
 }).strict();
 export type NotionConnection = z.infer<typeof notionConnectionSchema>;

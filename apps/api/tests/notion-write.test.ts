@@ -275,3 +275,38 @@ test("HTTP pause persists a send fence until explicit resume", async () => {
     assert.equal(resume.json().pauseReason, null);
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("HTTP restore audit requires the source epoch and cannot send the quarantined operation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-restore-audit-"));
+  const databasePath = join(directory, "planner.sqlite");
+  const seed = new SQLitePlannerStore(databasePath);
+  let sourceEpoch: string;
+  let operationId: string;
+  try {
+    await seedReady(seed);
+    await new PlannerService(seed, () => Date.parse(at)).commands([{ type: "createTask", input: {
+      id: taskId, title: initial.title, startDate: initial.date![0], endDate: initial.date![1],
+      now: at, notionWorkspaceId: workspaceId,
+    } }], "test-client");
+    sourceEpoch = (await seed.getPlanningVersion()).datasetEpoch;
+    operationId = (await seed.listNotionOutboxOperations())[0]!.operationId;
+    await seed.markNotionOutboxSending(operationId, at);
+    await seed.pauseNotionForRestore();
+    await seed.replaceAllData({ tasks: [(await seed.getTask(taskId))!] });
+  } finally { seed.close(); }
+  const remote = transport();
+  const app = createApp({ databasePath, planningModel: null, notionTaskTransport: remote.fake,
+    notionOAuth: { workerOrigin: "https://worker.example", workerApiKey: "test-key",
+      vaultPath: join(directory, "vault.sqlite"), encryptionKey: Buffer.alloc(32, 19) } });
+  try {
+    await app.ready();
+    const path = `/api/notion/connections/${workspaceId}/sync/restore/${operationId}/reconcile`;
+    const missingEpoch = await app.inject({ method: "POST", url: path, payload: {} });
+    assert.equal(missingEpoch.statusCode, 400, missingEpoch.body);
+    const checked = await app.inject({ method: "POST", url: path, payload: { sourceEpoch } });
+    assert.equal(checked.statusCode, 200, checked.body);
+    assert.equal(checked.json().restoreQuarantine[0].latestReview.outcome, "not_observed");
+    assert.equal(checked.json().connectionStatus, "paused_after_restore");
+    assert.deepEqual(remote.writes, []);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

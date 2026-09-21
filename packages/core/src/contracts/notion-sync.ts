@@ -203,11 +203,40 @@ export const notionReadTaskContextSchema = z.object({
 }).strict();
 export type NotionReadTaskContext = z.infer<typeof notionReadTaskContextSchema>;
 
+export const notionRestoreReviewSchema = z.object({
+  checkedAt: z.string().datetime({ offset: true }),
+  outcome: z.enum(["matches_intent", "different", "not_observed", "incomplete", "ambiguous", "identity_mismatch", "unreadable", "trashed"]),
+  remotePageId: nonEmptyId.nullable(),
+  remoteFields: notionTaskFieldsSchema.nullable(),
+}).strict().superRefine((review, context) => {
+  if (["matches_intent", "different", "trashed"].includes(review.outcome) &&
+    (!review.remotePageId || !review.remoteFields)) {
+    context.addIssue({ code: "custom", message: "已读取的 Notion 恢复核对结果缺少远端页面或字段" });
+  }
+  if (review.outcome === "not_observed" && (review.remotePageId !== null || review.remoteFields !== null)) {
+    context.addIssue({ code: "custom", message: "未观察到的 Notion 页面不能附带远端字段" });
+  }
+});
+export type NotionRestoreReview = z.infer<typeof notionRestoreReviewSchema>;
+
 export const notionRestoreQuarantineSchema = z.object({
   operation: notionOutboxOperationSchema,
   mapping: notionTaskMappingSchema,
   quarantinedAt: z.string().datetime({ offset: true }),
-}).strict();
+  // A read-only observation, never permission to replay or release the fence.
+  latestReview: notionRestoreReviewSchema.optional(),
+}).strict().superRefine((entry, context) => {
+  if (!entry.latestReview?.remoteFields || !["matches_intent", "different"].includes(entry.latestReview.outcome)) return;
+  const remote = entry.latestReview.remoteFields;
+  const desired = entry.operation.desired;
+  const matches = remote.title === desired.title && remote.completed === desired.completed &&
+    (remote.date === null || desired.date === null
+      ? remote.date === desired.date
+      : remote.date[0] === desired.date[0] && remote.date[1] === desired.date[1]);
+  if (matches !== (entry.latestReview.outcome === "matches_intent")) {
+    context.addIssue({ code: "custom", message: "Notion 恢复核对结果与原意图不一致" });
+  }
+});
 export type NotionRestoreQuarantine = z.infer<typeof notionRestoreQuarantineSchema>;
 
 export const notionSyncArchiveSchema = z.object({

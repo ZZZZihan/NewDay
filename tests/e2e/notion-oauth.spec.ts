@@ -122,6 +122,8 @@ test("Notion panel exposes a manual pause and explicit resume", async ({ page })
 
 test("Notion panel shows pre-restore sends that are absent from the current outbox", async ({ page }) => {
   const workspaceId = "workspace-restored";
+  let latestReview: object | undefined;
+  let readOnlyAudits = 0;
   await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{
     workspaceId, workspaceName: "恢复测试空间", botId: "bot-test", status: "active",
     updatedAt: "2026-09-21T00:00:00.000Z",
@@ -131,20 +133,35 @@ test("Notion panel shows pre-restore sends that are absent from the current outb
       retryAfterAt: null, rootPageId: "root-id", dataSources: {}, completedSteps: [] } }));
   await page.route(`**/api/notion/connections/${workspaceId}/read`, (route) =>
     route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null, sources: [] } }));
-  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
-    route.fulfill({ json: { workspaceId, connectionStatus: "paused_after_restore", pauseReason: null,
+  const syncStatus = () => ({ workspaceId, connectionStatus: "paused_after_restore", pauseReason: null,
       retryAfterAt: null, operations: [], restoreQuarantine: [{
         sourceEpoch: "old-epoch", operationId: "old-operation", localTaskId: "old-task",
         originalStatus: "sending", attemptCount: 1, lastAttemptAt: "2026-09-21T00:00:00.000Z",
         dataSourceId: "tasks-source", remotePageId: null, clientKey: "newday:old-install:old-task",
         quarantinedAt: "2026-09-21T00:05:00.000Z",
-      }], conflicts: [] } }));
+        desired: { title: "原意图", date: ["2026-09-21", "2026-09-21"], completed: false },
+        ...(latestReview ? { latestReview } : {}),
+      }], conflicts: [] });
+  await page.route(`**/api/notion/connections/${workspaceId}/sync`, (route) =>
+    route.fulfill({ json: syncStatus() }));
+  await page.route(`**/api/notion/connections/${workspaceId}/sync/restore/old-operation/reconcile`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({ sourceEpoch: "old-epoch" });
+    readOnlyAudits += 1;
+    latestReview = { checkedAt: "2026-09-21T00:06:00.000Z", outcome: "different",
+      remotePageId: "remote-now", remoteFields: { title: "远端较新值", date: ["2026-09-21", "2026-09-21"], completed: false } };
+    return route.fulfill({ json: syncStatus() });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Notion 连接" }).click();
   await expect(page.getByText("恢复前隔离 1 项")).toBeVisible();
   await expect(page.getByText(/操作 old-operation · 原状态 sending/)).toBeVisible();
   await expect(page.getByText(/稳定键 newday:old-install:old-task/)).toBeVisible();
   await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
+  await page.getByRole("button", { name: "只读核对恢复前操作" }).click();
+  await expect(page.getByLabel("恢复前隔离操作")).toContainText("远端当前值与原意图不同");
+  await expect(page.getByLabel("恢复前隔离操作")).toContainText("远端较新值");
+  await expect(page.getByRole("button", { name: "恢复发送" })).toHaveCount(0);
+  expect(readOnlyAudits).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });

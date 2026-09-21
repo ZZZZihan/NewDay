@@ -4,7 +4,7 @@
 
 ## 当前候选与证据边界
 
-2026-09-21 查询 GitHub 时，PR #1～#11 均为 Open，尚未合并。Notion 候选按 #3 → #6 → #7 → #8 → #9 → #10 → #11 堆叠；#9 还包含 #5 的同步底座。它们不是 `main`、已部署服务或个人数据的当前能力。改变基线、整理堆叠分支或合并后，必须按新 SHA 重新验证。
+2026-09-21 查询 GitHub 时，PR #1～#14 均为 Open，尚未合并。Notion 主候选按 #3 → #6 → #7 → #8 → #9 → #10 → #11 堆叠；#9 还包含 #5 的同步底座，#14 基于 #11。#12/#13 是分别跟踪 G3/G4 的并行候选。它们不是 `main`、已部署服务或个人数据的当前能力。改变基线、整理堆叠分支或合并后，必须按新 SHA 重新验证。
 
 | 范围 | 当前入口 | 已有证据 | 仍缺少的验收 |
 | --- | --- | --- | --- |
@@ -13,8 +13,8 @@
 | 授权与结构 T2/T3 | [PR #6](https://github.com/ZZZZihan/NewDay/pull/6)、[PR #7](https://github.com/ZZZZihan/NewDay/pull/7) | 本地 Worker/API 与假网关测试 | Worker 部署、真实授权/轮换、私有根和四表关系读回 |
 | 读取、写回 T4～T6 | [PR #8](https://github.com/ZZZZihan/NewDay/pull/8)、[PR #5](https://github.com/ZZZZihan/NewDay/pull/5)、[PR #9](https://github.com/ZZZZihan/NewDay/pull/9) | SQLite、假 Notion 网关/传输、HTTP 与浏览器测试 | 真实分页、限流、回收站、冲突和往返；适用的条件写入能力 |
 | 规则与实例 T7 | [PR #10](https://github.com/ZZZZihan/NewDay/pull/10)，`c9b5b2b7bdeac932847b164bf4e76f0fef304aac` | 此 SHA 的 `pnpm check`、`pnpm build`、Chrome/WebKit Notion E2E 10/10 通过；此前 `b1425c6` 的 Notion + 日程 E2E 36/36；月末、改期、停用、重启及 Tasks 中断重试的假网关测试 | 真实规则属性、发生键、实例创建/读回与跨日运行 |
-| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对及离线验收矩阵；具体候选 SHA 和验证见 PR | A1～D1 真实执行、恢复演练与用户认可 |
-| G3 / G4 | [COL-23](https://linear.app/colife/issue/COL-23)、[COL-24](https://linear.app/colife/issue/COL-24) | 软件路径可单独测试 | 冻结预算与真实模型评测；人工基线和连续七天原始记录 |
+| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11)、[PR #14](https://github.com/ZZZZihan/NewDay/pull/14) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对、恢复隔离明细展示及离线验收矩阵；具体候选 SHA 和验证见 PR | A1～D1 真实执行、恢复演练与用户认可；隔离仍未核销 |
+| G3 / G4 | [COL-23](https://linear.app/colife/issue/COL-23)、[COL-24](https://linear.app/colife/issue/COL-24)；[PR #12](https://github.com/ZZZZihan/NewDay/pull/12)、[PR #13](https://github.com/ZZZZihan/NewDay/pull/13) | G3 零真实调用预检和 G4 前瞻记录协议 | 冻结预算与真实模型评测；人工基线和连续七天原始记录 |
 
 `pnpm build` 中 Worker 的 `wrangler deploy --dry-run` 只验证打包，不是部署。COL-39 的真实 OAuth、Notion 读写和恢复均为**未执行**；缺失证据不能记为通过。
 
@@ -52,7 +52,7 @@
 - **先停写。** 在“Notion 连接”对目标工作区点“暂停同步”，等状态显示“已手动暂停”，再记录各表扫描水位、outbox 操作 ID 并导出业务 JSON。此持久栅栏阻止启动新一轮自动读取和新的页面发送；已经开始的扫描可继续分页直到本轮退出，已经发出的写请求也可能完成。若暂停时存在 `sending`，等待读回到 `confirmed`/`pending`，或按未知结果核对；停止 API 进程可能留下未知结果，不得把它当作未发送。仅当 API 无法响应或无法建立暂停栅栏时，才先停止进程并把所有 `sending` 记为待核对。
 - **授权故障。** `refresh_pending` 只重试原轮换尝试；`reauthorization_required` 重新授权并核对同一工作区。断开只删除本机凭据，不等于在 Notion 撤销连接。凭据密钥丢失时不能从业务备份推算令牌，须保留旧库并重新授权。
 - **结构未知。** `needs_review` 时点“重新核对”仅执行当前已有尝试的一次只读核对；服务端检查步骤和尝试标识，另一标签页已经推进时返回 409，须刷新后重新判断。若该步骤转为已确认，后续步骤须另行点“建立或继续结构”才可能发 POST/PATCH。核对根标题标记、父页面、database/data source 和关系目标。搜索零结果可能是索引延迟；不清除创建尝试记录，也不自动重发当前结构请求。手动同步暂停针对已就绪工作区，不能替代结构初始化期间的人工停步。
-- **发送未确认。** `pending` 可在确认工作区和字段后等待队列或手动发送；`paused` 且原因为 `manual` 或 `preflight_read`，在已发请求结算、远端恢复并核对后点“恢复发送”。429/529 写前预读会显示并记录 `Retry-After` 截止时间；到期前即使点击恢复，API 也会拒绝并提示截止时间。到期后仍须人工点击，队列不会自动重试。`unknown`/`paused_unknown` 只用“只读核对”检查原操作和稳定键；多页、查询不完整或结果仍未知时继续暂停。`quarantined`/`paused_after_restore` 当前无一键核销流程。连接面板和同步状态接口会列出恢复前单独隔离的操作；即使当前 outbox 为空，也须保留这些操作 ID、原状态和远端标识逐项核对，不越过隔离发送新意图。
+- **发送未确认。** `pending` 可在确认工作区和字段后等待队列或手动发送；`paused` 且原因为 `manual` 或 `preflight_read`，在已发请求结算、远端恢复并核对后点“恢复发送”。429/529 写前预读会显示并记录 `Retry-After` 截止时间；到期前即使点击恢复，API 也会拒绝并提示截止时间。到期后仍须人工点击，队列不会自动重试。`unknown`/`paused_unknown` 只用“只读核对”检查原操作和稳定键；多页、查询不完整或结果仍未知时继续暂停。`quarantined`/`paused_after_restore` 当前无一键核销流程。连接面板和同步状态接口会列出恢复前单独隔离的操作；即使当前 outbox 为空，也须保留这些操作 ID、原状态和远端标识逐项核对，不越过隔离发送新意图。在连接页对每项恢复前操作点“只读核对恢复前操作”，API 用原数据集 epoch 和操作 ID 定位隔离记录，按原映射读页面或完整搜索稳定键，并保存本次观察时间、匹配结果、远端页面和字段值。`not_observed` 只说明此次未看到页面，不证明旧写请求未成功；查询不完整、多页、身份不符、回收站或读取失败继续隔离。即便观察值与原意图一致，也只是一时的读回记录，不能自动核销或开放发送。核对期间再次替换数据集或改变连接身份时，本次记录被拒绝，须刷新重做。
 - **扫描失败。** 检查失败类别、权限、字段类型和分页；不因查询缺项或 404 删除本地任务。仅确认页面 `in_trash: true` 后允许相应归档。修复远端问题后重新全量扫描，核对上次成功时间和任务数量。
 - **备份与回退。** 业务 JSON v6 包含规则/任务映射和 outbox 元数据，不含 OAuth 凭据。导入先设置发送栅栏并换 `datasetEpoch`，未完成操作进入隔离。先在新独立 SQLite 中验证导入、工作区和远端当前值，再决定是否用于原环境；不能仅恢复本地文件就覆盖可能较晚到达的远端请求。SQLite schema v7 是向前迁移，旧二进制无法直接打开 v7 库；代码回退须配合已验证的旧版本备份，在独立环境先演练。
 

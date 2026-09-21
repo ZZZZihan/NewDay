@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { notionClientKey, type NotionConnection, type NotionOutboxOperation, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
+import { createPlannerBackup, restorePlannerBackup } from "@newday/core/application/planner-backup";
+import { parsePlannerBackup } from "@newday/core/contracts/planner-backup";
 
 import { NotionOutboxDispatcher, NotionWritePreflightFailure, type NotionTaskPage, type NotionTaskTransport } from "../src/services/notion-outbox-dispatcher.js";
 import { NotionSyncService } from "../src/services/notion-sync-service.js";
@@ -502,11 +504,173 @@ test("a restore during an in-flight send keeps the late result out of the new da
       originalStatus: "sending", attemptCount: 1, lastAttemptAt: at,
       dataSourceId: "tasks-source-1", remotePageId: null,
       clientKey: notionClientKey("install-1", "task-1"),
-      quarantinedAt,
+      quarantinedAt, desired: fields, baseline: null,
     }]);
     await store.putNotionConnection({ ...connection(), workspaceId: "workspace-2" });
     assert.deepEqual((await sync.status("workspace-2")).restoreQuarantine, []);
   } finally { store.close(); }
+});
+
+test("restore audit records a remote match without replaying an old operation or lifting its fence", async () => {
+  const desired = { ...fields, title: "恢复前的改名" };
+  const store = await setup("remote-1", desired);
+  const fake = fakeTransport();
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    fake.pages.set("remote-1", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+      remotePageId: "remote-1", clientKey: notionClientKey("install-1", "task-1"),
+      fields: desired, inTrash: false });
+
+    const sync = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport, () => at));
+    const status = await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.deepEqual(status.restoreQuarantine[0]?.latestReview, {
+      checkedAt: at, outcome: "matches_intent", remotePageId: "remote-1", remoteFields: desired,
+    });
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+    assert.equal(status.connectionStatus, "paused_after_restore");
+    assert.deepEqual(await store.listNotionOutboxOperations(), []);
+    assert.equal((await store.listNotionRestoreQuarantine()).length, 1);
+    await assert.rejects(sync.resume("workspace-1"), /无需恢复发送/);
+    const exported = await createPlannerBackup(store, at);
+    if (exported.version !== 6) throw new Error("expected v6 backup");
+    assert.deepEqual(exported.notionSync.restoreQuarantine[0]?.latestReview,
+      status.restoreQuarantine[0]?.latestReview);
+    const invalidReview = structuredClone(exported);
+    invalidReview.notionSync.restoreQuarantine[0]!.latestReview!.remoteFields!.title = "不匹配的伪造值";
+    assert.throws(() => parsePlannerBackup(JSON.stringify(invalidReview)), /核对结果与原意图不一致/);
+    const imported = new SQLitePlannerStore(":memory:");
+    try {
+      await restorePlannerBackup(imported, JSON.stringify(exported));
+      assert.deepEqual((await imported.listNotionRestoreQuarantine())[0]?.latestReview,
+        status.restoreQuarantine[0]?.latestReview);
+      assert.equal((await imported.getNotionConnection("workspace-1"))?.status, "paused_after_restore");
+    } finally { imported.close(); }
+  } finally { store.close(); }
+});
+
+test("restore audit keeps missing, incomplete, and divergent remote results visible but fenced", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    const sync = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport, () => at));
+
+    assert.equal((await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1"))
+      .restoreQuarantine[0]?.latestReview?.outcome, "not_observed");
+    fake.setSearchComplete(false);
+    assert.equal((await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1"))
+      .restoreQuarantine[0]?.latestReview?.outcome, "incomplete");
+    fake.setSearchComplete(true);
+    fake.pages.set("remote-1", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+      remotePageId: "remote-1", clientKey: notionClientKey("install-1", "task-1"),
+      fields: { ...fields, title: "Notion 较新标题" }, inTrash: false });
+    assert.equal((await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1"))
+      .restoreQuarantine[0]?.latestReview?.outcome, "different");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "paused_after_restore");
+  } finally { store.close(); }
+});
+
+test("restore audit treats duplicate pages and a changed data source as unresolved identity", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    const page: NotionTaskPage = { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+      remotePageId: "remote-1", clientKey: notionClientKey("install-1", "task-1"),
+      fields, inTrash: false };
+    let searches = 0;
+    fake.transport.findByClientKey = async () => {
+      searches += 1;
+      return { complete: true, pages: [page, { ...page, remotePageId: "remote-2" }] };
+    };
+    const sync = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport, () => at));
+    assert.equal((await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1"))
+      .restoreQuarantine[0]?.latestReview?.outcome, "ambiguous");
+    const old = (await store.getNotionConnection("workspace-1"))!;
+    await store.putNotionConnection({ ...old, dataSources: { tasks: {
+      ...old.dataSources.tasks!, dataSourceId: "different-source",
+    } } });
+    assert.equal((await sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1"))
+      .restoreQuarantine[0]?.latestReview?.outcome, "identity_mismatch");
+    assert.equal(searches, 1, "identity mismatch must not start a remote read");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+  } finally { store.close(); }
+});
+
+test("restore audit rejects a dataset replaced during its remote read", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    fake.transport.findByClientKey = async () => { entered(); await released; return { complete: true, pages: [] }; };
+    const sync = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport, () => at));
+    const audit = sync.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    await started;
+    await store.replaceAllData({ tasks: [task("replacement")] });
+    release();
+    await assert.rejects(audit, /核对期间数据集或连接已变化/);
+    assert.equal((await store.listNotionRestoreQuarantine())[0]?.latestReview, undefined);
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+  } finally { store.close(); }
+});
+
+test("a slower restore read cannot overwrite a later observation from another dispatcher", async () => {
+  const store = await setup();
+  const first = fakeTransport();
+  const second = fakeTransport();
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    first.transport.findByClientKey = async () => { entered(); await released; return { complete: true, pages: [] }; };
+    const old = new NotionSyncService(store, new NotionOutboxDispatcher(store, first.transport, () => at));
+    const freshAt = "2026-09-21T00:00:01.000Z";
+    const newer = new NotionSyncService(store, new NotionOutboxDispatcher(store, second.transport, () => freshAt));
+    const slow = old.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    await started;
+    const fresh = await newer.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.equal(fresh.restoreQuarantine[0]?.latestReview?.checkedAt, freshAt);
+    release();
+    await assert.rejects(slow, /核对期间数据集或连接已变化/);
+    assert.equal((await store.listNotionRestoreQuarantine())[0]?.latestReview?.checkedAt, freshAt);
+  } finally { release(); store.close(); }
 });
 
 test("a restore during remote preflight prevents a new HTTP write", async () => {

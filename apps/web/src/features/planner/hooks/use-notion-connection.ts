@@ -242,6 +242,18 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     finally { setBusy(false); await refresh(); }
   }
 
+  async function reconcileRestore(workspaceId: string, sourceEpoch: string, operationId: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await notionApi.reconcileRestore(workspaceId, sourceEpoch, operationId);
+      refreshRevision.current += 1;
+      setSyncs((current) => ({ ...current, [workspaceId]: result }));
+      setMessage("已记录此恢复前操作的远端只读观察；旧操作仍隔离，发送仍暂停。请核对远端值与原意图。");
+    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取恢复前操作的远端结果"); }
+    finally { setBusy(false); await refresh(); }
+  }
+
   async function resume(workspaceId: string) {
     if (busy) return;
     setBusy(true);
@@ -255,5 +267,5 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   }
 
   return { status, structures, reads, syncs, message, busy, refresh, start, disconnect, retryRefresh,
-    initializeStructure, scan, drain, pause, reconcile, resume };
+    initializeStructure, scan, drain, pause, reconcile, reconcileRestore, resume };
 }

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ModelUsage, PlanningSnapshot } from "@newday/core/contracts/agent-planning";
@@ -315,6 +315,30 @@ describe("guarded real-provider evaluation trial", () => {
     expect(() => verifyReviewedLedger(ledgerSource, sha256(ledgerSource))).not.toThrow();
     expect(() => verifyReviewedLedger(ledgerSource, "e".repeat(64))).toThrowError(expect.objectContaining({ code: "LEDGER_REVIEW_MISMATCH" }));
     expect(() => verifyReviewedLedger(null, "new")).not.toThrow();
+  });
+
+  it("rejects evidence and trials directory symlinks before changing or writing through them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "newday-trial-symlink-test-"));
+    temporaryDirectories.push(root);
+    const repository = join(root, "repository");
+    await mkdir(repository, { mode: 0o755 });
+    await chmod(repository, 0o755);
+
+    const evidenceLink = join(root, "evidence-link");
+    await symlink(repository, evidenceLink, "dir");
+    await expect(prepareEvidenceDirectory(evidenceLink, repository)).rejects.toMatchObject({
+      code: "INSECURE_EVIDENCE_DIRECTORY",
+    });
+    expect((await stat(repository)).mode & 0o777).toBe(0o755);
+
+    const evidence = join(root, "evidence");
+    await mkdir(evidence, { mode: 0o700 });
+    await symlink(repository, join(evidence, "trials"), "dir");
+    await expect(prepareEvidenceDirectory(evidence, repository)).rejects.toMatchObject({
+      code: "INSECURE_TRIALS_DIRECTORY",
+    });
+    expect((await stat(repository)).mode & 0o777).toBe(0o755);
+    await expect(readFile(join(repository, "trial.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("binds freeze acknowledgement and the complete heldout corpus hashes", async () => {

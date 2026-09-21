@@ -39,7 +39,7 @@ FREEZE=/absolute/private/path/freeze.json
 EVIDENCE=/absolute/private/path/evidence
 FREEZE_SHA=$(shasum -a 256 "$FREEZE" | awk '{print $1}')
 
-pnpm agent:evaluation:trial -- \
+pnpm agent:evaluation:trial \
   --freeze "$FREEZE" \
   --acknowledge-freeze-sha256 "$FREEZE_SHA" \
   --reviewed-ledger-sha256 new \
@@ -54,7 +54,7 @@ pnpm agent:evaluation:trial -- \
 ```bash
 LEDGER_SHA=$(shasum -a 256 "$EVIDENCE/ledger.json" | awk '{print $1}')
 
-pnpm agent:evaluation:trial -- \
+pnpm agent:evaluation:trial \
   --freeze "$FREEZE" \
   --acknowledge-freeze-sha256 "$FREEZE_SHA" \
   --reviewed-ledger-sha256 "$LEDGER_SHA" \
@@ -85,7 +85,7 @@ H-P05 mapping 文件格式如下；`questionId` 和 `questionText` 必须逐字�
 续跑仍是一条单独命令，并继续使用同一 trial 的三次总调用上限：
 
 ```bash
-pnpm agent:evaluation:trial -- \
+pnpm agent:evaluation:trial \
   --freeze "$FREEZE" \
   --acknowledge-freeze-sha256 "$FREEZE_SHA" \
   --reviewed-ledger-sha256 "$LEDGER_SHA" \

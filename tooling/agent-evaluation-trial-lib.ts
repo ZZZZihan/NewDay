@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmod, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile,
+  chmod, lstat, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
@@ -611,15 +611,37 @@ export function setTrialReportHash(ledger: EvaluationLedger, id: string, reportS
 
 export async function prepareEvidenceDirectory(evidenceDirectory: string, repositoryRoot: string) {
   const requested = resolve(evidenceDirectory);
-  assertOutsideRepository(requested, resolve(repositoryRoot));
+  const repositoryReal = await realpath(resolve(repositoryRoot));
+  assertOutsideRepository(requested, repositoryReal);
   await mkdir(requested, { recursive: true, mode: 0o700 });
-  await chmod(requested, 0o700);
-  const [evidenceReal, repositoryReal] = await Promise.all([realpath(requested), realpath(repositoryRoot)]);
+  const requestedEntry = await lstat(requested);
+  if (!requestedEntry.isDirectory() || requestedEntry.isSymbolicLink()) {
+    throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence directory must be a real directory, not a symbolic link");
+  }
+  const evidenceReal = await realpath(requested);
   assertOutsideRepository(evidenceReal, repositoryReal);
+  await chmod(evidenceReal, 0o700);
   const mode = (await stat(evidenceReal)).mode & 0o777;
   if (mode !== 0o700) throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence directory must have mode 0700");
-  await mkdir(join(evidenceReal, "trials"), { recursive: true, mode: 0o700 });
-  await chmod(join(evidenceReal, "trials"), 0o700);
+
+  const trialsPath = join(evidenceReal, "trials");
+  try { await mkdir(trialsPath, { mode: 0o700 }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  const trialsEntry = await lstat(trialsPath);
+  if (!trialsEntry.isDirectory() || trialsEntry.isSymbolicLink()) {
+    throw new EvaluationGuardError("INSECURE_TRIALS_DIRECTORY", "evidence trials path must be a real directory, not a symbolic link");
+  }
+  const trialsReal = await realpath(trialsPath);
+  assertOutsideRepository(trialsReal, repositoryReal);
+  if (trialsReal !== trialsPath || relative(evidenceReal, trialsReal) !== "trials") {
+    throw new EvaluationGuardError("INSECURE_TRIALS_DIRECTORY", "evidence trials path must stay directly inside the evidence directory");
+  }
+  await chmod(trialsReal, 0o700);
+  if (((await stat(trialsReal)).mode & 0o777) !== 0o700) {
+    throw new EvaluationGuardError("INSECURE_TRIALS_DIRECTORY", "evidence trials directory must have mode 0700");
+  }
   return evidenceReal;
 }
 

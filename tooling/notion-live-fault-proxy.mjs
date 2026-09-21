@@ -18,7 +18,9 @@ const allowedActions = new Set([
 ]);
 
 export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch }) {
-  const counters = new Map(rules.map((rule) => [rule.id, { seen: 0, applied: 0 }]));
+  const counters = new Map(rules.map((rule) => [rule.id, {
+    seen: 0, applied: 0, awaitingPaginationFollowup: false,
+  }]));
   prepareEvidence(evidencePath);
 
   return createServer(async (request, response) => {
@@ -55,7 +57,14 @@ export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch })
 
     if (rule?.action === "drop_before_upstream") {
       record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-        upstreamReached: false, downstream: "connection_dropped" }));
+        upstreamReached: false, downstream: "connection_dropped", faultSatisfied: true }));
+      response.socket?.destroy();
+      return;
+    }
+
+    if (rule?.phase === "pagination_followup") {
+      record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
+        upstreamReached: false, downstream: "pagination_followup_dropped", faultSatisfied: true }));
       response.socket?.destroy();
       return;
     }
@@ -66,8 +75,23 @@ export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch })
       response.writeHead(status, headers);
       response.end(JSON.stringify(injectedError(status)));
       record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-        upstreamReached: false, downstream: `status_${status}`, retryAfter: rule.retryAfter }));
+        upstreamReached: false, downstream: `status_${status}`, retryAfter: rule.retryAfter, faultSatisfied: true }));
       return;
+    }
+
+    let upstreamRequestBody = requestBody;
+    let upstreamRequestMutated = false;
+    let faultPreconditionFailure = null;
+    if (rule?.action === "partial_pagination_after_upstream") {
+      try {
+        const value = JSON.parse(requestBody.toString("utf8"));
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not_object");
+        value.page_size = 1;
+        upstreamRequestBody = Buffer.from(JSON.stringify(value));
+        upstreamRequestMutated = true;
+      } catch {
+        faultPreconditionFailure = "query_body_not_json_object";
+      }
     }
 
     let upstreamResponse;
@@ -78,7 +102,7 @@ export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch })
       upstreamResponse = await fetcher(target, {
         method,
         headers,
-        body: method === "GET" || method === "HEAD" ? undefined : requestBody,
+        body: method === "GET" || method === "HEAD" ? undefined : upstreamRequestBody,
         redirect: "manual",
         signal: AbortSignal.timeout(20_000),
       });
@@ -86,7 +110,7 @@ export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch })
       if (upstreamBody.byteLength > MAX_RESPONSE_BYTES) throw new Error("upstream_response_too_large");
     } catch (error) {
       record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-        upstreamReached: null, downstream: "upstream_failed",
+        upstreamReached: null, upstreamRequestMutated, downstream: "upstream_failed",
         failure: error instanceof Error ? error.name : typeof error }));
       response.socket?.destroy();
       return;
@@ -98,46 +122,79 @@ export function createNotionFaultProxy({ rules, evidencePath, fetcher = fetch })
       responseSha256: sha256(upstreamBody),
       requestIdSha256: hashHeader(upstreamResponse.headers.get("x-request-id")),
     };
+    const upstreamSucceeded = upstreamResponse.status >= 200 && upstreamResponse.status < 300;
     if (rule?.action === "drop_after_upstream") {
-      record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-        upstreamReached: true, upstream, downstream: "connection_dropped" }));
-      response.socket?.destroy();
-      return;
-    }
-
-    let outgoingBody = upstreamBody;
-    if (rule?.action === "partial_pagination_after_upstream" ||
-      rule?.action === "schema_missing_properties_after_upstream") {
-      try {
-        const value = JSON.parse(upstreamBody.toString("utf8"));
-        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not_object");
-        if (rule.action === "partial_pagination_after_upstream") {
-          value.has_more = true;
-          value.next_cursor = null;
-        } else {
-          value.properties = {};
-        }
-        outgoingBody = Buffer.from(JSON.stringify(value));
-      } catch {
+      if (upstreamSucceeded) {
         record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-          upstreamReached: true, upstream, downstream: "mutation_failed" }));
+          upstreamReached: true, upstreamSucceeded, upstream, downstream: "connection_dropped", faultSatisfied: true }));
         response.socket?.destroy();
         return;
       }
+      faultPreconditionFailure = "upstream_status_not_2xx";
+    }
+
+    let outgoingBody = upstreamBody;
+    let downstream = rule ? "mutated_response" : "forwarded";
+    let faultSatisfied = rule ? true : null;
+    if (rule?.action === "partial_pagination_after_upstream") {
+      try {
+        const value = JSON.parse(upstreamBody.toString("utf8"));
+        if (!upstreamSucceeded) faultPreconditionFailure = "upstream_status_not_2xx";
+        else if (!upstreamRequestMutated) faultPreconditionFailure ??= "query_request_not_rewritten";
+        else if (!value || typeof value !== "object" || Array.isArray(value) || !Array.isArray(value.results) ||
+          value.results.length === 0 || value.has_more !== true || typeof value.next_cursor !== "string" ||
+          value.next_cursor.length === 0) {
+          faultPreconditionFailure = "upstream_did_not_return_a_followup_cursor";
+        }
+        if (faultPreconditionFailure === null) {
+          counters.get(rule.id).awaitingPaginationFollowup = true;
+          downstream = "partial_page_forwarded";
+        } else {
+          downstream = "forwarded_fault_precondition_failed";
+          faultSatisfied = false;
+        }
+      } catch {
+        faultPreconditionFailure = "upstream_response_not_json";
+        downstream = "forwarded_fault_precondition_failed";
+        faultSatisfied = false;
+      }
+    } else if (rule?.action === "schema_missing_properties_after_upstream") {
+      try {
+        const value = JSON.parse(upstreamBody.toString("utf8"));
+        if (!upstreamSucceeded) faultPreconditionFailure = "upstream_status_not_2xx";
+        else if (!value || typeof value !== "object" || Array.isArray(value)) {
+          faultPreconditionFailure = "upstream_response_not_object";
+        } else {
+          value.properties = {};
+          outgoingBody = Buffer.from(JSON.stringify(value));
+        }
+        if (faultPreconditionFailure !== null) {
+          downstream = "forwarded_fault_precondition_failed";
+          faultSatisfied = false;
+        }
+      } catch {
+        faultPreconditionFailure = "upstream_response_not_json";
+        downstream = "forwarded_fault_precondition_failed";
+        faultSatisfied = false;
+      }
+    } else if (rule?.action === "drop_after_upstream") {
+      downstream = "forwarded_fault_precondition_failed";
+      faultSatisfied = false;
     }
 
     const headers = responseHeaders(upstreamResponse.headers, outgoingBody.byteLength);
     response.writeHead(upstreamResponse.status, headers);
     response.end(outgoingBody);
     record(evidencePath, evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule,
-      upstreamReached: true, upstream, downstream: rule ? "mutated_response" : "forwarded" }));
+      upstreamReached: true, upstreamSucceeded, upstreamRequestMutated, upstream, downstream, faultSatisfied,
+      failure: faultPreconditionFailure }));
   });
 }
 
 function evidence({ startedAt, method, path, authorizationPresent, notionVersion, requestBody, rule, upstreamReached,
-  upstream, downstream, retryAfter, failure }) {
+  upstreamSucceeded, upstreamRequestMutated, upstream, downstream, retryAfter, failure, faultSatisfied }) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt,
     finishedAt: new Date().toISOString(),
     method,
@@ -148,7 +205,11 @@ function evidence({ startedAt, method, path, authorizationPresent, notionVersion
     notionVersion,
     ruleId: rule?.id ?? null,
     action: rule?.action ?? "forward",
+    faultPhase: rule?.phase ?? null,
+    faultSatisfied: faultSatisfied ?? null,
     upstreamReached,
+    upstreamSucceeded: upstreamSucceeded ?? null,
+    upstreamRequestMutated: upstreamRequestMutated ?? false,
     upstreamStatus: upstream?.status ?? null,
     upstreamResponseBytes: upstream?.responseBytes ?? null,
     upstreamResponseSha256: upstream?.responseSha256 ?? null,
@@ -164,9 +225,13 @@ function selectRule(rules, counters, method, path) {
     if (candidate.method !== method || !candidate.pattern.test(path)) continue;
     const counter = counters.get(candidate.id);
     counter.seen += 1;
+    if (candidate.action === "partial_pagination_after_upstream" && counter.awaitingPaginationFollowup) {
+      counter.awaitingPaginationFollowup = false;
+      return { ...candidate, phase: "pagination_followup" };
+    }
     if (counter.seen <= candidate.after || counter.applied >= candidate.times) continue;
     counter.applied += 1;
-    return candidate;
+    return { ...candidate, phase: "primary" };
   }
   return undefined;
 }
@@ -248,6 +313,13 @@ function parseRules(path) {
       throw new Error(`Rule ${raw.id} needs a bounded, anchored pathPattern`);
     }
     if (!allowedActions.has(raw.action)) throw new Error(`Rule ${raw.id} has an unsupported action`);
+    const method = raw.method.toUpperCase();
+    if (raw.action === "partial_pagination_after_upstream" && method !== "POST") {
+      throw new Error(`Rule ${raw.id} must use POST for partial pagination`);
+    }
+    if (raw.action === "drop_after_upstream" && method !== "POST" && method !== "PATCH") {
+      throw new Error(`Rule ${raw.id} must target a POST or PATCH write`);
+    }
     const times = raw.times ?? 1;
     if (!Number.isInteger(times) || times < 1 || times > 20) throw new Error(`Rule ${raw.id} has invalid times`);
     const after = raw.after ?? 0;
@@ -258,7 +330,7 @@ function parseRules(path) {
     if (raw.retryAfter !== undefined && (typeof raw.retryAfter !== "string" || raw.retryAfter.length > 80)) {
       throw new Error(`Rule ${raw.id} has invalid Retry-After`);
     }
-    return { id: raw.id, method: raw.method.toUpperCase(), pattern: new RegExp(raw.pathPattern),
+    return { id: raw.id, method, pattern: new RegExp(raw.pathPattern),
       action: raw.action, times, after, status: raw.status, retryAfter: raw.retryAfter };
   });
 }

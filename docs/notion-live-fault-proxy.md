@@ -2,7 +2,7 @@
 
 `tooling/notion-live-fault-proxy.mjs` 只用于隔离工作区的人工验收。它监听回环地址，把未命中的请求转发到固定上游 `https://api.notion.com`，并按一次性规则在真实请求前或真实响应后注入故障。
 
-代理不记录 Authorization 值、请求正文、响应正文或原始远端 ID。JSONL 证据只保留请求/响应摘要、脱敏路径、是否带 Bearer、Notion 版本、上游是否已确认返回、状态码、故障规则和下游结果。证据文件创建为 `0600`。
+代理不记录 Authorization 值、请求正文、响应正文或原始远端 ID。JSONL 证据只保留请求/响应摘要、脱敏路径、是否带 Bearer、Notion 版本、上游是否已确认返回、上游是否为 2xx、状态码、故障规则和下游结果。证据文件创建为 `0600`。
 
 ## 启动边界
 
@@ -51,9 +51,11 @@
 | 动作 | 含义 | 可证明的边界 |
 | --- | --- | --- |
 | `drop_before_upstream` | 请求不发到 Notion，直接断开本地连接 | 明确的写前网络失败 |
-| `drop_after_upstream` | 等 Notion 返回完整响应后丢弃下游连接 | 真实上游已处理但本地未收到结果 |
+| `drop_after_upstream` | 仅在 POST/PATCH 收到 Notion 2xx 完整响应后丢弃下游连接；非 2xx 原样透传 | 真实上游已确认写入成功，但本地未收到结果 |
 | `respond_status` | 在上游前返回 403、404、429 或 529，可带 `retryAfter` | 权限、对象不可读和限流处理；证据明确标记未到上游 |
-| `partial_pagination_after_upstream` | 先取得真实列表，再改成 `has_more=true` 且无游标 | 部分页失败必须保持旧数据和水位 |
+| `partial_pagination_after_upstream` | 把一次 POST 查询的上游页大小收窄为 1；真实上游返回有效下一页游标后透传第一页，并在 SDK 请求下一页时断开 | 真实第一页已返回、后续页失败时必须保持旧数据和水位 |
 | `schema_missing_properties_after_upstream` | 先取得真实 data source，再移除响应中的 `properties` | schema 故障必须失败关闭 |
 
-`drop_after_upstream` 的通过条件不能只看客户端报错。JSONL 必须同时出现 `upstreamReached=true`、真实 `upstreamStatus` 和 `downstream=connection_dropped`，随后还要用稳定 Key 或结构标记从真实 Notion 对账，证明没有重复创建。
+`drop_after_upstream` 的通过条件不能只看客户端报错。JSONL 必须同时出现 `upstreamReached=true`、`upstreamSucceeded=true`、2xx `upstreamStatus`、`faultSatisfied=true` 和 `downstream=connection_dropped`，随后还要用稳定 Key 或结构标记从真实 Notion 对账，证明没有重复创建。401、403、429 或 5xx 会记为 `faultSatisfied=false` 并透传，不能作为“写入成功但响应丢失”的证据。
+
+`partial_pagination_after_upstream` 的有效证据由同一规则的两条记录组成：第一条为 `upstreamSucceeded=true`、`downstream=partial_page_forwarded`；第二条为 `upstreamReached=false`、`downstream=pagination_followup_dropped`。如果真实列表没有第二页游标，代理会原样透传并写入 `faultSatisfied=false`，该次运行不能计入 R2。

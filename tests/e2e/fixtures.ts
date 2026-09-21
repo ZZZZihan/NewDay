@@ -24,11 +24,15 @@ export const test = base.extend<{ resetPlanner: void }>({
       data: {
         source: JSON.stringify({
           format: "newday-backup",
-          version: 4,
+          version: 5,
           exportedAt: new Date().toISOString(),
           tasks: [],
           recurrenceSeries: [],
           focusRecords: [],
+          inboxItems: [],
+          folders: [],
+          resources: [],
+          resourceTaskLinks: [],
         }),
       },
     });
@@ -40,7 +44,7 @@ export const test = base.extend<{ resetPlanner: void }>({
     const database = new DatabaseSync(path);
     try {
       database.prepare("DELETE FROM metadata WHERE key = 'browser_import_hash'").run();
-      // v4 imports intentionally preserve Agent history and the lifetime
+      // Planner imports intentionally preserve Agent history and the lifetime
       // execution ledger. Each E2E case is a fresh installation, so reset all
       // Agent tables only after the path/origin checks above prove isolation.
       database.exec("DELETE FROM agent_records; DELETE FROM planner_events; DELETE FROM execution_ledger;");

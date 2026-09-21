@@ -3,6 +3,7 @@ import type {
   RecurrenceSeries,
   Task,
 } from "../domain/planner-model";
+import type { ResourceTaskLink } from "../domain/life-model";
 import type { PlannerStore } from "./planner-store";
 
 declare const undoReceiptBrand: unique symbol;
@@ -15,6 +16,7 @@ export type UndoChangeSet = {
   tasks: Map<string, Task | undefined>;
   recurrenceSeries: Map<string, RecurrenceSeries | undefined>;
   focusRecords: Map<string, FocusRecord | undefined>;
+  resourceTaskLinks: ResourceTaskLink[];
 };
 
 type StoredUndo = {
@@ -29,6 +31,7 @@ export function createUndoChangeSet(): UndoChangeSet {
     tasks: new Map(),
     recurrenceSeries: new Map(),
     focusRecords: new Map(),
+    resourceTaskLinks: [],
   };
 }
 
@@ -39,7 +42,8 @@ export function publishUndoReceipt(
   if (
     changes.tasks.size === 0 &&
     changes.recurrenceSeries.size === 0 &&
-    changes.focusRecords.size === 0
+    changes.focusRecords.size === 0 &&
+    changes.resourceTaskLinks.length === 0
   ) {
     clearUndoReceipts(store);
     return undefined;
@@ -77,6 +81,11 @@ export async function undoPlannerCommand(
     await restoreRecurrenceSeries(store, stored.changes.recurrenceSeries);
     await restoreTasks(store, stored.changes.tasks);
     await restoreFocusRecords(store, stored.changes.focusRecords);
+    if (store.putResourceTaskLink) {
+      for (const link of stored.changes.resourceTaskLinks) {
+        await store.putResourceTaskLink(link);
+      }
+    }
     afterCommit(store, () => {
       if (latestUndoByStore.get(store) === stored) {
         latestUndoByStore.delete(store);
@@ -188,6 +197,7 @@ function cloneChangeSet(changes: UndoChangeSet): UndoChangeSet {
     tasks: cloneSnapshots(changes.tasks),
     recurrenceSeries: cloneSnapshots(changes.recurrenceSeries),
     focusRecords: cloneSnapshots(changes.focusRecords),
+    resourceTaskLinks: structuredClone(changes.resourceTaskLinks),
   };
 }
 

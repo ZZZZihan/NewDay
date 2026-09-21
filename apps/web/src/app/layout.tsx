@@ -5,6 +5,7 @@ import { Geist, Noto_Serif_SC } from "next/font/google";
 import { THEME_BOOTSTRAP_SCRIPT } from "@/features/theme/theme-preference";
 
 import "@/styles/globals.css";
+import "@/styles/workspace.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

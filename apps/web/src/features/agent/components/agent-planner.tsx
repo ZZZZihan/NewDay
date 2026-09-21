@@ -49,7 +49,7 @@ function AgentPlannerView({ selectedDate, today, disabled = false, disabledReaso
   return (
     <section className={styles.panel} aria-label="今日规划助手" data-testid="agent-planner">
       <div className={styles.header}>
-        <div><p className={styles.kicker}>今日重点</p><h2>把今天留给重要的事</h2><p className={styles.muted}>结合你的目标与限制，从已有任务中建议 1–3 件重点。</p></div>
+        <div><p className={styles.kicker}>✦ &nbsp; PLANNING ASSISTANT</p><h2>规划助手</h2><p className={styles.muted}>结合你的目标与限制，从已有任务中建议 1–3 件重点。</p></div>
         <button type="button" className={styles.secondary} aria-expanded={expanded} onClick={() => setExpanded(!expanded)} disabled={state.loading}>
           {expanded ? "收起规划输入" : "帮我定今日重点"}
         </button>

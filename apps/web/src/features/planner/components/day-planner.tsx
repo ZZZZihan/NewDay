@@ -1,6 +1,7 @@
 "use client";
 
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, MoreHorizontal, Plus, Upload } from "lucide-react";
+import { useState } from "react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, Inbox, Library, ListTodo, MoreHorizontal, Plus, Sun, Upload } from "lucide-react";
 import { Button } from "@heroui/react/button";
 import { Card } from "@heroui/react/card";
 import { Input } from "@heroui/react/input";
@@ -15,13 +16,17 @@ import { TaskEditor } from "./task-editor";
 import { PlannerLoading, TaskGroup, TaskRow } from "./task-list";
 import { PlannerStatus } from "./planner-status";
 import { FullscreenToggle } from "./fullscreen-toggle";
+import { LifePanel, type LifeView } from "./life-panel";
+import { useLifeWorkspace } from "../hooks/use-life-workspace";
 
 const WEEKDAY_LABELS = ["一", "二", "三", "四", "五", "六", "日"] as const;
 
 export function DayPlanner() {
+  const [view, setView] = useState<"today" | LifeView>("today");
+  const life = useLifeWorkspace(view !== "today");
   const {
     now, today, timeZone, selectedDate, setDateOverride, quickTitle, setQuickTitle,
-    setEditingTaskId, editingTask, editingSeries, editingSeriesActionsAllowed,
+    setEditingTaskId, openExternalTask, editingTask, editingSeries, editingSeriesActionsAllowed,
     notice, isSaving, isUndoing, quickInputRef, importInputRef,
     dayPlan, dataError, refreshing, refresh, migration, seriesError, seriesLoading, retrySeries,
     handleUndo, handleQuickAdd, handleComplete, handleFocus, handleExport,
@@ -43,17 +48,24 @@ export function DayPlanner() {
     dayPlan &&
       (dayPlan.focus.length > 0 || dayPlan.overdue.length > 0 || dayPlan.open.length > 0),
   );
+  const taskTotal = (dayPlan?.counts.open ?? 0) + (dayPlan?.counts.completed ?? 0);
+  const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
+
+  async function mutateLife(operation: () => Promise<unknown>) {
+    const saved = await life.mutate(operation);
+    if (saved) await refresh();
+    return saved;
+  }
 
   return (
     <main className="day-page" aria-busy={isSaving || isUndoing || migration.checking}>
-      <div className="planner-frame">
-        <Card className="time-panel" aria-label="时间与日期">
-          <header className="panel-header">
+      <div className="workspace-shell">
+        <header className="panel-header workspace-header">
             <div className="panel-brand">
               <span className="brand-mark" aria-hidden="true">N</span>
               <div>
                 <p className="brand-name">NewDay</p>
-                <p className="brand-caption">今天，只看要做的事</p>
+                <p className="brand-caption">个人工作台</p>
               </div>
             </div>
 
@@ -69,7 +81,7 @@ export function DayPlanner() {
                     <Menu aria-label="更多操作菜单" className="more-menu">
                       <Menu.Item id="export" aria-label="导出数据" isDisabled={isSaving || isUndoing || migration.checking} onAction={() => void handleExport()}>
                         <Download size={17} aria-hidden="true" />
-                        <span><strong>导出备份</strong><small>保存任务、重复规则与重点</small></span>
+                        <span><strong>导出备份</strong><small>保存任务、收集箱与资料库</small></span>
                       </Menu.Item>
                       <Menu.Item id="import" aria-label="导入数据" isDisabled={isSaving || isUndoing || migration.checking} onAction={() => importInputRef.current?.click()}>
                         <Upload size={17} aria-hidden="true" />
@@ -93,7 +105,11 @@ export function DayPlanner() {
                 }}
               />
             </div>
-          </header>
+        </header>
+
+        <div className="planner-frame">
+          <Card className="time-panel" aria-label="时间与日期">
+          <p className="sidebar-kicker">当前时间</p>
 
           <section className="time-panel__clock" aria-label="当前时间">
             <time className="hero-clock" data-testid="current-clock" dateTime={now?.toISOString()}>
@@ -104,7 +120,16 @@ export function DayPlanner() {
             <p className="hero-date">{formatClockDate(now, timeZone)}</p>
           </section>
 
+          <nav className="life-navigation" aria-label="工作台导航">
+            <p className="sidebar-kicker">工作空间</p>
+            <button type="button" className={view === "today" ? "selected" : ""} aria-current={view === "today" ? "page" : undefined} onClick={() => setView("today")}><Sun size={17} />今天</button>
+            <button type="button" className={view === "inbox" ? "selected" : ""} aria-current={view === "inbox" ? "page" : undefined} onClick={() => setView("inbox")}><Inbox size={17} />收集箱</button>
+            <button type="button" className={view === "tasks" ? "selected" : ""} aria-current={view === "tasks" ? "page" : undefined} onClick={() => setView("tasks")}><ListTodo size={17} />任务总表</button>
+            <button type="button" className={view === "library" ? "selected" : ""} aria-current={view === "library" ? "page" : undefined} onClick={() => setView("library")}><Library size={17} />资料库</button>
+          </nav>
+
           <div className="time-panel__bottom">
+            <p className="sidebar-kicker">日期导航</p>
             <nav className="week-navigation" aria-label="日期导航">
               <div className="week-navigation__header">
                 <Button className="date-arrow" type="button" variant="ghost" size="sm" isIconOnly aria-label="前一天" onPress={() => moveDate(-1)}>
@@ -166,10 +191,13 @@ export function DayPlanner() {
                 </Button>
               ) : null}
             </div>
+            <div className="sidebar-progress" aria-label={`已完成 ${progress}%`}>
+              <span style={{ width: `${progress}%` }} />
+            </div>
+            <p className="sidebar-progress-label">已完成 {dayPlan?.counts.completed ?? 0} / {taskTotal}<strong>{progress}%</strong></p>
           </div>
 
           <footer className="time-panel__footer-zone">
-            <blockquote>“把今天过好，就是最好的计划。”</blockquote>
             <div className="time-panel__footer">
               <span className="local-status-dot" aria-hidden="true" />
               任务保存在服务端
@@ -177,14 +205,22 @@ export function DayPlanner() {
           </footer>
         </Card>
 
-        <section className="schedule-panel" aria-label="每日任务表">
+        {view === "today" ? <section className="schedule-panel" aria-label="每日任务表">
           <header className="schedule-heading">
             <div>
-              <p className="section-kicker">{selectedIsToday ? "今天" : formatDayShort(selectedDate)}</p>
+              <p className="section-kicker">{formatYearDay(selectedDate)} · {selectedIsToday ? "今天" : "日计划"}</p>
               <h1>{selectedIsToday ? "今天的任务" : "这一天的任务"}</h1>
+              <p className="schedule-subtitle">把时间留给真正重要的事。</p>
             </div>
-            <p className="schedule-meta"><strong>{dayPlan?.counts.open ?? 0}</strong> 项待办</p>
+            <p className="schedule-meta">{selectedIsToday ? "今日计划" : formatDayShort(selectedDate)}</p>
           </header>
+
+          <div className="planner-metrics" aria-label="任务统计">
+            <div><span>待办</span><strong>{dayPlan?.counts.open ?? 0}</strong><small>项任务</small></div>
+            <div><span>今日重点</span><strong>{dayPlan?.counts.focus ?? 0}</strong><small>最多 3 项</small></div>
+            <div><span>已完成</span><strong>{dayPlan?.counts.completed ?? 0}</strong><small>项任务</small></div>
+            <div className="planner-metrics__progress"><span>当前进度</span><strong>{progress}<em>%</em></strong><small>{taskTotal ? `${taskTotal} 项任务` : "暂无任务"}</small></div>
+          </div>
 
           <PlannerStatus
             migration={migration}
@@ -193,15 +229,6 @@ export function DayPlanner() {
             refreshing={refreshing}
             onRetry={() => void refresh()}
             onRetrySeries={retrySeries}
-          />
-
-          <AgentPlanner
-            selectedDate={selectedDate}
-            today={today}
-            tasks={[...(dayPlan?.focus ?? []), ...(dayPlan?.overdue ?? []), ...(dayPlan?.open ?? [])].map(({ task }) => task)}
-            disabled={migration.checking || isSaving || isUndoing}
-            disabledReason={migration.checking ? "正在检查并迁移旧浏览器任务…" : undefined}
-            onApplied={refresh}
           />
 
           <form className="quick-add" onSubmit={handleQuickAdd}>
@@ -304,7 +331,7 @@ export function DayPlanner() {
                     <TaskRow
                       key={item.task.id}
                       busy={isSaving || isUndoing}
-                    item={item}
+                      item={item}
                       focused={false}
                       canFocus={false}
                       focusDisabled={false}
@@ -317,7 +344,18 @@ export function DayPlanner() {
               </details>
             ) : null}
           </div>
-        </section>
+        </section> : <LifePanel view={view} today={today} workspace={life.workspace} error={life.error} busy={life.busy} mutate={mutateLife} refresh={life.refresh} onOpenTask={openExternalTask} onCompleteTask={handleComplete} onViewChange={setView} />}
+        <aside className="assistant-panel" aria-label="规划助手">
+          <AgentPlanner
+            selectedDate={selectedDate}
+            today={today}
+            tasks={[...(dayPlan?.focus ?? []), ...(dayPlan?.overdue ?? []), ...(dayPlan?.open ?? [])].map(({ task }) => task)}
+            disabled={migration.checking || isSaving || isUndoing}
+            disabledReason={migration.checking ? "正在检查并迁移旧浏览器任务…" : undefined}
+            onApplied={refresh}
+          />
+        </aside>
+        </div>
       </div>
 
       {editingTask && (!editingTask.seriesId || editingSeries) ? (
@@ -333,13 +371,13 @@ export function DayPlanner() {
           onClose={() => setEditingTaskId(null)}
           onSave={async (values) => {
             const saved = await saveEditor(editingTask, editingSeries, values);
-            if (saved) setEditingTaskId(null);
+            if (saved) { setEditingTaskId(null); await life.refresh(); }
           }}
           onToggleComplete={async () => {
             const saved = await handleComplete(editingTask);
-            if (saved) setEditingTaskId(null);
+            if (saved) { setEditingTaskId(null); await life.refresh(); }
           }}
-          onDelete={deleteEditingTask}
+          onDelete={async () => { await deleteEditingTask(); await life.refresh(); }}
           onStopRecurrence={editingSeries ? stopEditingRecurrence : undefined}
         />
       ) : null}

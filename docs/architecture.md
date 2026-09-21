@@ -106,10 +106,12 @@ Agent 界面在确认前预览新增、保留、移除的重点，收到成功�
 | `GET /api/planner/series/:id` | 重复规则段 ID | `RecurrenceSeries`，不存在时为 `null` |
 | `POST /api/planner/commands` | `{ commands: PlannerCommand[] }`，1–100 项 | `{ receipt: { token } }` 或 `{ receipt: null }` |
 | `POST /api/planner/undo` | `{ receipt: { token } }` | `{ ok: true }` |
-| `GET /api/planner/backup` | 无 | 版本 4 的完整 `PlannerBackup` |
+| `GET /api/planner/backup` | 无 | 版本 5 的完整 `PlannerBackup`，含收集箱、文件夹、资料和任务关联 |
 | `POST /api/planner/backup` | `{ source: "备份 JSON 字符串" }` | `{ ok: true }`，原子替换全部规划数据 |
 | `POST /api/planner/stop-preview` | `{ seriesId, endDate }` | 普通实例、重点记录、保留实例、后续规则段数量和 `revision` |
 | `POST /api/planner/migrate` | `{ source: "旧浏览器备份 JSON 字符串" }` | `{ status: "imported" \| "already-imported" \| "server-not-empty" }` |
+
+生活管理接口由 `life-routes.ts` 校验输入，`LifeService` 在 SQLite 事务中执行。`GET /api/life/workspace` 返回收集箱、两级文件夹、资料、资料任务关联和与“今天”共用的任务记录。`POST /api/life/inbox` 收集条目；`POST /api/life/inbox/:id/task` 和 `.../resource` 显式分流并移出收集箱；`.../discard` 丢弃条目。`POST /api/life/folders`、`.../:id/rename` 管理文件夹；`POST /api/life/resources`、`.../:id/update` 保存和移动资料；`POST /api/life/resources/:id/links` 及 `.../:taskId/remove` 管理关联。任务分流调用共享规划命令，资料与任务关联在同一事务提交。
 
 `day` 读取前会在后端生成截至实际当天之后 31 天的重复实例，并确保所选日期的实例存在，因此这个查询可能产生后端存储写入。停止重复先获取预览，提交命令时附带预览结果，服务端拒绝已经过时的影响范围。
 
@@ -149,7 +151,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 
 ## 存储、备份与旧数据
 
-默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
+默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、收集箱、两级文件夹、资料、资料任务关联、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
 
 `PlanningVersion` 由 `datasetEpoch` 与 `plannerRevision` 组成。最外事务中第一次真实任务、重复规则或重点变更使 revision 增加一次，后续同事务变更不重复增加；只读、no-op、运行记录、上下文、偏好与反馈不增加任务 revision。任务替换导入、首次浏览器迁移和独立 Agent 导入成功后产生新 epoch；失败时保留原状态。上下文和偏好各有独立 revision，采纳同时核对任务版本、上下文版本、偏好版本和当天时区。
 
@@ -157,11 +159,11 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 
 执行去重账本与可清除的展示历史分开。一次成功应用在同一事务内保存重点集合、版本、采纳事件、反馈和回执。删除 Agent 历史会删除上下文、快照、运行、提案、反馈、事件和导入归档，同时清除回执详情；最小账本中的 operation ID、请求摘要、proposal ID、数据集和执行终态仍保留，防止旧请求重新执行。清理后的结果查询返回 `details_deleted`，不再提供恢复资格或虚构原详情。任务和显式偏好不受清理影响。
 
-用户备份使用可移植的 JSON。新导出为版本 4，导入兼容 1、2、3、4；日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
+用户备份使用可移植的 JSON。新导出为版本 5，导入兼容 1、2、3、4、5；旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
 
-任务备份 v4 仍只包含任务、规则和重点。Agent 使用独立 `newday-agent` v1 格式，声明范围 `agent-history-and-explicit-preferences`，包含上下文、偏好、快照、运行、提案、回执、反馈、事件和来源历史归档，不含 provider 密钥。`importedHistories[].archive` 保留导入的原始记录，包含没有形成提案的失败运行和原始事件，允许再次导出。
+旧版任务备份 v4 只包含任务、规则和重点，v5 增加生活管理数据。Agent 使用独立 `newday-agent` v1 格式，声明范围 `agent-history-and-explicit-preferences`，包含上下文、偏好、快照、运行、提案、回执、反馈、事件和来源历史归档，不含 provider 密钥。`importedHistories[].archive` 保留导入的原始记录，包含没有形成提案的失败运行和原始事件，允许再次导出。
 
-独立 Agent 导入在一个事务内保存来源数据集的只读历史、按明确选择导入偏好、失效原提案并切换 epoch。它不重建可执行 operation ID，不把同名任务 ID 自动关联当前数据集，不激活导入上下文，也不修改任务或规则。未选导入偏好时保留当前偏好；选中时创建当前偏好的新 revision。旧数据集回执只能查询历史，恢复资格失效。Agent 备份与清理目前由 API 提供，现有任务导入/导出菜单继续使用任务备份 v4。
+独立 Agent 导入在一个事务内保存来源数据集的只读历史、按明确选择导入偏好、失效原提案并切换 epoch。它不重建可执行 operation ID，不把同名任务 ID 自动关联当前数据集，不激活导入上下文，也不修改任务或规则。未选导入偏好时保留当前偏好；选中时创建当前偏好的新 revision。旧数据集回执只能查询历史，恢复资格失效。Agent 备份与清理目前由 API 提供，工作台导入/导出菜单使用任务与生活管理备份 v5。
 
 迁移入口使用原生 IndexedDB 只读事务读取旧 `newday` 库，不升级其 schema。空服务端可原子接收第一次迁移；相同内容重复提交返回 `already-imported`，已有任务或不兼容的迁移标记返回 `server-not-empty`。服务端迁移标记在普通备份恢复后仍保留，防止旧浏览器再次自动覆盖已经整理过的数据。
 

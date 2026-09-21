@@ -3,7 +3,9 @@ import { ZodError } from "zod";
 import { loadConfig } from "./config.js";
 import { ApiError } from "./http/api-error.js";
 import { registerPlannerRoutes } from "./http/planner-routes.js";
+import { registerLifeRoutes } from "./http/life-routes.js";
 import { PlannerService } from "./services/planner-service.js";
+import { LifeService } from "./services/life-service.js";
 import { SQLitePlannerStore } from "./storage/sqlite-planner-store.js";
 import { AgentApiError } from "./http/agent-error.js";
 import type { PlanningModel } from "./agent/planning-model.js";
@@ -35,6 +37,7 @@ export function createApp(options: AppOptions = {}) {
   const app = Fastify({ logger: options.logger ?? false, bodyLimit: options.bodyLimit ?? 10 * 1024 * 1024 });
   const store = new SQLitePlannerStore(options.databasePath ?? config.databasePath);
   const planner = new PlannerService(store, options.clock);
+  const life = new LifeService(store, options.clock);
   const context = new PlannerContextService(store, options.clock);
   const preferences = new PlannerPreferencesService(store, options.clock);
   const history = new PlannerHistoryService(store, options.clock);
@@ -76,6 +79,7 @@ export function createApp(options: AppOptions = {}) {
   app.addHook("onReady", () => runs.initialize());
   app.addHook("onClose", async () => { await runs.close(); store.close(); });
   registerPlannerRoutes(app, planner);
+  registerLifeRoutes(app, life);
   registerAgentRunRoutes(app, runs);
   registerAgentExecutionRoutes(app, execution);
   registerAgentContextRoutes(app, context);

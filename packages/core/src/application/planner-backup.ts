@@ -13,19 +13,27 @@ export async function createPlannerBackup(
   exportedAt = new Date().toISOString(),
 ): Promise<PlannerBackup> {
   return store.transaction(async () => {
-    const [tasks, recurrenceSeries, focusRecords] = await Promise.all([
+    const [tasks, recurrenceSeries, focusRecords, inboxItems, folders, resources, resourceTaskLinks] = await Promise.all([
       store.listAllTasks(),
       store.listAllRecurrenceSeries(),
       store.listAllFocusRecords(),
+      store.listAllInboxItems?.() ?? [],
+      store.listAllFolders?.() ?? [],
+      store.listAllResources?.() ?? [],
+      store.listAllResourceTaskLinks?.() ?? [],
     ]);
 
     return parseAndValidateCurrentBackup({
       format: "newday-backup",
-      version: 4,
+      version: 5,
       exportedAt,
       tasks,
       recurrenceSeries,
       focusRecords,
+      inboxItems,
+      folders,
+      resources,
+      resourceTaskLinks,
     });
   });
 }
@@ -40,6 +48,10 @@ export async function restorePlannerBackup(
       tasks: backup.tasks,
       recurrenceSeries: backup.recurrenceSeries,
       focusRecords: backup.focusRecords,
+      inboxItems: backup.inboxItems,
+      folders: backup.folders,
+      resources: backup.resources,
+      resourceTaskLinks: backup.resourceTaskLinks,
     });
     clearUndoReceipts(store);
   });

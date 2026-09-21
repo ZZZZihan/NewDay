@@ -11,7 +11,7 @@ function shiftDate(date: string, days: number) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("今天，只看要做的事")).toBeVisible();
+  await expect(page.getByText("个人工作台")).toBeVisible();
 });
 
 test("the home view has a large minute clock and no timeline", async ({ page }) => {
@@ -44,7 +44,7 @@ test("a task defaults to the selected day and survives a reload", async ({ page 
 
   await expect(page.getByTestId("daily-task-list")).toContainText("准备项目周会");
   await expect(
-    page.getByLabel("每日任务表").getByText("1 项待办"),
+    page.getByLabel("任务统计").locator(":scope > div").first().getByText("1", { exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "编辑任务：准备项目周会" }).click();
@@ -307,5 +307,5 @@ test("clearing the native date input keeps the current day selected", async ({
   await dateInput.fill("");
 
   await expect(dateInput).toHaveValue(originalDate);
-  await expect(page.getByText("今天，只看要做的事")).toBeVisible();
+  await expect(page.getByText("个人工作台")).toBeVisible();
 });

@@ -23,7 +23,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   const archive = JSON.parse(await readFile(exportedPath, "utf8"));
   expect(archive).toEqual({
     format: "newday-backup",
-    version: 4,
+    version: 5,
     exportedAt: expect.any(String),
     tasks: [
       expect.objectContaining({
@@ -34,6 +34,10 @@ test("JSON export and replacement import preserve the simplified task data", asy
     ],
     recurrenceSeries: [],
     focusRecords: [],
+    inboxItems: [],
+    folders: [],
+    resources: [],
+    resourceTaskLinks: [],
   });
 
   await page.getByTestId("quick-task-input").fill("导出之后添加");
@@ -53,7 +57,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   );
 });
 
-test("version 4 backup includes recurrence and today's focus", async ({
+test("version 5 backup includes recurrence and today's focus", async ({
   page,
 }, testInfo) => {
   await page.getByTestId("quick-task-input").fill("周期重点任务");
@@ -76,7 +80,7 @@ test("version 4 backup includes recurrence and today's focus", async ({
     (task: { id?: string }) => task.id === focusedRecord.taskId,
   );
 
-  expect(archive.version).toBe(4);
+  expect(archive.version).toBe(5);
   expect(focusedTask).toEqual(
     expect.objectContaining({
       seriesId: expect.any(String),

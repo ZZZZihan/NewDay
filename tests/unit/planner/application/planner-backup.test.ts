@@ -73,7 +73,7 @@ function focus(overrides: Partial<FocusRecord> = {}): FocusRecord {
 }
 
 describe("planner backup", () => {
-  it("exports a version 4 archive with tasks, recurrence, and focus", async () => {
+  it("exports a version 5 archive with tasks, recurrence, focus, and life collections", async () => {
     const store = new MemoryPlannerStore();
     const recurrenceSeries = series();
     const occurrence = task({
@@ -94,11 +94,15 @@ describe("planner backup", () => {
 
     expect(backup).toEqual({
       format: "newday-backup",
-      version: 4,
+      version: 5,
       exportedAt: "2026-09-01T12:00:00.000Z",
       tasks: [occurrence],
       recurrenceSeries: [recurrenceSeries],
       focusRecords: [focus()],
+      inboxItems: [],
+      folders: [],
+      resources: [],
+      resourceTaskLinks: [],
     });
   });
 
@@ -158,7 +162,7 @@ describe("planner backup", () => {
       }),
     );
 
-    expect(normalized.version).toBe(4);
+    expect(normalized.version).toBe(5);
     expect(normalized.recurrenceSeries).toEqual([
       expect.objectContaining({
         id: "series-1",
@@ -210,7 +214,7 @@ describe("planner backup", () => {
     expect(parsed.tasks).toEqual([occurrence]);
   });
 
-  it("imports version 1 and version 2 archives as one-off v4 data", () => {
+  it("imports version 1 and version 2 archives as one-off v5 data", () => {
     const versionOne = parsePlannerBackup(
       JSON.stringify({
         format: "newday-backup",
@@ -242,7 +246,7 @@ describe("planner backup", () => {
     );
 
     for (const backup of [versionOne, versionTwo]) {
-      expect(backup.version).toBe(4);
+      expect(backup.version).toBe(5);
       expect(backup.tasks[0]).toEqual(
         expect.objectContaining({
           startDate: DATE,

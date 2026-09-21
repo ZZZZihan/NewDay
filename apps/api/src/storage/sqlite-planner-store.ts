@@ -7,6 +7,7 @@ import { DatabaseSync, type SQLInputValue, type SQLOutputValue } from "node:sqli
 import type { PlannerArchiveData, PlannerArchiveStore } from "@newday/core/application/planner-archive-store";
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences, type ExecutionReceipt, type OperationResult, type PlannerEvent, type PlanningVersion } from "@newday/core/contracts/agent-planning";
 import type { FocusRecord, RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
+import type { InboxItem, LifeFolder, LifeResource, ResourceTaskLink } from "@newday/core/domain/life-model";
 
 type Row = Record<string, SQLOutputValue>;
 export type StorageFailurePoint = "before_commit" | "after_commit" | "before_event" | "before_receipt";
@@ -194,13 +195,68 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
   async listFocusRecordsForTask(id: string) { return this.many<FocusRecord>("SELECT payload FROM focus_records WHERE task_id = ? ORDER BY id", id); }
   async listAllFocusRecords() { return this.many<FocusRecord>("SELECT payload FROM focus_records ORDER BY id"); }
 
+  async getInboxItem(id: string) { return this.one<InboxItem>("SELECT payload FROM life_inbox WHERE id=?", id); }
+  async listAllInboxItems() { return this.many<InboxItem>("SELECT payload FROM life_inbox ORDER BY created_at DESC,id"); }
+  async putInboxItem(item: InboxItem) {
+    await this.transaction(async () => {
+      this.database.prepare(`INSERT INTO life_inbox(id,source_resource_id,created_at,payload) VALUES(?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET source_resource_id=excluded.source_resource_id,payload=excluded.payload`)
+        .run(item.id, item.sourceResourceId, item.createdAt, JSON.stringify(item));
+    });
+  }
+  async deleteInboxItem(id: string) { await this.transaction(async () => { this.database.prepare("DELETE FROM life_inbox WHERE id=?").run(id); }); }
+
+  async getFolder(id: string) { return this.one<LifeFolder>("SELECT payload FROM life_folders WHERE id=?", id); }
+  async listAllFolders() { return this.many<LifeFolder>("SELECT payload FROM life_folders ORDER BY parent_id,name,id"); }
+  async putFolder(folder: LifeFolder) {
+    await this.transaction(async () => {
+      this.database.prepare(`INSERT INTO life_folders(id,parent_id,name,payload) VALUES(?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,name=excluded.name,payload=excluded.payload`)
+        .run(folder.id, folder.parentId, folder.name, JSON.stringify(folder));
+    });
+  }
+
+  async getResource(id: string) { return this.one<LifeResource>("SELECT payload FROM life_resources WHERE id=?", id); }
+  async listAllResources() { return this.many<LifeResource>("SELECT payload FROM life_resources ORDER BY updated_at DESC,id"); }
+  async putResource(resource: LifeResource) {
+    await this.transaction(async () => {
+      this.database.prepare(`INSERT INTO life_resources(id,folder_id,updated_at,payload) VALUES(?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET folder_id=excluded.folder_id,updated_at=excluded.updated_at,payload=excluded.payload`)
+        .run(resource.id, resource.folderId, resource.updatedAt, JSON.stringify(resource));
+    });
+  }
+  async listAllResourceTaskLinks(): Promise<ResourceTaskLink[]> {
+    return this.database.prepare("SELECT resource_id,task_id FROM life_resource_tasks ORDER BY resource_id,task_id").all()
+      .map((row) => ({ resourceId: String(row.resource_id), taskId: String(row.task_id) }));
+  }
+  async listResourceTaskLinksForTask(taskId: string): Promise<ResourceTaskLink[]> {
+    return this.database.prepare("SELECT resource_id,task_id FROM life_resource_tasks WHERE task_id=? ORDER BY resource_id").all(taskId)
+      .map((row) => ({ resourceId: String(row.resource_id), taskId: String(row.task_id) }));
+  }
+  async putResourceTaskLink(link: ResourceTaskLink) {
+    await this.transaction(async () => {
+      this.database.prepare("INSERT OR IGNORE INTO life_resource_tasks(resource_id,task_id) VALUES(?,?)").run(link.resourceId, link.taskId);
+    });
+  }
+  async deleteResourceTaskLink(link: ResourceTaskLink) {
+    await this.transaction(async () => {
+      this.database.prepare("DELETE FROM life_resource_tasks WHERE resource_id=? AND task_id=?").run(link.resourceId, link.taskId);
+    });
+  }
+
   async replaceAllData(data: PlannerArchiveData) {
     await this.transaction(async () => {
       await this.rotateDatasetEpoch();
-      this.database.exec("DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
+      this.database.exec("DELETE FROM life_resource_tasks; DELETE FROM life_inbox; DELETE FROM life_resources; DELETE FROM life_folders WHERE parent_id IS NOT NULL; DELETE FROM life_folders WHERE parent_id IS NULL; DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
       for (const series of data.recurrenceSeries ?? []) await this.putRecurrenceSeries(series);
       for (const task of data.tasks) await this.putTask(task);
       for (const record of data.focusRecords ?? []) await this.putFocusRecord(record);
+      const folders = data.folders ?? [];
+      for (const folder of folders.filter((value) => value.parentId === null)) await this.putFolder(folder);
+      for (const folder of folders.filter((value) => value.parentId !== null)) await this.putFolder(folder);
+      for (const resource of data.resources ?? []) await this.putResource(resource);
+      for (const item of data.inboxItems ?? []) await this.putInboxItem(item);
+      for (const link of data.resourceTaskLinks ?? []) await this.putResourceTaskLink(link);
       await this.recordMutation("dataset_replaced");
     });
   }
@@ -210,7 +266,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.transaction(async () => {
       const imported = this.database.prepare("SELECT value FROM metadata WHERE key = 'browser_import_hash'").get();
       if (imported) return imported.value === hash ? "already-imported" as const : "server-not-empty" as const;
-      const counts = this.database.prepare("SELECT (SELECT COUNT(*) FROM tasks)+(SELECT COUNT(*) FROM recurrence_series)+(SELECT COUNT(*) FROM focus_records) AS count").get();
+      const counts = this.database.prepare("SELECT (SELECT COUNT(*) FROM tasks)+(SELECT COUNT(*) FROM recurrence_series)+(SELECT COUNT(*) FROM focus_records)+(SELECT COUNT(*) FROM life_inbox)+(SELECT COUNT(*) FROM life_folders)+(SELECT COUNT(*) FROM life_resources) AS count").get();
       if (Number(counts?.count) > 0) return "server-not-empty" as const;
       await this.replaceAllData(data);
       this.database.prepare("INSERT INTO metadata (key,value) VALUES ('browser_import_hash',?)").run(hash);
@@ -280,11 +336,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private initializeSchema() {
     const version = Number(this.database.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 2) throw new Error("This database was created by a newer version of NewDay");
-    if (version === 2) return;
+    if (version > 3) throw new Error("This database was created by a newer version of NewDay");
+    if (version === 3) return;
     this.database.exec("BEGIN IMMEDIATE");
     try {
-      this.database.exec(`
+      if (version < 2) this.database.exec(`
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY NOT NULL,series_id TEXT,occurrence_key TEXT UNIQUE,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
         CREATE INDEX IF NOT EXISTS tasks_by_series ON tasks(series_id);
         CREATE TABLE IF NOT EXISTS recurrence_series (id TEXT PRIMARY KEY NOT NULL,logical_series_id TEXT NOT NULL,start_date TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
@@ -297,8 +353,22 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         CREATE INDEX planner_events_by_date ON planner_events(date);
         CREATE TABLE execution_ledger (operation_id TEXT PRIMARY KEY NOT NULL,request_digest TEXT NOT NULL,proposal_id TEXT NOT NULL,dataset_epoch TEXT NOT NULL,terminal_status TEXT NOT NULL CHECK(terminal_status IN ('applied','no_change')),payload TEXT CHECK(payload IS NULL OR json_valid(payload))) STRICT;
       `);
-      this.database.prepare("INSERT INTO metadata(key,value) VALUES('dataset_epoch',?) ON CONFLICT(key) DO NOTHING").run(randomUUID());
-      this.database.exec("INSERT INTO metadata(key,value) VALUES('planner_revision','0') ON CONFLICT(key) DO NOTHING; PRAGMA user_version=2; COMMIT;");
+      if (version < 2) {
+        this.database.prepare("INSERT INTO metadata(key,value) VALUES('dataset_epoch',?) ON CONFLICT(key) DO NOTHING").run(randomUUID());
+        this.database.exec("INSERT INTO metadata(key,value) VALUES('planner_revision','0') ON CONFLICT(key) DO NOTHING");
+      }
+      this.database.exec(`
+        CREATE TABLE life_folders (id TEXT PRIMARY KEY NOT NULL,parent_id TEXT REFERENCES life_folders(id) ON DELETE RESTRICT,name TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
+        CREATE UNIQUE INDEX life_folders_root_name ON life_folders(name COLLATE NOCASE) WHERE parent_id IS NULL;
+        CREATE UNIQUE INDEX life_folders_child_name ON life_folders(parent_id,name COLLATE NOCASE) WHERE parent_id IS NOT NULL;
+        CREATE TABLE life_resources (id TEXT PRIMARY KEY NOT NULL,folder_id TEXT REFERENCES life_folders(id) ON DELETE RESTRICT,updated_at TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
+        CREATE INDEX life_resources_by_folder ON life_resources(folder_id);
+        CREATE TABLE life_inbox (id TEXT PRIMARY KEY NOT NULL,source_resource_id TEXT REFERENCES life_resources(id) ON DELETE SET NULL,created_at TEXT NOT NULL,payload TEXT NOT NULL CHECK(json_valid(payload))) STRICT;
+        CREATE TABLE life_resource_tasks (resource_id TEXT NOT NULL REFERENCES life_resources(id) ON DELETE CASCADE,task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,PRIMARY KEY(resource_id,task_id)) STRICT;
+        CREATE INDEX life_resource_tasks_by_task ON life_resource_tasks(task_id);
+        PRAGMA user_version=3;
+        COMMIT;
+      `);
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 }

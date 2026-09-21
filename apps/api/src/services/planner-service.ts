@@ -112,7 +112,11 @@ export class PlannerService {
     return this.run(async () => {
       const backup = this.parseBackup(source);
       // Exclude exportedAt: serializing the same browser data again is the same import.
-      const data = { tasks: backup.tasks, recurrenceSeries: backup.recurrenceSeries, focusRecords: backup.focusRecords };
+      const data = {
+        tasks: backup.tasks, recurrenceSeries: backup.recurrenceSeries, focusRecords: backup.focusRecords,
+        inboxItems: backup.inboxItems, folders: backup.folders, resources: backup.resources,
+        resourceTaskLinks: backup.resourceTaskLinks,
+      };
       const hash = createHash("sha256").update(JSON.stringify(data)).digest("hex");
       const status = await this.store.importBrowserData(data, hash);
       if (status === "imported") {

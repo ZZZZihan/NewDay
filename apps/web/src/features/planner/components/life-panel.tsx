@@ -47,6 +47,8 @@ export function LifePanel(props: Props) {
   const notionByTaskId = data?.notionByTaskId ?? {};
   const links = data?.resourceTaskLinks ?? [];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  const activeFolderFilter = folderFilter === "all" || folderFilter === "uncategorized" || folderById.has(folderFilter)
+    ? folderFilter : "all";
   const resourceById = new Map(resources.map((resource) => [resource.id, resource]));
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const selectedTask = selectedTaskId ? taskById.get(selectedTaskId) : undefined;
@@ -59,9 +61,9 @@ export function LifePanel(props: Props) {
   }).sort((a, b) => (a.startDate ?? "9999-12-31").localeCompare(b.startDate ?? "9999-12-31") || a.createdAt.localeCompare(b.createdAt));
 
   const filteredResources = resources.filter((resource) => {
-    if (folderFilter === "uncategorized" && resource.folderId !== null) return false;
-    if (folderFilter !== "all" && folderFilter !== "uncategorized" &&
-      resource.folderId !== folderFilter && folderById.get(resource.folderId ?? "")?.parentId !== folderFilter) return false;
+    if (activeFolderFilter === "uncategorized" && resource.folderId !== null) return false;
+    if (activeFolderFilter !== "all" && activeFolderFilter !== "uncategorized" &&
+      resource.folderId !== activeFolderFilter && folderById.get(resource.folderId ?? "")?.parentId !== activeFolderFilter) return false;
     const query = resourceQuery.trim().toLocaleLowerCase();
     return !query || `${resource.title} ${resource.content} ${resource.source} ${folderPath(resource.folderId, folderById)}`.toLocaleLowerCase().includes(query);
   }).sort((a, b) => resourceSort === "title"
@@ -155,16 +157,16 @@ export function LifePanel(props: Props) {
       {props.view === "library" && data ? <>
         <div className="life-folder-toolbar"><button type="button" onClick={() => void createFolder(null)} disabled={props.busy}><FolderPlus size={16} />新建一级文件夹</button><button type="button" className="life-primary" onClick={() => { setNewResource(true); setSelectedResourceId(null); }}><Plus size={16} />新建资料</button></div>
         <div className="life-library-layout"><nav className="life-folders" aria-label="资料文件夹">
-          <button type="button" className={folderFilter === "all" ? "selected" : ""} onClick={() => setFolderFilter("all")}>全部资料 <small>{resources.length}</small></button>
-          <button type="button" className={folderFilter === "uncategorized" ? "selected" : ""} onClick={() => setFolderFilter("uncategorized")}>待整理 <small>{resources.filter((resource) => resource.folderId === null).length}</small></button>
+          <button type="button" className={activeFolderFilter === "all" ? "selected" : ""} onClick={() => setFolderFilter("all")}>全部资料 <small>{resources.length}</small></button>
+          <button type="button" className={activeFolderFilter === "uncategorized" ? "selected" : ""} onClick={() => setFolderFilter("uncategorized")}>待整理 <small>{resources.filter((resource) => resource.folderId === null).length}</small></button>
           {folders.filter((folder) => folder.parentId === null).map((folder) => {
             const children = folders.filter((child) => child.parentId === folder.id);
             const open = expandedFolders.has(folder.id);
             return <div key={folder.id} className="life-folder-group"><div className="life-folder-row">
               <button type="button" className="life-expand" aria-label={`${open ? "折叠" : "展开"}${folder.name}`} onClick={() => setExpandedFolders((current) => { const next = new Set(current); if (open) next.delete(folder.id); else next.add(folder.id); return next; })}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
-              <button type="button" className={folderFilter === folder.id ? "selected" : ""} onClick={() => setFolderFilter(folder.id)}><Folder size={14} />{folder.name}<small>{resources.filter((resource) => resource.folderId === folder.id || children.some((child) => child.id === resource.folderId)).length}</small></button>
+              <button type="button" className={activeFolderFilter === folder.id ? "selected" : ""} onClick={() => setFolderFilter(folder.id)}><Folder size={14} />{folder.name}<small>{resources.filter((resource) => resource.folderId === folder.id || children.some((child) => child.id === resource.folderId)).length}</small></button>
               <button type="button" className="life-expand" aria-label={`新建${folder.name}的子文件夹`} onClick={() => void createFolder(folder.id)}><Plus size={14} /></button>
-            </div>{open ? <div className="life-folder-children">{children.map((child) => <div key={child.id} className="life-folder-row"><button type="button" className={folderFilter === child.id ? "selected" : ""} onClick={() => setFolderFilter(child.id)}><Folder size={14} />{child.name}<small>{resources.filter((resource) => resource.folderId === child.id).length}</small></button><button type="button" className="life-expand" aria-label={`重命名${child.name}`} onClick={() => void renameFolder(child)}>···</button></div>)}<button type="button" className="life-rename" onClick={() => void renameFolder(folder)}>重命名“{folder.name}”</button></div> : null}</div>;
+            </div>{open ? <div className="life-folder-children">{children.map((child) => <div key={child.id} className="life-folder-row"><button type="button" className={activeFolderFilter === child.id ? "selected" : ""} onClick={() => setFolderFilter(child.id)}><Folder size={14} />{child.name}<small>{resources.filter((resource) => resource.folderId === child.id).length}</small></button><button type="button" className="life-expand" aria-label={`重命名${child.name}`} onClick={() => void renameFolder(child)}>···</button></div>)}<button type="button" className="life-rename" onClick={() => void renameFolder(folder)}>重命名“{folder.name}”</button></div> : null}</div>;
           })}
         </nav><div className="life-library-main"><div className="life-toolbar"><label className="life-search"><Search size={16} /><input aria-label="搜索资料" value={resourceQuery} placeholder="搜索标题、内容、来源和路径" onChange={(event) => setResourceQuery(event.target.value)} /></label><select aria-label="资料排序" value={resourceSort} onChange={(event) => setResourceSort(event.target.value as typeof resourceSort)}><option value="updated">最近更新</option><option value="created">最近创建</option><option value="title">按标题</option></select></div>
           <div className="life-list">{filteredResources.length === 0 ? <Empty icon={<FileText size={22} />} text="这里还没有资料" /> : filteredResources.map((resource) => <article key={resource.id} className="life-item"><button type="button" className="life-task-main" onClick={() => { setSelectedResourceId(resource.id); setNewResource(false); }}><strong>{resource.kind === "link" ? <Link2 size={15} /> : <FileText size={15} />}{resource.title}</strong><small>{folderPath(resource.folderId, folderById)} · 更新于 {formatTime(resource.updatedAt)}</small></button></article>)}</div>

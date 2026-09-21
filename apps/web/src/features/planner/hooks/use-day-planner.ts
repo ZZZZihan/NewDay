@@ -38,8 +38,10 @@ export function useDayPlanner() {
   const [dateOverride, setDateOverride] = useState<string | null>(null);
   const selectedDate = dateOverride ?? (hydrated && planningClock.ready ? today : null);
   const [quickTitle, setQuickTitle] = useState("");
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [externalEditingTask, setExternalEditingTask] = useState<Task | null>(null);
+  const [editingTaskId, setEditingTaskIdState] = useState<string | null>(null);
+  // Polls may replace task props while this editor is open. Keep the opening
+  // snapshot stable so the API can reject a save based on stale input.
+  const [editingTaskSnapshot, setEditingTaskSnapshot] = useState<Task | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
@@ -58,8 +60,19 @@ export function useDayPlanner() {
       : [];
     return new Map(items.map(({ task }) => [task.id, task]));
   }, [dayPlan]);
-  const editingTask = editingTaskId ? taskById.get(editingTaskId) ??
-    (externalEditingTask?.id === editingTaskId && hasTaskDates(externalEditingTask) ? externalEditingTask : undefined) : undefined;
+  const editingTask = editingTaskId && editingTaskSnapshot?.id === editingTaskId && hasTaskDates(editingTaskSnapshot)
+    ? editingTaskSnapshot
+    : editingTaskId ? taskById.get(editingTaskId) : undefined;
+
+  function setEditingTaskId(taskId: string | null) {
+    setEditingTaskIdState(taskId);
+    if (taskId === null) {
+      setEditingTaskSnapshot(null);
+      return;
+    }
+    const task = taskById.get(taskId);
+    setEditingTaskSnapshot(task && hasTaskDates(task) ? task : null);
+  }
   const editingSeriesId = editingTask?.seriesId;
   const { series: editingSeries, error: seriesError, loading: seriesLoading, retry: retrySeries } = usePlannerSeries(
     editingSeriesId, editingTask?.updatedAt, dayPlan,
@@ -93,20 +106,23 @@ export function useDayPlanner() {
     setNotice((current) => ({ id, message, receipt: current?.receipt }));
   }
 
-  async function runCommand(command: PlannerCommand, successMessage: string) {
-    return runCommands([command], successMessage);
+  async function runCommand(command: PlannerCommand, successMessage: string, expectedTask?: Task) {
+    return runCommands([command], successMessage, expectedTask);
   }
 
   async function runCommands(
     commands: readonly PlannerCommand[],
     successMessage: string,
+    expectedTask?: Task,
   ) {
     if (mutationPending.current || migration.checking) return false;
     mutationPending.current = true;
     setIsSaving(true);
 
     try {
-      const { receipt } = await plannerApi.commands(commands);
+      const { receipt } = expectedTask
+        ? await plannerApi.commands(commands, expectedTask)
+        : await plannerApi.commands(commands);
       await refresh();
       showNotice(successMessage, receipt ?? undefined);
       return true;
@@ -240,7 +256,6 @@ export function useDayPlanner() {
       await plannerApi.restore(source);
       await refresh();
       setEditingTaskId(null);
-      setExternalEditingTask(null);
       showNotice(`导入完成：${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料`);
       return true;
     } catch (error) {
@@ -276,6 +291,7 @@ export function useDayPlanner() {
           },
         },
         "重复任务已保存",
+        task,
       );
       return saved;
     }
@@ -305,6 +321,7 @@ export function useDayPlanner() {
           },
         },
         "后续重复已更新",
+        task,
       );
     }
 
@@ -333,19 +350,18 @@ export function useDayPlanner() {
     }
 
     if (commands.length === 0) return true;
-    return runCommands(commands, "任务已保存");
+    return runCommands(commands, "任务已保存", task);
   }
 
   function moveDate(offset: number) {
     if (!selectedDate) return;
     setDateOverride(shiftDate(selectedDate, offset));
     setEditingTaskId(null);
-    setExternalEditingTask(null);
   }
 
   function openExternalTask(task: Task) {
-    setExternalEditingTask(task);
-    setEditingTaskId(task.id);
+    setEditingTaskSnapshot(task);
+    setEditingTaskIdState(task.id);
   }
 
   async function deleteEditingTask() {

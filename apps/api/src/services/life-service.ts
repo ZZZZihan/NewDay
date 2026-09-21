@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { executePlannerCommands } from "@newday/core/application/planner-command";
 import type { InboxItem, LifeFolder, LifeResource, LifeWorkspace } from "@newday/core/domain/life-model";
 import { ApiError } from "../http/api-error.js";
@@ -104,10 +105,17 @@ export class LifeService {
     });
   }
 
-  updateResource(id: string, input: { folderId: string | null; kind: "note" | "link"; title: string; content: string; source: string }) {
+  updateResource(
+    id: string,
+    input: { folderId: string | null; kind: "note" | "link"; title: string; content: string; source: string },
+    expectedResource: LifeResource,
+  ) {
     return this.store.transaction(async () => {
       const resource = await this.store.getResource(id);
       if (!resource) throw new ApiError(404, "资料不存在");
+      if (expectedResource.id !== id || !isDeepStrictEqual(resource, expectedResource)) {
+        throw new ApiError(409, "资料已在其他页面或后台更新；请关闭编辑窗口后重新打开");
+      }
       await this.requireFolder(input.folderId);
       const updated: LifeResource = { ...resource, ...input, updatedAt: this.now() };
       await this.store.putResource(updated);

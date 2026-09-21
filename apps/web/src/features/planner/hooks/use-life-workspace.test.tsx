@@ -39,22 +39,50 @@ afterEach(() => {
 });
 
 describe("life workspace background freshness", () => {
-  it("shows backend task additions and archival on the next 30 second visible poll", async () => {
+  it("shows backend task title, status, and date changes on the next 30 second visible poll", async () => {
     vi.mocked(lifeApi.workspace)
       .mockResolvedValueOnce(workspace([task("轮询前任务")]))
       .mockResolvedValueOnce(workspace([
-        task("轮询后的标题", { updatedAt: "2026-09-22T00:00:01.000Z" }),
-        task("后台新增任务", { id: "task-2", archived: true }),
+        task("轮询后的标题", {
+          startDate: "2026-09-23",
+          endDate: "2026-09-24",
+          status: "completed",
+          completedAt: "2026-09-22T00:00:01.000Z",
+          completedOn: "2026-09-23",
+          updatedAt: "2026-09-22T00:00:01.000Z",
+        }),
       ]));
     const { result } = renderHook(() => useLifeWorkspace(true));
     await flush();
     expect(result.current.workspace?.tasks.map((item) => item.title)).toEqual(["轮询前任务"]);
 
     await act(async () => { await vi.advanceTimersByTimeAsync(pollInterval); });
-    expect(result.current.workspace?.tasks.map((item) => [item.title, item.archived ?? false])).toEqual([
-      ["轮询后的标题", false], ["后台新增任务", true],
-    ]);
+    expect(result.current.workspace?.tasks[0]).toEqual(expect.objectContaining({
+      title: "轮询后的标题",
+      startDate: "2026-09-23",
+      endDate: "2026-09-24",
+      status: "completed",
+    }));
     expect(lifeApi.workspace).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a backend addition and an existing task becoming archived without duplication", async () => {
+    vi.mocked(lifeApi.workspace)
+      .mockResolvedValueOnce(workspace([task("待归档任务")]))
+      .mockResolvedValueOnce(workspace([
+        task("待归档任务", { archived: true, updatedAt: "2026-09-22T00:00:01.000Z" }),
+        task("后台新增任务", { id: "task-2", updatedAt: "2026-09-22T00:00:01.000Z" }),
+      ]));
+    const { result } = renderHook(() => useLifeWorkspace(true));
+    await flush();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(pollInterval); });
+    expect(result.current.workspace?.tasks.map((item) => [item.id, item.archived ?? false])).toEqual([
+      ["task-1", true], ["task-2", false],
+    ]);
+    expect(new Set(result.current.workspace?.tasks.map((item) => item.id))).toEqual(
+      new Set(["task-1", "task-2"]),
+    );
   });
 
   it("stops polling while hidden and revalidates once visibility or focus returns", async () => {

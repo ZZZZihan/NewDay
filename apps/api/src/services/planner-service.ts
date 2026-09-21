@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ZodError } from "zod";
 import { shiftDate } from "@newday/core/domain/planner-date";
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
@@ -7,7 +8,7 @@ import { createPlannerBackup, parsePlannerBackup, restorePlannerBackup } from "@
 import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerCommand } from "@newday/core/application/planner-command";
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
 import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
-import type { Task } from "@newday/core/domain/planner-model";
+import { taskSchema, type Task } from "@newday/core/domain/planner-model";
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
@@ -53,8 +54,14 @@ export class PlannerService {
     return this.run(async () => (await this.store.getRecurrenceSeries(id)) ?? null);
   }
 
-  commands(commands: readonly PlannerCommand[], clientId: string) {
+  commands(commands: readonly PlannerCommand[], clientId: string, expectedTask?: Task) {
     return this.run(async () => {
+      if (expectedTask) {
+        const current = await this.store.getTask(expectedTask.id);
+        if (!current || !isDeepStrictEqual(taskSchema.parse(current), taskSchema.parse(expectedTask))) {
+          throw new ApiError(409, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+        }
+      }
       const today = await this.configuredToday();
       const at = new Date(this.clock()).toISOString();
       const normalized = today ? commands.map((command) => {

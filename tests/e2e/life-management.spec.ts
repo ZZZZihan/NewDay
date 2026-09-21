@@ -8,6 +8,12 @@ async function plannerCommands(request: APIRequestContext, commands: unknown[], 
   expect(response.ok(), await response.text()).toBe(true);
 }
 
+function shiftLocalDate(date: string, days: number) {
+  const shifted = new Date(`${date}T00:00:00.000Z`);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
 test("inbox task joins the same task collection as Today", async ({ page, request }) => {
   await page.goto("/");
   const today = await page.getByLabel("选择日期").inputValue();
@@ -137,28 +143,33 @@ test("the open task table reflects backend changes on its bounded background pol
   await page.goto("/");
   const today = await page.getByLabel("选择日期").inputValue();
   const now = new Date().toISOString();
+  const changedAt = new Date(Date.parse(now) + 1_000).toISOString();
+  const tomorrow = shiftLocalDate(today, 1);
   await plannerCommands(request, [{ type: "createTask", input: { id: "background-poll-task",
     title: "后台轮询前任务", startDate: today, endDate: today, now } }], "life-poll-seed");
   await page.getByRole("button", { name: "任务总表", exact: true }).click();
   await expect(page.getByRole("button", { name: /后台轮询前任务/ })).toBeVisible();
 
   await plannerCommands(request, [
-    { type: "updateTaskDetails", input: { taskId: "background-poll-task", title: "后台轮询后任务", now } },
-    { type: "rescheduleTask", input: { taskId: "background-poll-task", startDate: today, endDate: today, now } },
-    { type: "completeTask", input: { taskId: "background-poll-task", completedOn: today, now } },
+    { type: "updateTaskDetails", input: { taskId: "background-poll-task", title: "后台轮询后任务", now: changedAt } },
+    { type: "rescheduleTask", input: { taskId: "background-poll-task", startDate: tomorrow, endDate: tomorrow, now: changedAt } },
+    { type: "completeTask", input: { taskId: "background-poll-task", completedOn: tomorrow, now: changedAt } },
   ], "life-poll-update");
   await page.clock.runFor(30_000);
   const updated = page.getByRole("button", { name: /后台轮询后任务/ });
   await expect(updated).toBeVisible();
+  await expect(updated).toContainText(tomorrow);
   await expect(updated).toContainText("已完成");
   await expect(page.getByRole("button", { name: /后台轮询前任务/ })).toHaveCount(0);
 });
 
-test("background refresh preserves task filters and an unsaved editor draft", async ({ page, request }) => {
+test("background refresh preserves a task draft and rejects its stale save", async ({ page, request }) => {
   await page.clock.install();
   await page.goto("/");
   const today = await page.getByLabel("选择日期").inputValue();
   const now = new Date().toISOString();
+  const changedAt = new Date(Date.parse(now) + 1_000).toISOString();
+  const tomorrow = shiftLocalDate(today, 1);
   await plannerCommands(request, [{ type: "createTask", input: { id: "background-draft-task",
     title: "后台草稿任务", notes: "原备注", startDate: today, endDate: today, now } }], "life-draft-seed");
   await page.getByRole("button", { name: "任务总表", exact: true }).click();
@@ -168,14 +179,74 @@ test("background refresh preserves task filters and an unsaved editor draft", as
   await page.getByRole("button", { name: "编辑任务", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑任务" });
   await dialog.getByLabel("标题").fill("尚未保存的本地草稿");
+  await dialog.getByLabel("备注").fill("尚未保存的本地备注");
 
-  await plannerCommands(request, [{ type: "updateTaskDetails", input: { taskId: "background-draft-task",
-    title: "后台服务端新标题", notes: "服务端新备注", now } }], "life-draft-update");
+  await plannerCommands(request, [
+    { type: "updateTaskDetails", input: { taskId: "background-draft-task",
+      title: "后台服务端新标题", notes: "服务端新备注", now: changedAt } },
+    { type: "rescheduleTask", input: { taskId: "background-draft-task",
+      startDate: tomorrow, endDate: tomorrow, now: changedAt } },
+  ], "life-draft-update");
   await page.clock.runFor(30_000);
   await expect(page.getByLabel("搜索任务")).toHaveValue("后台");
   await expect(page.getByLabel("任务状态")).toHaveValue("open");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("标题")).toHaveValue("尚未保存的本地草稿");
+  await expect(dialog.getByLabel("备注")).toHaveValue("尚未保存的本地备注");
+
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(page.getByTestId("app-notice")).toContainText("任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+  await expect(dialog.getByLabel("标题")).toHaveValue("尚未保存的本地草稿");
+  await expect(dialog.getByLabel("备注")).toHaveValue("尚未保存的本地备注");
+  const task = ((await (await request.get("/api/life/workspace")).json()).tasks as Array<{
+    id: string; title: string; notes: string; startDate: string;
+  }>).find((item) => item.id === "background-draft-task");
+  expect(task).toEqual(expect.objectContaining({
+    title: "后台服务端新标题", notes: "服务端新备注", startDate: tomorrow,
+  }));
+});
+
+test("background refresh preserves a resource draft and rejects its stale save", async ({ page, browser, request }) => {
+  await page.clock.install();
+  await page.goto("/");
+  await page.getByRole("button", { name: "资料库", exact: true }).click();
+  await page.getByRole("button", { name: "新建资料", exact: true }).click();
+  const editor = page.locator(".life-resource-editor");
+  await editor.getByLabel("资料标题").fill("共享资料");
+  await editor.getByLabel("资料内容").fill("打开时的内容");
+  await editor.getByRole("button", { name: "创建资料" }).click();
+  await expect(editor).toHaveAttribute("aria-label", "编辑资料：共享资料");
+
+  await editor.getByLabel("资料标题").fill("尚未保存的资料草稿");
+  await editor.getByLabel("资料内容").fill("尚未保存的资料内容");
+
+  const other = await browser.newPage();
+  try {
+    await other.goto("/");
+    await other.getByRole("button", { name: "资料库", exact: true }).click();
+    await other.getByRole("button", { name: /共享资料/ }).click();
+    const otherEditor = other.locator(".life-resource-editor");
+    await otherEditor.getByLabel("资料标题").fill("后台服务端资料标题");
+    await otherEditor.getByLabel("资料内容").fill("后台服务端资料内容");
+    await otherEditor.getByRole("button", { name: "保存资料" }).click();
+    await expect(otherEditor).toHaveAttribute("aria-label", "编辑资料：后台服务端资料标题");
+
+    await page.clock.runFor(30_000);
+    await expect(editor.getByLabel("资料标题")).toHaveValue("尚未保存的资料草稿");
+    await expect(editor.getByLabel("资料内容")).toHaveValue("尚未保存的资料内容");
+    await editor.getByRole("button", { name: "保存资料" }).click();
+    await expect(page.locator(".life-error")).toContainText("资料已在其他页面或后台更新；请关闭编辑窗口后重新打开");
+    await expect(editor.getByLabel("资料标题")).toHaveValue("尚未保存的资料草稿");
+    await expect(editor.getByLabel("资料内容")).toHaveValue("尚未保存的资料内容");
+    const resource = ((await (await request.get("/api/life/workspace")).json()).resources as Array<{
+      title: string; content: string;
+    }>)[0];
+    expect(resource).toEqual(expect.objectContaining({
+      title: "后台服务端资料标题", content: "后台服务端资料内容",
+    }));
+  } finally {
+    await other.close();
+  }
 });
 
 test("an older workspace read cannot hide a newly saved resource", async ({ page, request }) => {

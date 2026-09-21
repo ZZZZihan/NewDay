@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { FastifyInstance } from "fastify";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
+import type { Task } from "@newday/core/domain/planner-model";
 import { createApp } from "../src/app.js";
 import { backup, createTask, now, task, today } from "./fixtures.js";
 
@@ -13,8 +14,10 @@ const client = "client-one";
 const headers = { "x-newday-client": client };
 const dayUrl = `/api/planner/day?selectedDate=${today}&asOfDate=${today}`;
 
-function commands(app: FastifyInstance, values: PlannerCommand[], clientId = client) {
-  return app.inject({ method: "POST", url: "/api/planner/commands", headers: { "x-newday-client": clientId }, payload: { commands: values } });
+function commands(app: FastifyInstance, values: PlannerCommand[], clientId = client, expectedTask?: Task) {
+  return app.inject({ method: "POST", url: "/api/planner/commands", headers: { "x-newday-client": clientId }, payload: {
+    commands: values, ...(expectedTask ? { expectedTask } : {}),
+  } });
 }
 
 test("API commands, day view, focus, completion and undo preserve planner semantics", async (context) => {
@@ -44,6 +47,43 @@ test("a failed command batch rolls back prior writes and the API remains usable"
   assert.match(response.json().message, /任务不存在/);
   assert.equal((await app.inject(dayUrl)).json().counts.open, 0);
   assert.equal((await commands(app, [createTask()])).statusCode, 200);
+});
+
+test("task edits reject an opening snapshot made stale by another writer", async (context) => {
+  const app = createApp({ databasePath: ":memory:" });
+  context.after(() => app.close());
+  assert.equal((await commands(app, [createTask()])).statusCode, 200);
+  const openingSnapshot = (await app.inject(dayUrl)).json().open[0].task as Task;
+
+  assert.equal((await commands(app, [{ type: "updateTask", input: {
+    taskId: openingSnapshot.id,
+    title: "服务器新标题",
+    notes: "服务器新备注",
+    startDate: "2026-09-09",
+    endDate: "2026-09-09",
+    now: "2026-09-08T08:00:01.000Z",
+  } }])).statusCode, 200);
+
+  const stale = await commands(app, [{ type: "updateTaskDetails", input: {
+    taskId: openingSnapshot.id,
+    title: "旧编辑器草稿",
+    now: "2026-09-08T08:00:02.000Z",
+  } }], client, openingSnapshot);
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().message, "任务已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+
+  const current = (await app.inject("/api/planner/backup")).json().tasks[0] as Task;
+  assert.equal(current.title, "服务器新标题");
+  assert.equal(current.notes, "服务器新备注");
+  assert.equal(current.startDate, "2026-09-09");
+
+  const fresh = await commands(app, [{ type: "updateTaskDetails", input: {
+    taskId: current.id,
+    title: "基于新快照保存",
+    now: "2026-09-08T08:00:03.000Z",
+  } }], client, current);
+  assert.equal(fresh.statusCode, 200);
+  assert.equal((await app.inject("/api/planner/backup")).json().tasks[0].title, "基于新快照保存");
 });
 
 test("API-backed tasks persist when the independent backend restarts", async () => {

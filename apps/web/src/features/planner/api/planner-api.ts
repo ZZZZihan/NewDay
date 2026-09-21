@@ -4,7 +4,7 @@ import type {
   PlannerCommand,
   StopRecurrenceImpact,
 } from "@newday/core/application/planner-command";
-import type { DayPlan, RecurrenceSeries } from "@newday/core/domain/planner-model";
+import type { DayPlan, RecurrenceSeries, Task } from "@newday/core/domain/planner-model";
 
 export type CommandReceipt = { token: string };
 export type MigrationResult = {
@@ -33,8 +33,11 @@ export const plannerApi = {
   series(id: string, signal?: AbortSignal) {
     return request<RecurrenceSeries | null>(`/series/${encodeURIComponent(id)}`, { signal });
   },
-  commands(commands: readonly PlannerCommand[]) {
-    return post<{ receipt: CommandReceipt | null }>("/commands", { commands });
+  commands(commands: readonly PlannerCommand[], expectedTask?: Task) {
+    return post<{ receipt: CommandReceipt | null }>("/commands", {
+      commands,
+      ...(expectedTask ? { expectedTask } : {}),
+    });
   },
   undo(receipt: CommandReceipt) {
     return post<{ ok: true }>("/undo", { receipt });

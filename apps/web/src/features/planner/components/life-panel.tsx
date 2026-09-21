@@ -196,6 +196,9 @@ function ResourceEditor({ resource, folders, tasks, links, busy, mutate, onOpenT
   onSaved: (resource: LifeResource) => void; onClose: () => void;
 }) {
   const [form, setForm] = useState<ResourceInput>({ folderId: resource?.folderId ?? null, kind: resource?.kind ?? "note", title: resource?.title ?? "", content: resource?.content ?? "", source: resource?.source ?? "" });
+  // The live resource prop can advance during a poll; saves must compare the
+  // version on which this draft was actually based.
+  const [expectedResource, setExpectedResource] = useState(resource);
   const [taskId, setTaskId] = useState("");
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
 
@@ -203,8 +206,15 @@ function ResourceEditor({ resource, folders, tasks, links, busy, mutate, onOpenT
     event.preventDefault();
     if (!form.title.trim()) return;
     let saved: LifeResource | undefined;
-    if (await mutate(async () => { saved = resource ? await lifeApi.updateResource(resource.id, form) : await lifeApi.createResource(form); })) {
-      if (saved) onSaved(saved);
+    if (await mutate(async () => {
+      saved = resource && expectedResource
+        ? await lifeApi.updateResource(resource.id, form, expectedResource)
+        : await lifeApi.createResource(form);
+    })) {
+      if (saved) {
+        setExpectedResource(saved);
+        onSaved(saved);
+      }
     }
   }
 

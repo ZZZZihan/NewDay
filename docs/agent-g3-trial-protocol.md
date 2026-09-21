@@ -30,7 +30,7 @@
 
 `pnpm agent:evaluation:trial` 每次只接受一个场景和一个重复序号，不能批量启动 120 条 trial。命令不会接收任务数据库、proposal apply 服务或任何个人数据路径；它从冻结 fixture 通过生产快照转换器建立脱离业务存储的 snapshot，并只把 snapshot、已审核的澄清回答及一次可选格式修复交给模型。
 
-执行前先创建一份放在私有目录中的 `newday-agent-evaluation-freeze` JSON。冻结文件必须包含并锁定：明确的批准人、时间和批准引用，候选 Git SHA，manifest/corpus 哈希，完整 heldout 场景 ID，provider origin、base URL 哈希及 HTTP 例外（没有例外时为 `null`），精确模型 ID、请求 profile，reasoning effort、token/timeout 上限，prompt/schema 版本及哈希，真实出站调用总上限，费用上限或未知费用逐命令复核策略，全部停机条件，人工评分人，以及仓库外的私有证据绝对路径。非回环 HTTP provider 只有在冻结的 `allowHttpOrigin` 与 provider origin 完全相同时才可执行；HTTPS 和回环地址不得携带该例外。`approved` 只有在调用范围、费用、传输方式和停止条件得到明确授权后才可设为 `true`；生成文件本身不是调用许可。
+执行前先创建一份放在私有目录中的 v2 `newday-agent-evaluation-freeze` JSON。v2 冻结文件必须包含并锁定：明确的批准人、时间和批准引用，候选 Git SHA，manifest/corpus 哈希，完整 heldout 场景 ID，provider origin、base URL 哈希及 HTTP 例外（没有例外时为 `null`），精确模型 ID、请求 profile，reasoning effort、token/timeout 上限，prompt/schema 版本及哈希，真实出站调用总上限，费用上限或未知费用逐命令复核策略，全部停机条件，人工评分人，以及仓库外的私有证据绝对路径。v1 没有请求 profile，只能作为历史证据，不能由当前执行器启动新调用。非回环 HTTP provider 只有在冻结的 `allowHttpOrigin` 与 provider origin 完全相同时才可执行；HTTPS 和回环地址不得携带该例外。`approved` 只有在调用范围、费用、传输方式和停止条件得到明确授权后才可设为 `true`；生成文件本身不是调用许可。
 
 运行零调用核对：
 

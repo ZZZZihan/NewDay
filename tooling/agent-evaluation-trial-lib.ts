@@ -60,7 +60,7 @@ const costControlSchema = z.discriminatedUnion("mode", [
 
 export const evaluationFreezeSchema = z.strictObject({
   format: z.literal("newday-agent-evaluation-freeze"),
-  version: z.literal(1),
+  version: z.literal(2),
   approval: z.strictObject({
     approved: z.literal(true),
     approvedAt: instant,

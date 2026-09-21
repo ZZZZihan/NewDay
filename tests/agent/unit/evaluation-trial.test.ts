@@ -39,7 +39,7 @@ afterEach(async () => {
 function freeze(overrides: Record<string, unknown> = {}): EvaluationFreeze {
   const base = {
     format: "newday-agent-evaluation-freeze",
-    version: 1,
+    version: 2,
     approval: {
       approved: true,
       approvedAt: "2026-09-21T00:00:00.000Z",
@@ -138,6 +138,9 @@ async function run(model: PlanningModel, options: { callsAlreadyUsed?: number; s
 
 describe("guarded real-provider evaluation trial", () => {
   it("requires an approved, complete freeze and exact candidate state", () => {
+    expect(evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
+      version: 1,
+    })).success).toBe(false);
     expect(evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
       approval: { approved: false },
     })).success).toBe(false);

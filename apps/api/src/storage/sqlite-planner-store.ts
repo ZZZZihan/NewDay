@@ -923,7 +923,10 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       prior.mapping.rulePageId !== mapping.rulePageId ||
       prior.mapping.occurrenceKey !== mapping.occurrenceKey ||
       (prior.mapping.remotePageId !== null && mapping.remotePageId !== null &&
-        prior.mapping.remotePageId !== mapping.remotePageId)) {
+        prior.mapping.remotePageId !== mapping.remotePageId) ||
+      (mapping.remotePageId !== null && prior.latestReview?.remotePageId &&
+        ["matches_intent", "different", "trashed"].includes(prior.latestReview.outcome) &&
+        prior.latestReview.remotePageId !== mapping.remotePageId)) {
       throw new Error("Notion imported operation conflicts with restore quarantine identity");
     }
   }

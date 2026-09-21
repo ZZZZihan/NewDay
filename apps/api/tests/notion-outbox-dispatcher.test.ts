@@ -595,6 +595,41 @@ test("backup import rejects a changed known page for an already isolated operati
   } finally { restored.close(); }
 });
 
+test("backup import rejects a page ID that contradicts a saved read-only observation", async () => {
+  const source = await setup();
+  let archived: string;
+  try {
+    await source.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    archived = JSON.stringify(await createPlannerBackup(source, at));
+  } finally { source.close(); }
+
+  const restored = new SQLitePlannerStore(":memory:");
+  const fake = fakeTransport();
+  try {
+    await restorePlannerBackup(restored, archived);
+    const status = new NotionSyncService(restored, new NotionOutboxDispatcher(restored, fake.transport, () => at));
+    fake.pages.set("remote-B", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+      remotePageId: "remote-B", clientKey: notionClientKey("install-1", "task-1"),
+      fields, inTrash: false });
+    const sourceEpoch = (await status.status("workspace-1")).restoreQuarantine[0]!.sourceEpoch;
+    const checked = await status.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.equal(checked.restoreQuarantine[0]?.latestReview?.outcome, "matches_intent");
+    assert.equal(checked.restoreQuarantine[0]?.latestReview?.remotePageId, "remote-B");
+
+    const conflicting = structuredClone(parsePlannerBackup(archived));
+    if (conflicting.version !== 6) throw new Error("expected v6 backup");
+    conflicting.notionSync.taskMappings[0]!.remotePageId = "remote-C";
+    const before = await restored.getPlanningVersion();
+    await assert.rejects(restorePlannerBackup(restored, JSON.stringify(conflicting)),
+      /conflicts with restore quarantine identity/);
+    assert.deepEqual(await restored.getPlanningVersion(), before);
+    assert.equal((await status.status("workspace-1")).restoreQuarantine[0]?.latestReview?.remotePageId, "remote-B");
+    assert.equal((await restored.getNotionTaskMapping("task-1"))?.remotePageId, null);
+  } finally { restored.close(); }
+});
+
 test("restore audit records a remote match without replaying an old operation or lifting its fence", async () => {
   const desired = { ...fields, title: "恢复前的改名" };
   const store = await setup("remote-1", desired);

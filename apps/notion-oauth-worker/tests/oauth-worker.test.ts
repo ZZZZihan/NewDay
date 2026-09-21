@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { handleOAuthRequest, type Env } from "../src/index";
+import { handleOAuthRequest } from "../src/index";
 
 const workerEnv = env as Env;
 
@@ -99,6 +99,65 @@ describe("OAuth Worker handoff", () => {
     expect(callback.status).toBe(303);
     expect(callback.headers.get("location")).toBe(`http://127.0.0.1:3000/#notion-oauth=cancelled:${state}`);
     expect((await post("/oauth/claim", { state, ticket: "t".repeat(43), verifier: "v".repeat(43) })).status).toBe(409);
+  });
+
+  it("rejects forged public callback states before opening a session object", async () => {
+    const response = await handleOAuthRequest(new Request(
+      `https://oauth.example.test/oauth/callback?state=${"s".repeat(43)}&code=attacker-code`), workerEnv);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_state" });
+
+    const started = await post("/oauth/start", { challenge: await hash("c".repeat(43)) });
+    const { state } = await started.json() as { state: string };
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const finalIndex = alphabet.indexOf(state.at(-1)!);
+    const nonCanonicalState = `${state.slice(0, -1)}${alphabet[finalIndex + 1]}`;
+    const nonCanonical = await handleOAuthRequest(new Request(
+      `https://oauth.example.test/oauth/callback?state=${nonCanonicalState}&code=attacker-code`), workerEnv);
+    expect(nonCanonical.status).toBe(400);
+  });
+
+  it("bounds token responses and keeps only credential fields required by the local vault", async () => {
+    const verifier = "z".repeat(43);
+    const started = await post("/oauth/start", { challenge: await hash(verifier) });
+    const { state } = await started.json() as { state: string };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      ...credential,
+      workspace_name: "隔离工作区",
+      owner: { user: { person: { email: "must-not-be-persisted@example.test" } } },
+      duplicated_template_id: "not-needed",
+    })));
+    try {
+      const callback = await handleOAuthRequest(new Request(
+        `https://oauth.example.test/oauth/callback?state=${state}&code=test-code`), workerEnv);
+      expect(callback.status).toBe(303);
+      const fragment = new URL(callback.headers.get("location")!).hash;
+      const ticket = fragment.split(":")[2]!;
+      const claimed = await post("/oauth/claim", { state, ticket, verifier });
+      expect(await claimed.json()).toEqual({ ...credential, workspace_name: "隔离工作区" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const oversizedStarted = await post("/oauth/start", { challenge: await hash("y".repeat(43)) });
+    const oversizedState = ((await oversizedStarted.json()) as { state: string }).state;
+    let cancelled = false;
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
+      cancel() { cancelled = true; },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(oversized, {
+      status: 200, headers: { "content-type": "application/json" },
+    })));
+    try {
+      const callback = await handleOAuthRequest(new Request(
+        `https://oauth.example.test/oauth/callback?state=${oversizedState}&code=test-code`), workerEnv);
+      expect(callback.headers.get("location")).toBe(
+        `http://127.0.0.1:3000/#notion-oauth=error:${oversizedState}`);
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("returns a persisted rotated refresh result for the same attempt without another exchange", async () => {

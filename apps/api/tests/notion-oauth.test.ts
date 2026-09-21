@@ -287,3 +287,36 @@ test("explicitly unavailable refresh requires reauthorization, and config requir
   const valid = loadConfig({ NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey, NEWDAY_NOTION_CREDENTIAL_KEY: key.toString("base64url") });
   assert.equal(valid.notionOAuth?.workerOrigin, origin);
 });
+
+test("Worker responses are byte-bounded and credential persistence is allowlisted", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const responseWithExtraData = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const endpoint = new URL(String(input)).pathname;
+    if (endpoint === "/oauth/start") {
+      const authorization = new URL("https://api.notion.com/v1/oauth/authorize");
+      authorization.searchParams.set("state", state);
+      authorization.searchParams.set("redirect_uri", `${origin}/oauth/callback`);
+      return Response.json({ state, authorizationUrl: authorization.href });
+    }
+    if (endpoint === "/oauth/claim") {
+      return Response.json({ ...credential, owner: { person: { email: "must-not-be-persisted@example.test" } } });
+    }
+    assert.equal(endpoint, "/oauth/ack");
+    assert.ok(init);
+    return Response.json({ status: "acknowledged" });
+  };
+  try {
+    const service = new NotionOAuthService(origin, workerApiKey, vault, responseWithExtraData);
+    await service.start();
+    await service.claim(state, ticket);
+    assert.deepEqual(vault.getCredential("workspace-one"), credential);
+
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
+    });
+    const oversizedService = new NotionOAuthService(origin, workerApiKey, vault,
+      async () => new Response(oversized, { headers: { "content-type": "application/json" } }));
+    await assert.rejects(oversizedService.start(), (error: unknown) =>
+      error instanceof ApiError && error.statusCode === 502);
+  } finally { vault.close(); }
+});

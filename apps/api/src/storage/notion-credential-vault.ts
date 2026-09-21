@@ -3,7 +3,7 @@ import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from 
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type NotionCredential = Record<string, unknown> & {
+export type NotionCredential = {
   access_token: string;
   refresh_token: string;
   bot_id: string;

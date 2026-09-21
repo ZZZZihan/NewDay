@@ -2,7 +2,14 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "newday-notion-oauth",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-18",
+  "compatibility_date": "2026-09-21",
+  "compatibility_flags": ["nodejs_compat", "nodejs_compat_do_not_populate_process_env"],
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "durable_objects": {
     "bindings": [
       { "name": "OAUTH_SESSIONS", "class_name": "OAuthSession" }

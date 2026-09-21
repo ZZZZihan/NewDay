@@ -121,8 +121,8 @@ export function useDayPlanner() {
     }
   }
 
-  async function handleUndo() {
-    if (!notice?.receipt || mutationPending.current || migration.checking) return;
+  async function handleUndo(): Promise<boolean> {
+    if (!notice?.receipt || mutationPending.current || migration.checking) return false;
     mutationPending.current = true;
     setIsUndoing(true);
 
@@ -130,6 +130,7 @@ export function useDayPlanner() {
       await plannerApi.undo(notice.receipt);
       await refresh();
       showNotice("已撤销");
+      return true;
     } catch (error) {
       setNotice((current) =>
         current
@@ -139,6 +140,7 @@ export function useDayPlanner() {
             }
           : current,
       );
+      return false;
     } finally {
       mutationPending.current = false;
       setIsUndoing(false);
@@ -210,8 +212,8 @@ export function useDayPlanner() {
     }
   }
 
-  async function handleImport(file: File) {
-    if (mutationPending.current || migration.checking) return;
+  async function handleImport(file: File): Promise<boolean> {
+    if (mutationPending.current || migration.checking) return false;
     mutationPending.current = true;
     setIsSaving(true);
     try {
@@ -224,7 +226,7 @@ export function useDayPlanner() {
       const confirmed = window.confirm(
         `导入将替换当前全部数据，共 ${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料、${candidate.inboxItems.length} 条收集箱内容。继续吗？`,
       );
-      if (!confirmed) return;
+      if (!confirmed) return false;
 
       const safetyBackup = await plannerApi.backup();
       downloadBackup(safetyBackup, "newday-before-import");
@@ -233,8 +235,10 @@ export function useDayPlanner() {
       setEditingTaskId(null);
       setExternalEditingTask(null);
       showNotice(`导入完成：${candidate.tasks.length} 项任务、${candidate.resources.length} 份资料`);
+      return true;
     } catch (error) {
       showFailureNotice(error instanceof Error ? error.message : "导入失败，请检查文件");
+      return false;
     } finally {
       mutationPending.current = false;
       setIsSaving(false);

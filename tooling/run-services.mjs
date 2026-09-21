@@ -24,7 +24,12 @@ if (process.env.NEWDAY_TEST_RUN === "1") {
 }
 const env = {
   ...process.env,
-  ...(temporaryData ? { NEWDAY_DATABASE_PATH: join(temporaryData, "planner.sqlite") } : {}),
+  ...(temporaryData ? {
+    NEWDAY_DATABASE_PATH: join(temporaryData, "planner.sqlite"),
+    NEWDAY_NOTION_WORKER_ORIGIN: "",
+    NEWDAY_NOTION_WORKER_API_KEY: "",
+    NEWDAY_NOTION_CREDENTIAL_KEY: "",
+  } : {}),
 };
 const children = [
   spawn("pnpm", ["--filter", "@newday/api", mode], { cwd: root, env, stdio: "inherit" }),

@@ -47,6 +47,11 @@ export default defineConfig({
       NEWDAY_API_PORT: "3002",
       NEWDAY_API_ORIGIN: "http://127.0.0.1:3002",
       NEWDAY_WEB_ORIGIN: "http://127.0.0.1:3100",
+      // E2E always uses fake HTTP responses; a developer's real .env must not
+      // open their Notion credential vault or permit live OAuth calls.
+      NEWDAY_NOTION_WORKER_ORIGIN: "",
+      NEWDAY_NOTION_WORKER_API_KEY: "",
+      NEWDAY_NOTION_CREDENTIAL_KEY: "",
     },
     timeout: 120_000,
   },

@@ -10,6 +10,12 @@ export type ApiConfig = {
   port: number;
   databasePath: string;
   webOrigins: readonly string[];
+  notionOAuth: {
+    workerOrigin: string;
+    workerApiKey: string;
+    vaultPath: string;
+    encryptionKey: Buffer;
+  } | null;
   agent: {
     provider: "disabled" | "openai-compatible" | "scripted";
     baseUrl: string;
@@ -52,11 +58,39 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
     throw new Error("NEWDAY_AGENT_REASONING_EFFORT must be none, low, medium or high");
   }
 
+  const workerOrigin = environment.NEWDAY_NOTION_WORKER_ORIGIN;
+  const rawKey = environment.NEWDAY_NOTION_CREDENTIAL_KEY;
+  const workerApiKey = environment.NEWDAY_NOTION_WORKER_API_KEY;
+  if ([workerOrigin, rawKey, workerApiKey].some(Boolean) && ![workerOrigin, rawKey, workerApiKey].every(Boolean)) {
+    throw new Error("Notion OAuth requires NEWDAY_NOTION_WORKER_ORIGIN, NEWDAY_NOTION_WORKER_API_KEY and NEWDAY_NOTION_CREDENTIAL_KEY");
+  }
+  let notionOAuth: ApiConfig["notionOAuth"] = null;
+  if (workerOrigin && rawKey && workerApiKey) {
+    const url = new URL(workerOrigin);
+    if (url.protocol !== "https:" || url.origin !== workerOrigin) {
+      throw new Error("NEWDAY_NOTION_WORKER_ORIGIN must be an HTTPS origin without a path");
+    }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(rawKey)) {
+      throw new Error("NEWDAY_NOTION_CREDENTIAL_KEY must be a base64url-encoded 32-byte key");
+    }
+    const encryptionKey = Buffer.from(rawKey, "base64url");
+    if (encryptionKey.length !== 32 || encryptionKey.toString("base64url") !== rawKey) {
+      throw new Error("NEWDAY_NOTION_CREDENTIAL_KEY must be a base64url-encoded 32-byte key");
+    }
+    if (!/^[A-Za-z0-9_-]{43}$/.test(workerApiKey)) {
+      throw new Error("NEWDAY_NOTION_WORKER_API_KEY must be a base64url-encoded 32-byte key");
+    }
+    const vaultPath = resolve(repositoryRoot, environment.NEWDAY_NOTION_CREDENTIAL_PATH ?? "data/notion-vault/credentials.sqlite");
+    if (vaultPath === resolvedDatabasePath) throw new Error("Notion credential vault must be separate from the planner database");
+    notionOAuth = { workerOrigin, workerApiKey, vaultPath, encryptionKey };
+  }
+
   return {
     host: environment.NEWDAY_API_HOST ?? "127.0.0.1",
     port: Number(rawPort),
     databasePath: resolvedDatabasePath,
     webOrigins,
+    notionOAuth,
     agent: {
       provider: provider as ApiConfig["agent"]["provider"], baseUrl,
       modelId: environment.NEWDAY_AGENT_MODEL, apiKey: environment.NEWDAY_AGENT_API_KEY,

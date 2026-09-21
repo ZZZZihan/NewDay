@@ -1,9 +1,9 @@
 import { Client, type CreateDatabaseParameters } from "@notionhq/client";
 
 export type StructureProperty = { id: string; type: string; options?: string[]; relationTarget?: string };
-export type StructurePage = { id: string; title: string; workspaceParent: boolean };
+export type StructurePage = { id: string; title: string; workspaceParent: boolean; inTrash: boolean };
 export type StructureDatabase = {
-  id: string; title: string; parentPageId: string; dataSourceIds: string[];
+  id: string; title: string; parentPageId: string; dataSourceIds: string[]; inTrash: boolean;
 };
 
 /** The only T3 adapter allowed to use an access token. No token enters the
@@ -56,7 +56,8 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
     const titleProperty = properties.title;
     const title = titleProperty && typeof titleProperty === "object" && "title" in titleProperty
       ? richText(titleProperty.title) : "";
-    return { id: page.id, title, workspaceParent: page.parent.type === "workspace" && page.parent.workspace === true };
+    return { id: page.id, title, workspaceParent: page.parent.type === "workspace" && page.parent.workspace === true,
+      inTrash: page.in_trash };
   }
 
   async createDatabase(token: string, parentPageId: string, title: string, properties: Record<string, unknown>): Promise<string> {
@@ -96,12 +97,15 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
       title: richText(database.title),
       parentPageId: database.parent.page_id,
       dataSourceIds: database.data_sources.map((item) => item.id),
+      inTrash: database.in_trash,
     };
   }
 
   async getDataSourceProperties(token: string, dataSourceId: string): Promise<Record<string, StructureProperty>> {
     const dataSource = await this.client(token).dataSources.retrieve({ data_source_id: dataSourceId });
-    if (!("properties" in dataSource)) throw new Error("Notion returned an incomplete data source");
+    if (!("properties" in dataSource) || !("in_trash" in dataSource) || dataSource.in_trash) {
+      throw new Error("Notion returned an inaccessible data source");
+    }
     const result: Record<string, StructureProperty> = {};
     for (const [name, value] of Object.entries(dataSource.properties)) {
       if (!value || typeof value !== "object" || typeof value.id !== "string" || typeof value.type !== "string") continue;

@@ -33,6 +33,9 @@ class FakeStructureGateway implements NotionStructureGateway {
   rateLimitRootOnce = false;
   rootLookups = 0;
   beforeCreateRoot: (() => Promise<void>) | null = null;
+  beforeGetRoot: (() => Promise<void>) | null = null;
+  beforeGetDatabase: (() => Promise<void>) | null = null;
+  databaseReads = 0;
 
   async createRoot(token: string, title: string) {
     this.checkToken(token);
@@ -42,7 +45,7 @@ class FakeStructureGateway implements NotionStructureGateway {
       this.rateLimitRootOnce = false;
       throw Object.assign(new Error("rate limited"), { status: 429, headers: new Headers({ "retry-after": "120" }) });
     }
-    this.pages.set(id, { id, title, workspaceParent: true });
+    this.pages.set(id, { id, title, workspaceParent: true, inTrash: false });
     if (this.lostOnce === "root") { this.lostOnce = null; throw new Error("response lost after create"); }
     return id;
   }
@@ -54,6 +57,7 @@ class FakeStructureGateway implements NotionStructureGateway {
   }
   async getRoot(token: string, pageId: string) {
     this.checkToken(token);
+    if (this.beforeGetRoot) await this.beforeGetRoot();
     const page = this.pages.get(pageId);
     if (!page) throw new Error("missing page");
     return page;
@@ -63,7 +67,7 @@ class FakeStructureGateway implements NotionStructureGateway {
     const number = ++this.creates.database;
     const id = `db-${number}`;
     const dataSourceId = `ds-${number}`;
-    this.databases.set(id, { id, title, parentPageId, dataSourceIds: [dataSourceId] });
+    this.databases.set(id, { id, title, parentPageId, dataSourceIds: [dataSourceId], inTrash: false });
     const normalized: Record<string, StructureProperty> = {};
     for (const [name, value] of Object.entries(properties)) {
       const entry = value as Record<string, { options?: Array<{ name: string }> }>;
@@ -81,6 +85,8 @@ class FakeStructureGateway implements NotionStructureGateway {
   }
   async getDatabase(token: string, databaseId: string) {
     this.checkToken(token);
+    this.databaseReads += 1;
+    if (this.beforeGetDatabase) await this.beforeGetDatabase();
     const database = this.databases.get(databaseId);
     if (!database) throw new Error("missing database");
     return database;
@@ -177,6 +183,115 @@ test("root response loss survives API restart; four databases and relations are 
     await app.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("restored structure review checks exact remote identities and never releases synchronization", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-restore-verify-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  const databasePath = join(directory, "planner.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath, notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const base = `/api/notion/connections/${workspaceId}/structure`;
+  const verify = () => app.inject({ method: "POST", url: `${base}/restore/verify`, payload: {} });
+  try {
+    for (let index = 0; index < 9; index += 1) {
+      const result = await app.inject({ method: "POST", url: `${base}/advance`, payload: {} });
+      assert.equal(result.statusCode, 200, result.body);
+    }
+    const backup = (await app.inject("/api/planner/backup")).json();
+    const restored = await app.inject({ method: "POST", url: "/api/planner/backup",
+      payload: { source: JSON.stringify(backup) } });
+    assert.equal(restored.statusCode, 200, restored.body);
+    const store = new SQLitePlannerStore(databasePath);
+    try {
+      const version = await store.getPlanningVersion();
+      const good = await verify();
+      assert.equal(good.statusCode, 200, good.body);
+      assert.equal(good.json().outcome, "matches");
+      assert.equal(good.json().checks.length, 9);
+      assert.ok(good.json().checks.every((check: { result: string }) => check.result === "matches"));
+      assert.deepEqual(await store.getPlanningVersion(), version);
+      assert.deepEqual(fake.creates, { root: 1, database: 4, relation: 4 });
+      assert.equal((await app.inject(base)).json().state, "paused_after_restore");
+      assert.equal((await app.inject(`/api/notion/connections/${workspaceId}/sync`)).json().connectionStatus,
+        "paused_after_restore");
+      assert.equal((await app.inject({ method: "POST", url: `${base}/advance`, payload: {} })).statusCode, 409);
+      assert.equal((await app.inject({ method: "POST", url: `/api/notion/connections/${workspaceId}/sync/resume`,
+        payload: {} })).statusCode, 409);
+
+      const priorDatabaseReads = fake.databaseReads;
+      fake.beforeGetRoot = async () => {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      };
+      const throttled = (await verify()).json();
+      assert.equal(throttled.outcome, "needs_review");
+      assert.equal(throttled.checks[0].result, "rate_limited");
+      assert.ok(throttled.checks.slice(1).every((check: { result: string }) => check.result === "not_checked"));
+      assert.equal(fake.databaseReads, priorDatabaseReads, "one 429 must stop further remote reads");
+      fake.beforeGetRoot = null;
+
+      const tasks = fake.databases.get("db-3")!;
+      fake.databases.set(tasks.id, { ...tasks, dataSourceIds: ["different-source"] });
+      const wrongSource = (await verify()).json();
+      assert.equal(wrongSource.outcome, "needs_review");
+      assert.deepEqual(wrongSource.checks.find((check: { step: string }) => check.step === "tasks"),
+        { step: "tasks", result: "identity_mismatch" });
+      fake.databases.set(tasks.id, tasks);
+
+      const taskProperties = fake.properties.get("ds-3")!;
+      const oldRelation = taskProperties.Rule;
+      taskProperties.Rule = { ...oldRelation, relationTarget: "different-source" };
+      const wrongRelation = (await verify()).json();
+      assert.equal(wrongRelation.outcome, "needs_review");
+      assert.deepEqual(wrongRelation.checks.find((check: { step: string }) => check.step === "tasks_rule"),
+        { step: "tasks_rule", result: "schema_mismatch" });
+      taskProperties.Rule = oldRelation;
+
+      const root = fake.pages.get("page-1")!;
+      fake.pages.set(root.id, { ...root, inTrash: true });
+      const trashed = (await verify()).json();
+      assert.deepEqual(trashed.checks.find((check: { step: string }) => check.step === "root"),
+        { step: "root", result: "trashed" });
+      assert.deepEqual(fake.creates, { root: 1, database: 4, relation: 4 });
+      assert.deepEqual(await store.getPlanningVersion(), version);
+      assert.equal((await app.inject(base)).json().state, "paused_after_restore");
+    } finally { store.close(); }
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("restore structure review rejects a backup replacement during remote readback", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-restore-stale-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  const databasePath = join(directory, "planner.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath, notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const base = `/api/notion/connections/${workspaceId}/structure`;
+  try {
+    for (let index = 0; index < 9; index += 1) {
+      assert.equal((await app.inject({ method: "POST", url: `${base}/advance`, payload: {} })).statusCode, 200);
+    }
+    const backup = (await app.inject("/api/planner/backup")).json();
+    assert.equal((await app.inject({ method: "POST", url: "/api/planner/backup",
+      payload: { source: JSON.stringify(backup) } })).statusCode, 200);
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    fake.beforeGetDatabase = async () => { fake.beforeGetDatabase = null; entered(); await gate; };
+    const review = app.inject({ method: "POST", url: `${base}/restore/verify`, payload: {} });
+    await started;
+    try {
+      const replacement = await app.inject({ method: "POST", url: "/api/planner/backup",
+        payload: { source: JSON.stringify(backup) } });
+      assert.equal(replacement.statusCode, 200, replacement.body);
+    } finally { release(); }
+    const result = await review;
+    assert.equal(result.statusCode, 409, result.body);
+    assert.equal((await app.inject(base)).json().state, "paused_after_restore");
+    assert.deepEqual(fake.creates, { root: 1, database: 4, relation: 4 });
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
 test("a stale structure review cannot advance into the next remote create step", async () => {
@@ -335,7 +450,7 @@ test("database creation detects a matching sibling already under the root", asyn
     const path = `/api/notion/connections/${workspaceId}/structure/advance`;
     const root = (await app.inject({ method: "POST", url: path, payload: {} })).json();
     fake.databases.set("legacy", { id: "legacy", title: "Areas", parentPageId: root.rootPageId,
-      dataSourceIds: ["legacy-source"] });
+      dataSourceIds: ["legacy-source"], inTrash: false });
     fake.properties.set("legacy-source", { Name: { id: "legacy-name", type: "title" } });
     const result = (await app.inject({ method: "POST", url: path, payload: {} })).json();
     assert.equal(result.state, "needs_review");
@@ -384,7 +499,7 @@ test("a same-title database with invalid schema cannot be ignored as a duplicate
   try {
     const root = (await app.inject({ method: "POST", url: path, payload: {} })).json();
     fake.databases.set("wrong-schema", { id: "wrong-schema", title: "Areas", parentPageId: root.rootPageId,
-      dataSourceIds: ["wrong-source"] });
+      dataSourceIds: ["wrong-source"], inTrash: false });
     fake.properties.set("wrong-source", { Name: { id: "wrong-name", type: "rich_text" } });
     const progress = (await app.inject({ method: "POST", url: path, payload: {} })).json();
     assert.equal(progress.state, "needs_review");

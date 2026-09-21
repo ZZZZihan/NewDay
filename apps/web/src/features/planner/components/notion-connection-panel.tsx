@@ -1,11 +1,11 @@
 import type { useNotionConnection } from "../hooks/use-notion-connection";
-import type { NotionRestoreReview, NotionStructureProgress } from "../api/notion-api";
+import type { NotionRestoreReview, NotionRestoreStructureReview, NotionStructureProgress } from "../api/notion-api";
 
 type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
-  const { status, structures, reads, syncs, message, busy, refresh, start, disconnect,
-    retryRefresh, initializeStructure, scan, drain, pause, reconcile, reconcileRestore, resume } = connection;
+  const { status, structures, reads, syncs, restoreStructureReviews, message, busy, refresh, start, disconnect,
+    retryRefresh, initializeStructure, verifyRestoredStructure, scan, drain, pause, reconcile, reconcileRestore, resume } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
@@ -43,6 +43,16 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                   : structures[item.workspaceId].state === "paused_after_restore" ? "备份恢复后结构和授权需要重新核对"
                     : `结构初始化：${structures[item.workspaceId].completedSteps.length}/9 步已确认`}</p>
             ) : <p>结构状态未读取；可刷新状态重试。</p>}
+            {structures[item.workspaceId]?.state === "paused_after_restore" &&
+              restoreStructureReviews[item.workspaceId] ? (
+                <div className="notion-read-status" aria-label="恢复后结构只读核对结果">
+                  <p>本次核对：{new Date(restoreStructureReviews[item.workspaceId].checkedAt).toLocaleString("zh-CN")}；
+                    {restoreStructureReviews[item.workspaceId].outcome === "matches" ? "九项结构一致" : "仍有待核对项"}。
+                    此结果不会解除恢复隔离。</p>
+                  {restoreStructureReviews[item.workspaceId].checks.map((check) => <p key={check.step}>
+                    {structureStepDescription(check.step)}：{restoreStructureCheckDescription(check.result)}</p>)}
+                </div>
+              ) : null}
             {reads[item.workspaceId] ? <div className="notion-read-status" aria-label="只读同步状态">
               {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : source.table === "rules" ? "规则" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
             </div> : null}
@@ -111,6 +121,10 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                   }
                 }}>{structures[item.workspaceId]?.state === "needs_review" ? "重新核对" : "建立或继续结构"}</button>
               ) : null}
+            {item.status === "active" && structures[item.workspaceId]?.state === "paused_after_restore" ?
+              <button type="button" disabled={busy} onClick={() => void verifyRestoredStructure(item.workspaceId)}>
+                只读核对恢复结构
+              </button> : null}
             {item.status === "refresh_pending" ? <button type="button" disabled={busy} onClick={() => void retryRefresh(item.workspaceId)}>重试确认</button> : null}
             {item.status === "active" && structures[item.workspaceId]?.state === "ready" &&
               reads[item.workspaceId]?.connectionStatus === "active" ?
@@ -136,6 +150,30 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
       ))}
     </section>
   );
+}
+
+function structureStepDescription(step: string): string {
+  const labels: Record<string, string> = {
+    root: "私有根页面", areas: "主线表", projects: "项目表", tasks: "任务表", rules: "规则表",
+    projects_area: "项目关联主线", tasks_project: "任务关联项目",
+    tasks_direct_area: "任务关联主线", tasks_rule: "任务关联规则",
+  };
+  return labels[step] ?? step;
+}
+
+function restoreStructureCheckDescription(result: NotionRestoreStructureReview["checks"][number]["result"]): string {
+  const descriptions = {
+    matches: "远端与恢复记录一致",
+    record_incomplete: "恢复记录缺少已确认的结构标识",
+    identity_mismatch: "页面、表、数据源或父级标识不一致",
+    schema_mismatch: "字段或关联契约不一致",
+    trashed: "远端对象已进入回收站",
+    permission: "当前授权无法读取远端对象",
+    rate_limited: "Notion 暂时限流，请稍后重新核对",
+    unreadable: "远端对象未能完整读回",
+    not_checked: "先前遇到权限或限流错误，本项未继续读取",
+  } satisfies Record<NotionRestoreStructureReview["checks"][number]["result"], string>;
+  return descriptions[result];
 }
 
 function restoreReviewDescription(outcome: NotionRestoreReview["outcome"]): string {

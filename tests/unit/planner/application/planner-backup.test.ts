@@ -73,7 +73,7 @@ function focus(overrides: Partial<FocusRecord> = {}): FocusRecord {
 }
 
 describe("planner backup", () => {
-  it("exports a version 5 archive with tasks, recurrence, focus, and life collections", async () => {
+  it("exports a version 6 archive with tasks, recurrence, focus, life, and sync collections", async () => {
     const store = new MemoryPlannerStore();
     const recurrenceSeries = series();
     const occurrence = task({
@@ -94,7 +94,7 @@ describe("planner backup", () => {
 
     expect(backup).toEqual({
       format: "newday-backup",
-      version: 5,
+      version: 6,
       exportedAt: "2026-09-01T12:00:00.000Z",
       tasks: [occurrence],
       recurrenceSeries: [recurrenceSeries],
@@ -103,6 +103,7 @@ describe("planner backup", () => {
       folders: [],
       resources: [],
       resourceTaskLinks: [],
+      notionSync: { version: 1, connections: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [] },
     });
   });
 

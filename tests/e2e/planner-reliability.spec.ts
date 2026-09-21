@@ -23,7 +23,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   const archive = JSON.parse(await readFile(exportedPath, "utf8"));
   expect(archive).toEqual({
     format: "newday-backup",
-    version: 5,
+    version: 6,
     exportedAt: expect.any(String),
     tasks: [
       expect.objectContaining({
@@ -38,6 +38,10 @@ test("JSON export and replacement import preserve the simplified task data", asy
     folders: [],
     resources: [],
     resourceTaskLinks: [],
+    notionSync: {
+      version: 1,
+      connections: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], restoreQuarantine: [],
+    },
   });
 
   await page.getByTestId("quick-task-input").fill("导出之后添加");
@@ -57,7 +61,7 @@ test("JSON export and replacement import preserve the simplified task data", asy
   );
 });
 
-test("version 5 backup includes recurrence and today's focus", async ({
+test("version 6 backup includes recurrence and today's focus", async ({
   page,
 }, testInfo) => {
   await page.getByTestId("quick-task-input").fill("周期重点任务");
@@ -72,7 +76,7 @@ test("version 5 backup includes recurrence and today's focus", async ({
   await page.getByRole("button", { name: "更多操作" }).click();
   await page.getByRole("menuitem", { name: "导出数据" }).click();
   const download = await downloadPromise;
-  const exportedPath = testInfo.outputPath("newday-v4-planning-data.json");
+  const exportedPath = testInfo.outputPath("newday-v6-planning-data.json");
   await download.saveAs(exportedPath);
   const archive = JSON.parse(await readFile(exportedPath, "utf8"));
   const focusedRecord = archive.focusRecords[0];
@@ -80,7 +84,7 @@ test("version 5 backup includes recurrence and today's focus", async ({
     (task: { id?: string }) => task.id === focusedRecord.taskId,
   );
 
-  expect(archive.version).toBe(5);
+  expect(archive.version).toBe(6);
   expect(focusedTask).toEqual(
     expect.objectContaining({
       seriesId: expect.any(String),

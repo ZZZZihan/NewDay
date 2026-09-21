@@ -39,7 +39,7 @@ test("life workspace sorts inbox into shared tasks and resources, preserves link
   assert.deepEqual((await app.inject("/api/life/workspace")).json().resourceTaskLinks, workspace.resourceTaskLinks);
 
   const backup = (await app.inject("/api/planner/backup")).json();
-  assert.equal(backup.version, 5);
+  assert.equal(backup.version, 6);
   assert.deepEqual(backup.resources, [resource]);
   assert.deepEqual(backup.resourceTaskLinks, workspace.resourceTaskLinks);
 

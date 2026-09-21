@@ -24,6 +24,7 @@ export class PlannerService {
     private readonly store: SQLitePlannerStore,
     private readonly clock: () => number = Date.now,
     private readonly undoTtlMs = 10_000,
+    private readonly syncDrainTimeoutMs = 5_000,
   ) {}
 
   day(input: { selectedDate: string; asOfDate: string }) {
@@ -96,12 +97,16 @@ export class PlannerService {
   restore(source: string) {
     return this.run(async () => {
       this.parseBackup(source);
+      // Commit the send fence before replacing the dataset. A failed import
+      // stays paused for reconciliation instead of reopening remote writes.
+      await this.store.pauseNotionForRestore();
+      await this.store.waitForNotionSendingToSettle(this.syncDrainTimeoutMs);
       const today = await this.configuredToday();
       if (today) await this.store.withEventContext({ date: today.date, at: new Date(this.clock()).toISOString(), source: "import" }, () => restorePlannerBackup(this.store, source));
       else await restorePlannerBackup(this.store, source);
       this.store.afterCommit(() => { this.pendingUndo = undefined; });
       return { ok: true as const };
-    });
+    }, false);
   }
 
   stopPreview(input: { seriesId: string; endDate: string }) {
@@ -142,8 +147,8 @@ export class PlannerService {
     }
   }
 
-  private run<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(() => this.store.transaction(operation)).catch((error: unknown) => {
+  private run<T>(operation: () => Promise<T>, transactional = true): Promise<T> {
+    const result = this.queue.then(() => transactional ? this.store.transaction(operation) : operation()).catch((error: unknown) => {
       // Core predates HTTP and uses ordinary Error for domain rejections. Only
       // known domain messages are public; SQL and unexpected failures stay private.
       if (error instanceof ZodError) throw new ApiError(400, error.issues[0]?.message ?? "请求数据无效");

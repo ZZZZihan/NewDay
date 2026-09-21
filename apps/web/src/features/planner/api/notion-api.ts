@@ -58,7 +58,7 @@ export type NotionSyncStatus = {
     originalStatus: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
     attemptCount: number; lastAttemptAt: string | null; dataSourceId: string;
     remotePageId: string | null; clientKey: string; quarantinedAt: string;
-    source?: "pre_restore_send" | "imported_backup";
+    inCurrentOutbox?: boolean;
     desired?: NotionTaskFields; baseline?: NotionTaskFields | null; latestReview?: NotionRestoreReview }>;
   conflicts: Array<{ id: string; localTaskId: string; field: "title" | "date" | "completed";
     baseline: unknown; local: unknown; remote: unknown; winner: "notion"; recordedAt: string }>;

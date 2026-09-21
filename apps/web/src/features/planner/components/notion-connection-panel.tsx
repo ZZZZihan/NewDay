@@ -74,8 +74,8 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                   {syncs[item.workspaceId].restoreQuarantine.map((entry) => (
                     <p key={`${entry.sourceEpoch}:${entry.operationId}`}>
                       任务 {entry.localTaskId} · 操作 {entry.operationId} · 原状态 {entry.originalStatus} · 尝试 {entry.attemptCount} 次；
-                      来源 {entry.source === "imported_backup" ? "导入备份的待处理操作"
-                        : entry.source === "pre_restore_send" ? "恢复前本机未结算操作" : "旧版备份未标记"}；
+                      位置 {entry.inCurrentOutbox === true ? "当前 outbox 与隔离账本"
+                        : entry.inCurrentOutbox === false ? "仅隔离账本" : "记录位置未返回"}；
                       远端页面 {entry.remotePageId ?? "未确认"} · 稳定键 {entry.clientKey} · 数据源 {entry.dataSourceId}；
                       隔离于 {new Date(entry.quarantinedAt).toLocaleString("zh-CN")}
                       {entry.desired ? <>；原意图 {JSON.stringify(entry.desired)}</> : <>；原意图未返回，请更新本机 API</>}

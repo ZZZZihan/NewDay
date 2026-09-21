@@ -18,18 +18,20 @@ export class NotionSyncService {
     const conflicts = (await this.store.listNotionConflicts()).filter((item) => item.workspaceId === workspaceId);
     const restoreQuarantine = (await this.store.listNotionRestoreQuarantine())
       .filter((item) => item.operation.workspaceId === workspaceId);
+    const currentOutboxKeys = new Set(operations.map((item) =>
+      JSON.stringify([item.datasetEpoch, item.operationId])));
     return { workspaceId, connectionStatus: connection.status,
       pauseReason: connection.pauseReason ?? null,
       retryAfterAt: connection.retryAfterAt ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
-      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt, source, latestReview }) => ({
+      restoreQuarantine: restoreQuarantine.map(({ operation, mapping, quarantinedAt, latestReview }) => ({
         sourceEpoch: operation.datasetEpoch, operationId: operation.operationId,
         localTaskId: operation.localTaskId, originalStatus: operation.status,
         attemptCount: operation.attemptCount, lastAttemptAt: operation.lastAttemptAt,
         dataSourceId: mapping.dataSourceId, remotePageId: mapping.remotePageId,
         clientKey: mapping.clientKey, quarantinedAt,
-        ...(source ? { source } : {}),
+        inCurrentOutbox: currentOutboxKeys.has(JSON.stringify([operation.datasetEpoch, operation.operationId])),
         desired: operation.desired, baseline: operation.baseline,
         ...(latestReview ? { latestReview } : {}),
       })),

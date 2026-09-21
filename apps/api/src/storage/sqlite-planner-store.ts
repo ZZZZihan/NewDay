@@ -817,8 +817,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         if (prior) {
           this.assertSameNotionRestoreIntent(prior, operation, mapping);
         } else {
-          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt,
-            ...(operation.status === "quarantined" ? {} : { source: "pre_restore_send" as const }) });
+          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
         }
       }
       await this.rotateDatasetEpoch();
@@ -873,7 +872,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         if (prior) {
           this.assertSameNotionRestoreIntent(prior, operation, mapping);
         } else {
-          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt, source: "imported_backup" });
+          this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
         }
       }
       await this.recordMutation("dataset_replaced");
@@ -910,6 +909,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     if (prior.operation.workspaceId !== operation.workspaceId ||
       prior.operation.localTaskId !== operation.localTaskId ||
       prior.operation.createdAt !== operation.createdAt ||
+      (prior.operation.status !== operation.status && operation.status !== "quarantined") ||
+      prior.operation.attemptCount !== operation.attemptCount ||
+      prior.operation.lastAttemptAt !== operation.lastAttemptAt ||
+      prior.operation.confirmedAt !== operation.confirmedAt ||
+      JSON.stringify(prior.operation.sendingOwner) !== JSON.stringify(operation.sendingOwner) ||
       JSON.stringify(prior.operation.desired) !== JSON.stringify(operation.desired) ||
       JSON.stringify(prior.operation.baseline) !== JSON.stringify(operation.baseline) ||
       prior.mapping.workspaceId !== mapping.workspaceId ||

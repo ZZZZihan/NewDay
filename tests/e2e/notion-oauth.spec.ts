@@ -90,6 +90,38 @@ test("reauthorized partial structure shows every read-only check and can continu
   expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
 });
 
+test("reauthorized structure keeps every needs-review result visible after the status refresh", async ({ page }) => {
+  const workspaceId = "workspace-reconnect-needs-review";
+  const connection = { workspaceId, workspaceName: "重连待核对空间", botId: "bot-test",
+    status: "active", updatedAt: "2026-09-21T00:00:00.000Z" };
+  const disconnected = { workspaceId, state: "disconnected", nextStep: null, reviewReason: null,
+    retryAfterAt: null, reviewAttemptedAt: null, rootPageId: "root-id", dataSources: {},
+    completedSteps: ["root", "areas"] };
+  let current = disconnected;
+  await page.route("**/api/notion/status", (route) =>
+    route.fulfill({ json: { configured: true, connections: [connection] } }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure`, (route) => route.fulfill({ json: current }));
+  await page.route(`**/api/notion/connections/${workspaceId}/structure/reconnect`, (route) => {
+    expect(route.request().postDataJSON()).toEqual({});
+    current = { ...disconnected, completedSteps: [] };
+    return route.fulfill({ json: { progress: current,
+      review: { workspaceId, checkedAt: "2026-09-21T00:05:00.000Z", outcome: "needs_review",
+        checks: [{ step: "root", result: "matches" }, { step: "areas", result: "schema_mismatch" }] } } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Notion 连接" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "核对并重新连接" }).click();
+  await expect(page.getByText("原有结构与当前 Notion 不完全一致；连接保持断开，请逐项检查后重试。")).toBeVisible();
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("仍有待核对项");
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("私有根页面：远端与恢复记录一致");
+  await expect(page.getByLabel("重新连接结构只读核对结果")).toContainText("主线表：字段或关联契约不一致");
+  await expect(page.getByText("已重新授权；当前已记录结构须只读核对后才能继续")).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+});
+
 test("structure review uses one read-only reconcile before the next creation step", async ({ page }) => {
   const workspaceId = "workspace-review";
   await page.route("**/api/notion/status", (route) => route.fulfill({ json: { configured: true, connections: [{

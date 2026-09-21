@@ -544,6 +544,41 @@ html:fullscreen .time-panel__bottom {
   margin-top: 2.1rem;
 }
 
+@media (min-width: 1100px) {
+  html:fullscreen .planner-frame {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) clamp(18.75rem, 20vw, 24rem);
+  }
+
+  html:fullscreen .time-panel {
+    padding: clamp(2rem, 3vw, 5rem);
+  }
+
+  html:fullscreen .time-panel__clock {
+    margin-top: clamp(4rem, 14dvh, 11rem);
+    text-align: center;
+  }
+
+  html:fullscreen .hero-clock {
+    justify-content: center;
+    font-size: clamp(8rem, 12.5vw, 15rem);
+  }
+
+  html:fullscreen .hero-date {
+    margin-top: 1rem;
+    font-size: clamp(1rem, 1.2vw, 1.4rem);
+  }
+
+  html:fullscreen .time-panel__bottom {
+    width: 100%;
+    max-width: 32rem;
+    margin-top: clamp(2.5rem, 6dvh, 5rem);
+  }
+
+  html:fullscreen .schedule-panel {
+    padding: clamp(2.5rem, 4vw, 6rem);
+  }
+}
+
 @media (max-width: 1050px) {
   .planner-frame,
   html:fullscreen .planner-frame {

@@ -24,6 +24,31 @@ test("the home view has a large minute clock and no timeline", async ({ page }) 
   await expect(page.getByText("预计时长")).toHaveCount(0);
 });
 
+test("fullscreen gives the clock a wide desktop column", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.getByRole("button", { name: "进入全屏" }).click();
+  await expect(page.getByRole("button", { name: "退出全屏" })).toHaveAttribute("aria-pressed", "true");
+
+  const layout = await page.evaluate(() => {
+    const frame = document.querySelector(".planner-frame");
+    const time = document.querySelector(".time-panel");
+    const clock = document.querySelector(".hero-clock");
+    if (!frame || !time || !clock) throw new Error("Fullscreen layout is incomplete");
+    return {
+      frameWidth: frame.getBoundingClientRect().width,
+      timeWidth: time.getBoundingClientRect().width,
+      clockSize: Number.parseFloat(getComputedStyle(clock).fontSize),
+    };
+  });
+  expect(layout.frameWidth).toBeGreaterThan(1800);
+  expect(layout.timeWidth / layout.frameWidth).toBeGreaterThan(0.38);
+  expect(layout.timeWidth / layout.frameWidth).toBeLessThan(0.42);
+  expect(layout.clockSize).toBeGreaterThan(220);
+
+  await page.getByRole("button", { name: "退出全屏" }).click();
+  await expect(page.getByRole("button", { name: "进入全屏" })).toHaveAttribute("aria-pressed", "false");
+});
+
 test("low-frequency backup actions stay inside the more menu", async ({ page }) => {
   const menu = page.getByRole("menu", { name: "更多操作菜单" });
   await expect(menu).toBeHidden();

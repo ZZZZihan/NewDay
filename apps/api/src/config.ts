@@ -63,6 +63,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
   if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) {
     throw new Error("NEWDAY_AGENT_REASONING_EFFORT must be none, low, medium or high");
   }
+  if (requestProfile === "deepseek-json" && reasoningEffort === "medium") {
+    throw new Error("NEWDAY_AGENT_REASONING_EFFORT must be none, low or high for deepseek-json");
+  }
 
   const workerOrigin = environment.NEWDAY_NOTION_WORKER_ORIGIN;
   const rawKey = environment.NEWDAY_NOTION_CREDENTIAL_KEY;

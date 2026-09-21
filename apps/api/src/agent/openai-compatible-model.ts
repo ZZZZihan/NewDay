@@ -98,6 +98,8 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
     if (options.requestProfile !== undefined && !["openai-structured", "deepseek-json"].includes(options.requestProfile))
       throw new Error("Invalid planning provider request profile");
     this.requestProfile = options.requestProfile ?? "openai-structured";
+    if (this.requestProfile === "deepseek-json" && options.reasoningEffort === "medium")
+      throw new Error("DeepSeek JSON planning provider reasoning effort must be none, low or high");
     this.reasoningEffort = options.reasoningEffort;
     this.fetch = options.fetch ?? globalThis.fetch;
   }
@@ -107,7 +109,7 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
     try {
       const common = {
         model: this.modelId,
-        messages: planningMessages(snapshot, answers, repair),
+        messages: planningMessages(snapshot, answers, repair, { includeOutputSchema: this.requestProfile === "deepseek-json" }),
         ...(this.reasoningEffort === undefined ? {} : { reasoning_effort: this.reasoningEffort }),
       };
       const body = this.requestProfile === "deepseek-json"

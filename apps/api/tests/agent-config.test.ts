@@ -34,4 +34,7 @@ test("provider-specific transport and reasoning options remain explicit", () => 
   assert.equal(config.agent.requestProfile, "deepseek-json");
   assert.throws(() => loadConfig({ NEWDAY_AGENT_REASONING_EFFORT: "unlimited" }), /REASONING_EFFORT/);
   assert.throws(() => loadConfig({ NEWDAY_AGENT_REQUEST_PROFILE: "automatic" }), /REQUEST_PROFILE/);
+  assert.throws(() => loadConfig({
+    NEWDAY_AGENT_REQUEST_PROFILE: "deepseek-json", NEWDAY_AGENT_REASONING_EFFORT: "medium",
+  }), /none, low or high/);
 });

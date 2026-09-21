@@ -1,4 +1,12 @@
+import type { APIRequestContext } from "@playwright/test";
 import { expect, test } from "./fixtures";
+
+async function plannerCommands(request: APIRequestContext, commands: unknown[], client: string) {
+  const response = await request.post("/api/planner/commands", {
+    headers: { "x-newday-client": client }, data: { commands },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+}
 
 test("inbox task joins the same task collection as Today", async ({ page, request }) => {
   await page.goto("/");
@@ -124,6 +132,52 @@ test("undo refreshes the active task table", async ({ page, request }) => {
   await expect(page.getByRole("button", { name: "标为完成" })).toBeVisible();
 });
 
+test("the open task table reflects backend changes on its bounded background poll", async ({ page, request }) => {
+  await page.clock.install();
+  await page.goto("/");
+  const today = await page.getByLabel("选择日期").inputValue();
+  const now = new Date().toISOString();
+  await plannerCommands(request, [{ type: "createTask", input: { id: "background-poll-task",
+    title: "后台轮询前任务", startDate: today, endDate: today, now } }], "life-poll-seed");
+  await page.getByRole("button", { name: "任务总表", exact: true }).click();
+  await expect(page.getByRole("button", { name: /后台轮询前任务/ })).toBeVisible();
+
+  await plannerCommands(request, [
+    { type: "updateTaskDetails", input: { taskId: "background-poll-task", title: "后台轮询后任务", now } },
+    { type: "rescheduleTask", input: { taskId: "background-poll-task", startDate: today, endDate: today, now } },
+    { type: "completeTask", input: { taskId: "background-poll-task", completedOn: today, now } },
+  ], "life-poll-update");
+  await page.clock.runFor(30_000);
+  const updated = page.getByRole("button", { name: /后台轮询后任务/ });
+  await expect(updated).toBeVisible();
+  await expect(updated).toContainText("已完成");
+  await expect(page.getByRole("button", { name: /后台轮询前任务/ })).toHaveCount(0);
+});
+
+test("background refresh preserves task filters and an unsaved editor draft", async ({ page, request }) => {
+  await page.clock.install();
+  await page.goto("/");
+  const today = await page.getByLabel("选择日期").inputValue();
+  const now = new Date().toISOString();
+  await plannerCommands(request, [{ type: "createTask", input: { id: "background-draft-task",
+    title: "后台草稿任务", notes: "原备注", startDate: today, endDate: today, now } }], "life-draft-seed");
+  await page.getByRole("button", { name: "任务总表", exact: true }).click();
+  await page.getByLabel("搜索任务").fill("后台");
+  await page.getByLabel("任务状态").selectOption("open");
+  await page.getByRole("button", { name: /后台草稿任务/ }).click();
+  await page.getByRole("button", { name: "编辑任务", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "编辑任务" });
+  await dialog.getByLabel("标题").fill("尚未保存的本地草稿");
+
+  await plannerCommands(request, [{ type: "updateTaskDetails", input: { taskId: "background-draft-task",
+    title: "后台服务端新标题", notes: "服务端新备注", now } }], "life-draft-update");
+  await page.clock.runFor(30_000);
+  await expect(page.getByLabel("搜索任务")).toHaveValue("后台");
+  await expect(page.getByLabel("任务状态")).toHaveValue("open");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("标题")).toHaveValue("尚未保存的本地草稿");
+});
+
 test("an older workspace read cannot hide a newly saved resource", async ({ page, request }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "资料库", exact: true }).click();
@@ -134,6 +188,8 @@ test("an older workspace read cannot hide a newly saved resource", async ({ page
   const oldReadReleased = new Promise<void>((resolve) => { releaseOldRead = resolve; });
   let markOldReadCaptured!: () => void;
   const oldReadCaptured = new Promise<void>((resolve) => { markOldReadCaptured = resolve; });
+  let markOldReadSettled!: () => void;
+  const oldReadSettled = new Promise<void>((resolve) => { markOldReadSettled = resolve; });
   let holdNextRead = true;
   await page.route("**/api/life/workspace", async (route) => {
     if (!holdNextRead) return route.continue();
@@ -143,7 +199,14 @@ test("an older workspace read cannot hide a newly saved resource", async ({ page
     const oldBody = await oldWorkspace.text();
     markOldReadCaptured();
     await oldReadReleased;
-    await route.fulfill({ status: 200, contentType: "application/json", body: oldBody });
+    try {
+      await route.fulfill({ status: 200, contentType: "application/json", body: oldBody });
+    } catch {
+      // A newer refresh normally aborts this request before the captured body
+      // can arrive. The generation guard also covers transports that ignore it.
+    } finally {
+      markOldReadSettled();
+    }
   });
 
   await page.getByRole("button", { name: "资料库", exact: true }).click();
@@ -154,10 +217,8 @@ test("an older workspace read cannot hide a newly saved resource", async ({ page
   await editor.getByRole("button", { name: "创建资料" }).click();
   await expect(page.getByRole("button", { name: /竞态保存资料/ })).toBeVisible();
 
-  const oldReadResponse = page.waitForResponse((response) =>
-    response.url().endsWith("/api/life/workspace") && response.request().method() === "GET");
   releaseOldRead();
-  await oldReadResponse;
+  await oldReadSettled;
   await page.evaluate(() => new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await expect(page.getByRole("button", { name: /竞态保存资料/ })).toBeVisible();

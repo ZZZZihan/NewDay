@@ -1,10 +1,56 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "recordedAt": "2026-09-21T11:25:00Z",
   "candidate": {
-    "baseCommit": "d2e2de937efcb0404913da0dc09fb34a7b576eff",
+    "liveAcceptanceBaseCommit": "4ae0a5bb2abe565dbf1d7b045d9d51bbca838dbd",
+    "firstCandidateCommit": "2f6f0b18be92d5e1d90491e8116afb498fb5e046",
+    "implementationCandidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
+    "implementationTree": "3908e8b47a3dee1ca33ef9d1b958f04f2ef11ee9",
+    "patchFromFirstCandidateSha256": "23c53792ccb1ed1cf78b34caff3e400f7876cf389e20e16137651f0d31f6cb64",
     "branch": "codex/col-33-oauth-worker-hardening",
-    "state": "reconnect implementation and live acceptance evidence awaiting final quality gates and candidate commit"
+    "state": "implementation gates passed; independent rereview pending"
+  },
+  "evidenceHistory": [
+    {
+      "at": "2026-09-21T11:25:00Z",
+      "state": "live acceptance recorded against the stated base plus then-uncommitted fixes; no final candidate claim"
+    },
+    {
+      "candidateCommit": "2f6f0b18be92d5e1d90491e8116afb498fb5e046",
+      "state": "independent review found three P2 findings and one P3 metadata finding; candidate retained as failed history"
+    },
+    {
+      "candidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
+      "state": "partial reconnect, credential revision fence, reconnect review UI, and public metadata remediation implemented and gated"
+    }
+  ],
+  "candidateVerification": {
+    "sourceTreeMatchesImplementationCommit": true,
+    "check": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:02:00Z",
+      "vitest": "24 files / 259 tests",
+      "api": "252 tests",
+      "worker": "9 tests",
+      "agentIntegration": "23 tests"
+    },
+    "build": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:02:00Z",
+      "workerMode": "dry-run"
+    },
+    "e2e": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:00:00Z",
+      "tests": 92,
+      "browsers": [
+        "chrome",
+        "safari-webkit"
+      ],
+      "database": "disposable SQLite on isolated test services"
+    },
+    "liveMatrixRerunOnImplementationCandidate": false,
+    "claimBoundary": "Real remote observations remain bound to the earlier recorded execution. Later candidate gates are regression evidence and do not claim a second live matrix run."
   },
   "scope": {
     "workspaceAlias": "notion-20260921-live-01",
@@ -12,7 +58,7 @@
     "workspaceName": "NewDay 验收 2026-09-21",
     "personalWorkspaceWritesAuthorized": false,
     "personalWorkspaceWritesPerformed": false,
-    "workerVersion": "bee7b114-b73a-479d-9c7c-7588c9ddf5a0",
+    "workerDeploymentAlias": "notion-oauth-worker-live-01",
     "notionSdkVersion": "5.23.0",
     "notionApiVersion": "2026-03-11"
   },
@@ -247,6 +293,8 @@
     "credentialVaultMode": "0600"
   },
   "releaseDecision": {
+    "recordedAt": "2026-09-21T11:25:00Z",
+    "historicalSnapshot": true,
     "status": "no_go",
     "push": false,
     "merge": false,
@@ -265,8 +313,7 @@
       "D1"
     ],
     "openAcceptance": [
-      "final candidate pnpm check, pnpm build and pnpm test:e2e",
-      "independent candidate review",
+      "independent rereview of the credential-revision and partial-reconnect candidate",
       "one authorized H-N01 guarded real-model pilot on the exact clean candidate",
       "full G3 40 x 3 heldout trials with human review and cost accounting",
       "G4 prospective seven-day use record"

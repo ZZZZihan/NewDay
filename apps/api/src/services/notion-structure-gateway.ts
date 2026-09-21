@@ -15,7 +15,7 @@ export interface NotionStructureGateway {
   createDatabase(token: string, parentPageId: string, title: string, properties: Record<string, unknown>): Promise<string>;
   listChildDatabases(token: string, parentPageId: string): Promise<string[]>;
   getDatabase(token: string, databaseId: string): Promise<StructureDatabase>;
-  getDataSourceProperties(token: string, dataSourceId: string): Promise<Record<string, StructureProperty>>;
+  getDataSourceProperties(token: string, dataSourceId: string, databaseId: string): Promise<Record<string, StructureProperty>>;
   addRelation(token: string, dataSourceId: string, name: string, targetDataSourceId: string): Promise<void>;
 }
 
@@ -51,7 +51,10 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
 
   async getRoot(token: string, pageId: string): Promise<StructurePage> {
     const page = await this.client(token).pages.retrieve({ page_id: pageId });
-    if (!("parent" in page) || !("properties" in page)) throw new Error("Notion returned an inaccessible root page");
+    if (!("parent" in page) || !("properties" in page) || page.id !== pageId ||
+      !("in_trash" in page) || typeof page.in_trash !== "boolean") {
+      throw new Error("Notion returned an inaccessible root page");
+    }
     const properties = page.properties as Record<string, unknown>;
     const titleProperty = properties.title;
     const title = titleProperty && typeof titleProperty === "object" && "title" in titleProperty
@@ -90,7 +93,8 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
 
   async getDatabase(token: string, databaseId: string): Promise<StructureDatabase> {
     const database = await this.client(token).databases.retrieve({ database_id: databaseId });
-    if (!("data_sources" in database) || !("parent" in database) || !("title" in database) ||
+    if (database.id !== databaseId || !("data_sources" in database) || !("parent" in database) ||
+      !("title" in database) || !("in_trash" in database) || typeof database.in_trash !== "boolean" ||
       database.parent.type !== "page_id") throw new Error("Notion returned an incomplete database");
     return {
       id: database.id,
@@ -101,9 +105,12 @@ export class NotionSdkStructureGateway implements NotionStructureGateway {
     };
   }
 
-  async getDataSourceProperties(token: string, dataSourceId: string): Promise<Record<string, StructureProperty>> {
+  async getDataSourceProperties(token: string, dataSourceId: string,
+    databaseId: string): Promise<Record<string, StructureProperty>> {
     const dataSource = await this.client(token).dataSources.retrieve({ data_source_id: dataSourceId });
-    if (!("properties" in dataSource) || !("in_trash" in dataSource) || dataSource.in_trash) {
+    if (dataSource.id !== dataSourceId || !("parent" in dataSource) ||
+      dataSource.parent.database_id !== databaseId || !("properties" in dataSource) ||
+      !("in_trash" in dataSource) || dataSource.in_trash !== false) {
       throw new Error("Notion returned an inaccessible data source");
     }
     const result: Record<string, StructureProperty> = {};

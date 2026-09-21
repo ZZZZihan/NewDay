@@ -123,11 +123,12 @@ export class NotionStructureService {
       const checks: NotionRestoreStructureReview["checks"] = [];
       let sharedRemoteFailure: "permission" | "rate_limited" | null = null;
       const propertyReads = new Map<string, Promise<Record<string, StructureProperty>>>();
-      const propertiesOf = (dataSourceId: string) => {
-        const existing = propertyReads.get(dataSourceId);
+      const propertiesOf = (dataSourceId: string, databaseId: string) => {
+        const key = JSON.stringify([databaseId, dataSourceId]);
+        const existing = propertyReads.get(key);
         if (existing) return existing;
-        const pending = this.gateway.getDataSourceProperties(credential.access_token, dataSourceId);
-        propertyReads.set(dataSourceId, pending);
+        const pending = this.gateway.getDataSourceProperties(credential.access_token, dataSourceId, databaseId);
+        propertyReads.set(key, pending);
         return pending;
       };
       const recorded = (name: NotionInitializationStepName, title: string, parentId: string | null,
@@ -177,7 +178,7 @@ export class NotionStructureService {
           if (database.id !== source!.databaseId || database.title !== schema.title ||
             database.parentPageId !== rootId || database.dataSourceIds.length !== 1 ||
             database.dataSourceIds[0] !== source!.dataSourceId) return "identity_mismatch";
-          const properties = await propertiesOf(source!.dataSourceId);
+          const properties = await propertiesOf(source!.dataSourceId, source!.databaseId);
           const propertyIds = basePropertyIds(properties, schema.expected);
           if (!propertyIds || Object.entries(propertyIds).some(([property, id]) => source!.propertyIds[property] !== id)) {
             return "schema_mismatch";
@@ -195,7 +196,7 @@ export class NotionStructureService {
           recorded(name, relation.name, source.dataSourceId,
             fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), expectedId);
         await read(name, local, async () => {
-          const property = (await propertiesOf(source!.dataSourceId))[relation.name];
+          const property = (await propertiesOf(source!.dataSourceId, source!.databaseId))[relation.name];
           return property?.id === expectedId && property.type === "relation" &&
             property.relationTarget === target!.dataSourceId ? "matches" : "schema_mismatch";
         });
@@ -325,7 +326,7 @@ export class NotionStructureService {
         sameTitleCount += 1;
         if (database.dataSourceIds.length !== 1) { invalidSchema = true; continue; }
         const dataSourceId = database.dataSourceIds[0];
-        const properties = await this.gateway.getDataSourceProperties(token, dataSourceId);
+        const properties = await this.gateway.getDataSourceProperties(token, dataSourceId, database.id);
         const propertyIds = basePropertyIds(properties, schema.expected);
         if (propertyIds) matchingTitle.push({ id: database.id, dataSourceId, propertyIds });
         else invalidSchema = true;
@@ -349,14 +350,16 @@ export class NotionStructureService {
       fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), review);
     try {
       if (created) {
-        const existing = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
+        const existing = (await this.gateway.getDataSourceProperties(
+          token, source.dataSourceId, source.databaseId))[relation.name];
         if (existing && (existing.type !== "relation" || existing.relationTarget !== target.dataSourceId)) {
           await this.markReview(step, "schema_mismatch");
           return;
         }
         if (!existing) await this.gateway.addRelation(token, source.dataSourceId, relation.name, target.dataSourceId);
       }
-      const property = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
+      const property = (await this.gateway.getDataSourceProperties(
+        token, source.dataSourceId, source.databaseId))[relation.name];
       if (!property || property.type !== "relation" || property.relationTarget !== target.dataSourceId) {
         await this.markReview(step, "schema_mismatch");
         return;

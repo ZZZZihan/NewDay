@@ -91,8 +91,9 @@ class FakeStructureGateway implements NotionStructureGateway {
     if (!database) throw new Error("missing database");
     return database;
   }
-  async getDataSourceProperties(token: string, dataSourceId: string) {
+  async getDataSourceProperties(token: string, dataSourceId: string, databaseId: string) {
     this.checkToken(token);
+    assert.ok(this.databases.get(databaseId)?.dataSourceIds.includes(dataSourceId));
     const properties = this.properties.get(dataSourceId);
     if (!properties) throw new Error("missing data source");
     return properties;
@@ -100,7 +101,10 @@ class FakeStructureGateway implements NotionStructureGateway {
   async addRelation(token: string, dataSourceId: string, name: string, targetDataSourceId: string) {
     this.checkToken(token);
     this.creates.relation += 1;
-    const properties = await this.getDataSourceProperties(token, dataSourceId);
+    const databaseId = [...this.databases.values()].find((database) =>
+      database.dataSourceIds.includes(dataSourceId))?.id;
+    assert.ok(databaseId);
+    const properties = await this.getDataSourceProperties(token, dataSourceId, databaseId);
     properties[name] = { id: `relation-${name}`, type: "relation", relationTarget: targetDataSourceId };
     if (name === "Rule" && this.lostOnce === "tasks_rule") { this.lostOnce = null; throw new Error("response lost after relation patch"); }
   }
@@ -544,4 +548,30 @@ test("an explicitly incomplete Notion root search cannot identify a unique page"
     request_status: { type: "incomplete", incomplete_reason: "query_result_limit_reached" },
   }) }) });
   await assert.rejects(gateway.findRoots("fake-token", "NewDay (test)"), /incomplete/);
+});
+
+test("SDK data source readback rejects a different ID or parent database", async () => {
+  const gateway = new NotionSdkStructureGateway();
+  let response = { object: "data_source", id: "other-source", in_trash: false,
+    parent: { type: "database_id", database_id: "db-1" },
+    properties: { Name: { id: "name-id", type: "title" } } };
+  Object.assign(gateway, { client: () => ({ dataSources: { retrieve: async () => response } }) });
+  await assert.rejects(gateway.getDataSourceProperties("fake-token", "source-1", "db-1"), /inaccessible data source/);
+  response = { ...response, id: "source-1", parent: { type: "database_id", database_id: "db-2" } };
+  await assert.rejects(gateway.getDataSourceProperties("fake-token", "source-1", "db-1"), /inaccessible data source/);
+  response = { ...response, parent: { type: "database_id", database_id: "db-1" } };
+  assert.deepEqual(await gateway.getDataSourceProperties("fake-token", "source-1", "db-1"),
+    { Name: { id: "name-id", type: "title" } });
+});
+
+test("SDK page and database readback reject a different object ID", async () => {
+  const gateway = new NotionSdkStructureGateway();
+  Object.assign(gateway, { client: () => ({
+    pages: { retrieve: async () => ({ id: "other-page", parent: { type: "workspace", workspace: true },
+      properties: { title: { title: [] } }, in_trash: false }) },
+    databases: { retrieve: async () => ({ id: "other-db", parent: { type: "page_id", page_id: "root" },
+      title: [], data_sources: [], in_trash: false }) },
+  }) });
+  await assert.rejects(gateway.getRoot("fake-token", "expected-page"), /inaccessible root page/);
+  await assert.rejects(gateway.getDatabase("fake-token", "expected-db"), /incomplete database/);
 });

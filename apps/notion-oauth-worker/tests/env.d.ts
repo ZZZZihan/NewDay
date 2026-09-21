@@ -1,4 +1,4 @@
-import type { Env } from "../src/index";
+export {};
 
 declare module "cloudflare:workers" {
   // Cloudflare's test runtime discovers binding types through this interface.

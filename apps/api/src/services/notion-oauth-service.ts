@@ -4,6 +4,10 @@ import { ApiError } from "../http/api-error.js";
 import { NotionCredentialVault, type NotionCredential, type NotionCredentialSummary } from "../storage/notion-credential-vault.js";
 
 const opaqueToken = /^[A-Za-z0-9_-]{43}$/;
+const MAX_WORKER_RESPONSE_BYTES = 16 * 1024;
+const MAX_TOKEN_LENGTH = 8192;
+const MAX_IDENTIFIER_LENGTH = 512;
+const MAX_WORKSPACE_NAME_LENGTH = 512;
 
 export class NotionOAuthService {
   constructor(
@@ -12,6 +16,7 @@ export class NotionOAuthService {
     private readonly vault: NotionCredentialVault,
     private readonly fetcher: typeof fetch = fetch,
     private readonly now: () => number = Date.now,
+    private readonly onCredentialChanged?: (workspaceId: string) => Promise<void>,
   ) {}
 
   listConnections(): NotionCredentialSummary[] { return this.vault.list(); }
@@ -57,6 +62,7 @@ export class NotionOAuthService {
       catch { /* The rejected token remains unusable locally. */ }
       throw new ApiError(409, "授权会话已取消、过期或该工作区已断开，请重新开始授权");
     }
+    await this.onCredentialChanged?.(summary.workspaceId);
     // The Worker can safely redeliver the same claim until this ACK. If the
     // ACK is lost, the temporary copy expires; local storage is authoritative.
     try { await this.request("/oauth/ack", { state, ticket, verifier }); }
@@ -91,7 +97,11 @@ export class NotionOAuthService {
       this.vault.requireReauthorization(workspaceId, attempt.attemptId, new Date(this.now()).toISOString());
       throw new ApiError(409, "Notion 凭据刷新结果无法确认，需要重新授权");
     }
-    try { return this.vault.completeRefresh(workspaceId, attempt.attemptId, credential, new Date(this.now()).toISOString()); }
+    try {
+      const summary = this.vault.completeRefresh(workspaceId, attempt.attemptId, credential, new Date(this.now()).toISOString());
+      await this.onCredentialChanged?.(workspaceId);
+      return summary;
+    }
     catch {
       this.vault.requireReauthorization(workspaceId, attempt.attemptId, new Date(this.now()).toISOString());
       throw new ApiError(409, "Notion 连接在刷新期间已改变，需要重新授权");
@@ -111,11 +121,7 @@ export class NotionOAuthService {
         body: JSON.stringify(body),
       });
     } catch { throw new ApiError(503, "Notion 授权服务暂时不可用"); }
-    let value: unknown;
-    try { value = await response.json(); }
-    catch { throw new ApiError(502, "Notion 授权服务返回无效响应"); }
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError(502, "Notion 授权服务返回无效响应");
-    const result = value as Record<string, unknown>;
+    const result = await readWorkerJson(response);
     if (!response.ok) {
       throw new WorkerOAuthError(response.status, typeof result.error === "string" ? result.error : "oauth_error");
     }
@@ -131,9 +137,80 @@ class WorkerOAuthError extends ApiError {
 }
 
 function parseCredential(value: Record<string, unknown>): NotionCredential {
-  if (!["access_token", "refresh_token", "bot_id", "workspace_id"].every((field) =>
-    typeof value[field] === "string" && (value[field] as string).length > 0)) {
+  const accessToken = boundedString(value.access_token, MAX_TOKEN_LENGTH);
+  const refreshToken = boundedString(value.refresh_token, MAX_TOKEN_LENGTH);
+  const botId = boundedString(value.bot_id, MAX_IDENTIFIER_LENGTH);
+  const workspaceId = boundedString(value.workspace_id, MAX_IDENTIFIER_LENGTH);
+  const workspaceName = value.workspace_name;
+  if (!accessToken || !refreshToken || !botId || !workspaceId ||
+    (workspaceName !== undefined && workspaceName !== null &&
+      (typeof workspaceName !== "string" || workspaceName.length > MAX_WORKSPACE_NAME_LENGTH))) {
     throw new ApiError(502, "Notion 授权服务返回无效凭据");
   }
-  return value as NotionCredential;
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    bot_id: botId,
+    workspace_id: workspaceId,
+    ...(workspaceName === undefined ? {} : { workspace_name: workspaceName }),
+  };
+}
+
+function boundedString(value: unknown, maxLength: number): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null;
+}
+
+async function cancelBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  try { await body.cancel(); }
+  catch { /* Preserve the original sanitized rejection. */ }
+}
+
+async function readWorkerJson(response: Response): Promise<Record<string, unknown>> {
+  if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
+    await cancelBody(response.body);
+    throw new ApiError(502, "Notion 授权服务返回无效响应");
+  }
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const length = Number(declaredLength);
+    if (!Number.isInteger(length) || length < 0 || length > MAX_WORKER_RESPONSE_BYTES) {
+      await cancelBody(response.body);
+      throw new ApiError(502, "Notion 授权服务返回无效响应");
+    }
+  }
+  if (!response.body) throw new ApiError(502, "Notion 授权服务返回无效响应");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_WORKER_RESPONSE_BYTES) {
+        try { await reader.cancel(); }
+        catch { /* Preserve the original sanitized rejection. */ }
+        throw new ApiError(502, "Notion 授权服务返回无效响应");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    try { await reader.cancel(); }
+    catch { /* The stream is already errored or closed. */ }
+    throw new ApiError(502, "Notion 授权服务返回无效响应");
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  let value: unknown;
+  try {
+    const body = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+    value = JSON.parse(body);
+  } catch { throw new ApiError(502, "Notion 授权服务返回无效响应"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ApiError(502, "Notion 授权服务返回无效响应");
+  }
+  return value as Record<string, unknown>;
 }

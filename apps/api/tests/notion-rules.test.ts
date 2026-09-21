@@ -28,7 +28,7 @@ function connection(): NotionConnection {
   const ref = (name: string) => ({ databaseId: `${name}-database`, dataSourceId: `${name}-source`,
     propertyIds: { Name: `${name}-name` }, schemaFingerprint: `${name}-fingerprint` });
   return { workspaceId, installationId: "rules-installation", rootPageId: "rules-root",
-    status: "active", updatedAt: at, dataSources: {
+    credentialRevision: 2, status: "active", updatedAt: at, dataSources: {
       areas: ref("areas"), projects: ref("projects"), rules: ref("rules"), tasks: ref("tasks"),
     } };
 }
@@ -126,11 +126,16 @@ test("a remote monthly occurrence keeps its nominal key through rescheduling, co
       "a rule edit must not rewrite a completed exception");
     gateway.rows.rules = [];
     gateway.trash.set(ruleId, true);
+    gateway.rows.tasks = [{ ...instance("2026-03-01", true, "单独改过的回顾"), ruleIds: [] }];
     await read.scan(workspaceId);
     assert.equal((await store.listNotionRuleMappings(workspaceId))[0]?.status, "archived");
     assert.equal((await store.getRecurrenceSeries(logicalSeriesId))?.disabled, true);
     assert.equal((await store.listAllTasks()).length, 1);
-    assert.equal((await store.getNotionTaskMapping(mapping.localTaskId))?.remotePageId, "remote-month-end");
+    const stoppedMapping = await store.getNotionTaskMapping(mapping.localTaskId);
+    assert.equal(stoppedMapping?.remotePageId, "remote-month-end");
+    assert.equal(stoppedMapping?.rulePageId, ruleId,
+      "Notion hides the relation to a trashed rule, but the verified instance identity must remain stable");
+    assert.equal(stoppedMapping?.occurrenceKey, occurrenceKey);
     const backup = await createPlannerBackup(store, at);
     assert.equal(backup.version, 6);
     if (backup.version !== 6) throw new Error("Expected a v6 backup");

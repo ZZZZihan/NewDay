@@ -31,6 +31,11 @@ export type NotionRestoreStructureReview = {
       "permission" | "rate_limited" | "unreadable" | "not_checked" }>;
 };
 
+export type NotionReconnectStructureResult = {
+  review: NotionRestoreStructureReview;
+  progress: NotionStructureProgress;
+};
+
 export type NotionReadStatus = {
   workspaceId: string;
   connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
@@ -91,6 +96,8 @@ export const notionApi = {
     `/connections/${encodeURIComponent(workspaceId)}/structure/reconcile`, { step, attemptedAt }),
   verifyRestoredStructure: (workspaceId: string) => post<NotionRestoreStructureReview>(
     `/connections/${encodeURIComponent(workspaceId)}/structure/restore/verify`, {}),
+  reconnectStructure: (workspaceId: string) => post<NotionReconnectStructureResult>(
+    `/connections/${encodeURIComponent(workspaceId)}/structure/reconnect`, {}),
   readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
   scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
   syncStatus: (workspaceId: string) => request<NotionSyncStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/sync`),

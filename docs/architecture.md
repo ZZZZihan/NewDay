@@ -165,6 +165,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
 | `POST /api/notion/connections/:workspaceId/structure/reconcile` | `{ step, attemptedAt }` | 只读核对当前已有尝试；若步骤或尝试已变更则返回 409，不会创建下一结构 |
 | `POST /api/notion/connections/:workspaceId/structure/restore/verify` | `{}` | 恢复隔离期间只读核对授权工作区、九个结构步骤的记录与远端 ID/父级/字段/关联；返回本次结果，不解除隔离 |
+| `POST /api/notion/connections/:workspaceId/structure/reconnect` | `{}` | 重新授权后只读核对九项既有结构；全部一致且核对期间状态未变化时才把 `disconnected` 恢复为 `active`，不创建或修改远端结构 |
 | `GET /api/notion/connections/:workspaceId/read` | 无 | 各数据源扫描水位与失败类别 |
 | `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、规则、任务与实例；生成窗口内缺少的规则实例进入持久待发送队列 |
 | `GET /api/notion/connections/:workspaceId/sync` | 无 | 写回操作状态及字段冲突，不含凭据 |

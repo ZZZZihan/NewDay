@@ -68,14 +68,18 @@ export class NotionReadService {
 
   private async scanLocked(workspaceId: string): Promise<void> {
     const connection = await this.store.getNotionConnection(workspaceId);
-    const credential = this.vault.getCredential(workspaceId);
+    const credential = this.vault.getCredentialLease(workspaceId);
     if (!connection || connection.status !== "active" || !credential) {
       throw new ApiError(409, "Notion 尚未完成授权和结构初始化，或同步已暂停");
+    }
+    if (connection.credentialRevision !== credential.revision) {
+      await this.store.putNotionConnection({ ...connection, status: "disconnected", updatedAt: this.timestamp() });
+      throw new ApiError(409, "Notion 授权已变化；请先只读核对原有结构并重新连接");
     }
     if (tables.some((table) => !connection.dataSources[table]) || !connection.dataSources.rules) {
       throw new ApiError(409, "Notion 数据源结构尚未齐备");
     }
-    const token = credential.access_token;
+    const token = credential.credential.access_token;
     const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
     const existingMappings = (await this.store.listNotionTaskMappings()).filter((mapping) => mapping.workspaceId === workspaceId);
     const existingRules = await this.store.listNotionRuleMappings(workspaceId);
@@ -100,7 +104,7 @@ export class NotionReadService {
           ? await this.checkMissingTasks(token, existingMappings, distinct)
           : table === "rules" ? await this.checkMissingRules(token, existingRules, distinct) : [];
         await this.store.transaction(async () => {
-          await this.assertCurrent(connection, token, epoch);
+          await this.assertCurrent(connection, credential.revision, epoch);
           if (table === "areas") {
             areas = distinct as AreaRow[];
             await this.applyNodes(connection, table, areas.map((row) => ({
@@ -150,7 +154,7 @@ export class NotionReadService {
               clearUndoReceipts(this.store);
             }
           }
-          await this.assertCurrent(connection, token, epoch);
+          await this.assertCurrent(connection, credential.revision, epoch);
           await this.setWatermark(workspaceId, sourceId, {
             completedThrough: startAt, lastSuccessAt: this.timestamp(), lastError: null, lastErrorAt: null,
           });
@@ -183,10 +187,18 @@ export class NotionReadService {
     const seenOccurrences = new Set<string>();
     for (const row of rows) {
       if (row.ruleIds.length > 1) throw new NotionReadFailure("schema", `Notion task ${row.id} has multiple rules`);
-      if (Boolean(row.ruleIds.length) !== Boolean(row.occurrenceKey)) {
+      const previousMapping = byRemote.get(row.id) ?? (row.occurrenceKey ? byOccurrence.get(row.occurrenceKey) : undefined);
+      const linkedRulePageId = row.ruleIds[0] ?? null;
+      const previousRule = previousMapping?.rulePageId ? rules.get(previousMapping.rulePageId) : undefined;
+      // Notion hides a relation after its target rule is moved to trash. Keep
+      // the already verified identity only for that archived rule; a missing
+      // relation to an active rule remains a schema failure.
+      const rulePageId = linkedRulePageId ?? (row.occurrenceKey &&
+        previousMapping?.occurrenceKey === row.occurrenceKey && previousRule?.status === "archived"
+        ? previousMapping.rulePageId ?? null : null);
+      if (Boolean(rulePageId) !== Boolean(row.occurrenceKey)) {
         throw new NotionReadFailure("schema", `Notion task ${row.id} has an incomplete rule instance identity`);
       }
-      const rulePageId = row.ruleIds[0] ?? null;
       const rule = rulePageId ? rules.get(rulePageId) : undefined;
       let occurrenceDate: string | undefined;
       if (rulePageId) {
@@ -211,7 +223,6 @@ export class NotionReadService {
       const areaId = project?.areaIds[0] ?? row.directAreaIds[0] ?? null;
       if (areaId && !areaIds.has(areaId)) throw new NotionReadFailure("schema", `Notion task ${row.id} area is inaccessible`);
       const fields = notionTaskFieldsSchema.parse({ title: row.title, date: row.date, completed: row.completed });
-      const previousMapping = byRemote.get(row.id) ?? (row.occurrenceKey ? byOccurrence.get(row.occurrenceKey) : undefined);
       if (previousMapping && (previousMapping.rulePageId !== (rulePageId ?? undefined) ||
         previousMapping.occurrenceKey !== (row.occurrenceKey ?? undefined) ||
         previousMapping.remotePageId !== null && previousMapping.remotePageId !== row.id)) {
@@ -320,11 +331,12 @@ export class NotionReadService {
     return archived;
   }
 
-  private async assertCurrent(connection: NotionConnection, token: string, epoch: string): Promise<void> {
+  private async assertCurrent(connection: NotionConnection, credentialRevision: number, epoch: string): Promise<void> {
     const current = await this.store.getNotionConnection(connection.workspaceId);
     if (!current || current.status !== "active" || current.installationId !== connection.installationId ||
       (await this.store.getPlanningVersion()).datasetEpoch !== epoch ||
-      this.vault.getCredential(connection.workspaceId)?.access_token !== token) {
+      current.credentialRevision !== credentialRevision ||
+      !this.vault.matchesCredentialRevision(connection.workspaceId, credentialRevision)) {
       throw new ApiError(409, "Notion 授权或本地数据在扫描期间改变，请重新扫描");
     }
   }

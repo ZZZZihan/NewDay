@@ -1,6 +1,6 @@
 # Notion OAuth 候选：配置、恢复与验证
 
-此文档对应 COL-33 的隔离候选。当前实现只处理授权、凭据和连接状态；**尚未创建 Notion 四表，也不拉取或写回任务**。本地软件测试不代表真实工作区验收。仅在指定的隔离 Notion 工作区确认范围后启用真实授权。
+此文档对应 COL-33 的 OAuth 与本机凭据边界。结构、读取、写回和重复规则由后续模块负责；OAuth 成功只证明凭据已领取，不证明已有结构仍可安全使用。仅在指定的隔离 Notion 工作区确认范围后启用真实授权。
 
 ## 边界与配置
 
@@ -12,16 +12,17 @@ Cloudflare Worker 负责 Notion 公共 OAuth 的回调、令牌交换与轮换�
 4. 本机根 `.env` 中设置 `NEWDAY_NOTION_WORKER_ORIGIN`、`NEWDAY_NOTION_WORKER_API_KEY`、`NEWDAY_NOTION_CREDENTIAL_KEY`，可选设置独立的 `NEWDAY_NOTION_CREDENTIAL_PATH`。API 只接受精确 HTTPS Worker origin；缺任何一项都会拒绝部分配置。默认凭据库在 `data/notion-vault/credentials.sqlite`，与业务库 `data/newday.sqlite` 分开。根 `pnpm dev` 会加载 `.env`；单独的 `dev:api` 需通过进程环境传入。
 5. 部署和授权前，在隔离工作树运行 `pnpm check`、`pnpm build`、`pnpm test:e2e`。Worker 的 `pnpm --filter @newday/notion-oauth-worker build` 是本地 dry-run，**不会部署**。真实部署后仍需用指定测试工作区执行授权、取消、重授权、轮换、断开、API 重启及浏览器回调验证，并保留可复核记录。
 
-当前没有为 Worker 配置边缘限流或线上监控。公共回调会验证随机 state；服务端入口还要求 `LOCAL_API_KEY`。正式部署前需评估 Cloudflare 侧对恶意流量的限制和 Secret 轮换。`LOCAL_API_KEY` 泄露时更换 Worker 与本机两端的值。凭据库密钥丢失时不能从业务备份恢复令牌，应移走旧凭据库并重新授权；不要用新密钥直接打开旧库并假称连接有效。
+当前没有为 Worker 配置边缘限流。公共回调会在访问 Durable Object 前验证带 HMAC 的随机 state；服务端入口还要求 `LOCAL_API_KEY`。Worker 已启用日志和低采样追踪，并强制从可观测数据中删除查询字符串，避免 OAuth `code` 与 `state` 随回调 URL 落入平台记录；应用本身不得记录请求头、请求体或凭据。正式部署前仍需评估 Cloudflare 侧对恶意流量的限制和 Secret 轮换。`LOCAL_API_KEY` 泄露时更换 Worker 与本机两端的值；轮换会使当时尚未完成的授权 state 失效。凭据库密钥丢失时不能从业务备份恢复令牌，应移走旧凭据库并重新授权；不要用新密钥直接打开旧库并假称连接有效。
 
 ## 授权与故障恢复
 
-- 本机生成随机 verifier，将 SHA-256 challenge 发给 Worker。Worker 保存随机 state 10 分钟。Notion 回调成功后 Worker 将随机票据放入回环 Web 地址的 URL fragment；页面立即清除 fragment，再由本机 API 用 verifier 与票据领取令牌。Worker 在本机加密事务提交后收到 ACK 才删除暂存令牌。重复领取在 ACK 前可以重送同一结果；ACK 后拒绝重放。
+- 本机生成随机 verifier，将 SHA-256 challenge 发给 Worker。Worker 保存带 HMAC 的随机 state 10 分钟，并在公共回调访问 Durable Object 前先无状态验签。Notion 回调成功后 Worker 将随机票据放入回环 Web 地址的 URL fragment；页面立即清除 fragment，再由本机 API 用 verifier 与票据领取令牌。Worker 在本机加密事务提交后收到 ACK 才删除暂存令牌。重复领取在 ACK 前可以重送同一结果；ACK 后拒绝重放。
 - 用户在 Notion 授权页取消时，Worker 在回调中标记该 state 为取消，本机清除对应 verifier。单独调用本机 `/oauth/cancel` 只删除本机 verifier；Worker 会话到期后自行失效。发起 Worker 授权请求前，本机先持久保留授权顺序；断开某个已连接工作区会删除该工作区的本机凭据，并在领取时拒绝断开前发起的同工作区授权，即使 Worker 的 start 响应在断开后才到达。其他工作区的待领取授权继续有效。若回调错误、过期或本机进程停止，重新开始授权；不要把未领取的会话算作已连接。
 - 本机凭据库用 AES-256-GCM 保存令牌和待领取 verifier，库文件权限为 `0600`。`GET /api/notion/status` 只返回工作区摘要与 `active`、`refresh_pending` 或 `reauthorization_required` 状态。密钥、access token、refresh token 不进入 HTTP 响应、业务备份或 Agent 备份。
 - 刷新使用保存在库中的固定 attempt ID。请求超时可能发生在 Notion 已轮换之后；此时状态是 `refresh_pending`，旧令牌停止供后续任务调用。页面的“重试确认”用原 attempt ID 读取 Worker 暂存的轮换结果。Worker 明确无法提供结果、缓存过期或令牌身份不匹配时进入 `reauthorization_required`，需重新授权。
 - “断开”删除指定工作区的本机凭据并阻止旧授权回调重连，不声称撤销 Notion 设置中的连接授权。若要在 Notion 一侧撤销，也需由用户在 Notion 中移除该连接。断开后重新发起授权可连接同一工作区；后续表映射和同步必须另行核对。
+- 已有结构记录的工作区重新授权后仍保持业务连接 `disconnected`。使用 `POST /api/notion/connections/:workspaceId/structure/reconnect` 只读核对根页面、四张表和四个 relation；九项全部匹配且核对期间记录与授权未变化时才恢复 `active`。该入口不创建或修改远端对象，权限不足或不一致时继续断开。
 
 ## 当前验收状态
 
-离线 API 测试覆盖授权领取、取消、重放、备份隔离、加密落盘、断开、跨重启刷新结果复取及失败转重授权；Worker 运行时测试覆盖 state、verifier、票据、ACK、取消和同尝试刷新缓存。真实 Public connection、Cloudflare Worker 部署、Notion 工作区令牌轮换与撤销仍未验证。T2 保持 In Progress / Draft，直到真实隔离工作区验收。
+离线 API 测试覆盖授权领取、取消、重放、备份隔离、加密落盘、断开、跨重启刷新结果复取及失败转重授权；Worker 运行时测试覆盖 state、verifier、票据、ACK、取消和同尝试刷新缓存。2026-09-21 已在独立测试工作区完成真实 Public connection、Worker 回调、领取、刷新、API 重启持久化、断开、旧回调 409、新浏览器授权与 9/9 结构只读恢复。该结果只覆盖记录中的隔离候选和 Worker 版本，不代表个人工作区或后续版本自动通过。

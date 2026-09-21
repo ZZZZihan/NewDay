@@ -22,8 +22,9 @@ export type NotionSharedField = keyof NotionTaskFields;
 const nonEmptyId = z.string().min(1);
 const notionPageUrl = z.string().url().refine((value) => {
   const url = new URL(value);
-  return url.protocol === "https:" && (url.hostname === "notion.so" || url.hostname.endsWith(".notion.so"));
-}, "Notion 页面链接必须使用 notion.so 的 HTTPS 地址");
+  return url.protocol === "https:" && (url.hostname === "app.notion.com" ||
+    url.hostname === "notion.so" || url.hostname.endsWith(".notion.so"));
+}, "Notion 页面链接必须使用官方 HTTPS 地址");
 
 export const notionDataSourceRefSchema = z.object({
   databaseId: nonEmptyId,
@@ -42,6 +43,9 @@ export const notionConnectionSchema = z.object({
     tasks: notionDataSourceRefSchema.optional(),
     rules: notionDataSourceRefSchema.optional(),
   }).strict(),
+  // Local credential revisions are deliberately portable as evidence only.
+  // A restored or legacy connection must be rebound by an exact readback.
+  credentialRevision: z.number().int().positive().optional(),
   status: z.enum(["disconnected", "active", "paused", "paused_after_restore", "paused_unknown"]),
   pauseReason: z.enum(["preflight_read", "manual"]).optional(),
   retryAfterAt: z.string().datetime({ offset: true }).optional(),

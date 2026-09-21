@@ -4,7 +4,7 @@ import type { NotionConnection, NotionInitializationStep, NotionInitializationSt
 
 import { ApiError } from "../http/api-error.js";
 import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
-import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
+import type { NotionCredentialLease, NotionCredentialVault } from "../storage/notion-credential-vault.js";
 import type { NotionStructureGateway, StructureProperty } from "./notion-structure-gateway.js";
 
 type TableName = "areas" | "projects" | "tasks" | "rules";
@@ -66,6 +66,19 @@ export type NotionRestoreStructureReview = {
       "permission" | "rate_limited" | "unreadable" | "not_checked" }>;
 };
 
+export type NotionReconnectStructureResult = {
+  review: NotionRestoreStructureReview;
+  progress: NotionStructureProgress;
+};
+
+type StructureReviewSnapshot = {
+  review: NotionRestoreStructureReview;
+  epoch: string;
+  connection: NotionConnection;
+  steps: NotionInitializationStep[];
+  credential: NotionCredentialLease;
+};
+
 /** One mutation per request keeps each browser/API request bounded. After an
  * ambiguous create, subsequent requests only read remote state. */
 export class NotionStructureService {
@@ -109,17 +122,86 @@ export class NotionStructureService {
   /** Compare the restored identities with current remote objects. This path
    * never confirms steps, changes the connection, or releases the restore fence. */
   async verifyRestoredStructure(workspaceId: string): Promise<NotionRestoreStructureReview> {
+    return this.withWorkspaceLock(workspaceId, async () =>
+      (await this.reviewRecordedStructure(workspaceId, "paused_after_restore")).review);
+  }
+
+  /** Reauthorization restores only the credential. Re-enable an existing
+   * mapping after every confirmed prefix identity has been read back exactly.
+   * An unconfirmed next step stays durable and can only use its existing
+   * readback path. This method performs no create or patch request. */
+  async reconnect(workspaceId: string): Promise<NotionReconnectStructureResult> {
     return this.withWorkspaceLock(workspaceId, async () => {
+      const snapshot = await this.reviewRecordedStructure(workspaceId, "disconnected", "confirmed_prefix");
+      const { review } = snapshot;
+      if (review.outcome === "matches") {
+        await this.store.transaction(async () => {
+          const connection = await this.store.getNotionConnection(workspaceId);
+          const steps = await this.store.listNotionInitializationSteps(workspaceId);
+          const credential = this.vault.getCredentialLease(workspaceId);
+          if (!connection || connection.status !== "disconnected" || !credential ||
+            (await this.store.getPlanningVersion()).datasetEpoch !== snapshot.epoch ||
+            JSON.stringify(connection) !== JSON.stringify(snapshot.connection) ||
+            JSON.stringify(steps) !== JSON.stringify(snapshot.steps) ||
+            credential.revision !== snapshot.credential.revision) {
+            throw new ApiError(409, "重新连接前结构、数据或授权已变化；请刷新后重新核对");
+          }
+          const ready = stepOrder.every((name) =>
+            steps.some((value) => value.step === name && value.status === "confirmed"));
+          await this.store.putNotionConnection({ ...connection, credentialRevision: credential.revision,
+            status: ready ? "active" : "paused", pauseReason: undefined,
+            retryAfterAt: undefined, updatedAt: this.timestamp() });
+        });
+        if (!this.vault.matchesCredentialRevision(workspaceId, snapshot.credential.revision)) {
+          await this.disconnectCredentialMismatch(workspaceId);
+          throw new ApiError(409, "重新连接期间授权已变化；连接继续保持断开，请重新核对");
+        }
+      }
+      return { review, progress: await this.progress(workspaceId) };
+    });
+  }
+
+  /** OAuth claim and refresh use a separate durable database. Persistently
+   * disconnect the business mapping after a credential revision changes. */
+  async markCredentialChanged(workspaceId: string): Promise<void> {
+    return this.withWorkspaceLock(workspaceId, () => this.disconnectCredentialMismatch(workspaceId));
+  }
+
+  /** Upgrade legacy active connections before polling starts. A missing or
+   * changed revision can only be rebound by the read-only reconnect flow. */
+  async fenceCredentialBindings(): Promise<void> {
+    for (const connection of await this.store.listNotionConnections()) {
+      if (connection.status === "disconnected" || connection.status === "paused_after_restore" ||
+        connection.status === "paused_unknown") continue;
+      const credential = this.vault.getCredentialLease(connection.workspaceId);
+      if (!credential || connection.credentialRevision !== credential.revision) {
+        await this.store.putNotionConnection({ ...connection, status: "disconnected", updatedAt: this.timestamp() });
+      }
+    }
+  }
+
+  private async disconnectCredentialMismatch(workspaceId: string): Promise<void> {
+    const connection = await this.store.getNotionConnection(workspaceId);
+    if (!connection || connection.status === "disconnected" ||
+      connection.status === "paused_after_restore" || connection.status === "paused_unknown") return;
+    await this.store.putNotionConnection({ ...connection, status: "disconnected", updatedAt: this.timestamp() });
+  }
+
+  private async reviewRecordedStructure(workspaceId: string,
+    requiredStatus: "paused_after_restore" | "disconnected",
+    scope: "all" | "confirmed_prefix" = "all"): Promise<StructureReviewSnapshot> {
       const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
       const connection = await this.store.getNotionConnection(workspaceId);
-      if (!connection || connection.status !== "paused_after_restore") {
-        throw new ApiError(409, "当前工作区不处于备份恢复隔离状态");
+      if (!connection || connection.status !== requiredStatus) {
+        throw new ApiError(409, requiredStatus === "paused_after_restore"
+          ? "当前工作区不处于备份恢复隔离状态" : "当前工作区无需重新连接");
       }
       const steps = await this.store.listNotionInitializationSteps(workspaceId);
-      const credential = this.vault.getCredential(workspaceId);
-      if (!credential || credential.workspace_id !== workspaceId) {
+      const credential = this.vault.getCredentialLease(workspaceId);
+      if (!credential || credential.credential.workspace_id !== workspaceId) {
         throw new ApiError(409, "当前工作区尚无可用授权；请重新授权后核对");
       }
+      const reviewSteps = scope === "confirmed_prefix" ? reconnectReviewSteps(steps) : stepOrder;
       const checks: NotionRestoreStructureReview["checks"] = [];
       let sharedRemoteFailure: "permission" | "rate_limited" | null = null;
       const propertyReads = new Map<string, Promise<Record<string, StructureProperty>>>();
@@ -127,7 +209,7 @@ export class NotionStructureService {
         const key = JSON.stringify([databaseId, dataSourceId]);
         const existing = propertyReads.get(key);
         if (existing) return existing;
-        const pending = this.gateway.getDataSourceProperties(credential.access_token, dataSourceId, databaseId);
+        const pending = this.gateway.getDataSourceProperties(credential.credential.access_token, dataSourceId, databaseId);
         propertyReads.set(key, pending);
         return pending;
       };
@@ -157,15 +239,18 @@ export class NotionStructureService {
 
       const rootId = connection.rootPageId;
       const rootTitle = `NewDay (${connection.installationId})`;
-      await read("root", recorded("root", rootTitle, null,
-        fingerprint({ kind: "workspace-page", title: rootTitle }), rootId), async () => {
-        const root = await this.gateway.getRoot(credential.access_token, rootId!);
-        if (root.inTrash) return "trashed";
-        return root.id === rootId && root.title === rootTitle && root.workspaceParent
-          ? "matches" : "identity_mismatch";
-      });
+      if (reviewSteps.includes("root")) {
+        await read("root", recorded("root", rootTitle, null,
+          fingerprint({ kind: "workspace-page", title: rootTitle }), rootId), async () => {
+          const root = await this.gateway.getRoot(credential.credential.access_token, rootId!);
+          if (root.inTrash) return "trashed";
+          return root.id === rootId && root.title === rootTitle && root.workspaceParent
+            ? "matches" : "identity_mismatch";
+        });
+      }
 
       for (const name of tableOrder) {
+        if (!reviewSteps.includes(name)) continue;
         const source = connection.dataSources[name];
         const schema = tableSchemas[name];
         const local = recorded(name, schema.title, rootId,
@@ -173,7 +258,7 @@ export class NotionStructureService {
         await read(name, !rootId || !source?.dataSourceId ? "record_incomplete" :
           source.schemaFingerprint !== fingerprint({ kind: "data-source", name, schema: schema.expected })
             ? "schema_mismatch" : local, async () => {
-          const database = await this.gateway.getDatabase(credential.access_token, source!.databaseId);
+          const database = await this.gateway.getDatabase(credential.credential.access_token, source!.databaseId);
           if (database.inTrash) return "trashed";
           if (database.id !== source!.databaseId || database.title !== schema.title ||
             database.parentPageId !== rootId || database.dataSourceIds.length !== 1 ||
@@ -188,6 +273,7 @@ export class NotionStructureService {
       }
 
       for (const name of relationOrder) {
+        if (!reviewSteps.includes(name)) continue;
         const relation = relations[name];
         const source = connection.dataSources[relation.source];
         const target = connection.dataSources[relation.target];
@@ -202,23 +288,30 @@ export class NotionStructureService {
         });
       }
 
-      const currentCredential = this.vault.getCredential(workspaceId);
+      const currentCredential = this.vault.getCredentialLease(workspaceId);
       if ((await this.store.getPlanningVersion()).datasetEpoch !== epoch ||
         JSON.stringify(await this.store.getNotionConnection(workspaceId)) !== JSON.stringify(connection) ||
         JSON.stringify(await this.store.listNotionInitializationSteps(workspaceId)) !== JSON.stringify(steps) ||
-        !currentCredential || currentCredential.workspace_id !== credential.workspace_id ||
-        currentCredential.bot_id !== credential.bot_id || currentCredential.access_token !== credential.access_token) {
+        !currentCredential || currentCredential.revision !== credential.revision) {
         throw new ApiError(409, "核对期间数据或授权发生变化；请重新读取状态后核对");
       }
-      return { workspaceId, checkedAt: this.timestamp(),
-        outcome: checks.every((item) => item.result === "matches") ? "matches" : "needs_review", checks };
-    });
+      return {
+        review: { workspaceId, checkedAt: this.timestamp(),
+          outcome: checks.every((item) => item.result === "matches") ? "matches" : "needs_review", checks },
+        epoch, connection, steps, credential,
+      };
   }
 
   private async advanceLocked(workspaceId: string,
     review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<NotionStructureProgress> {
-    const credential = this.vault.getCredential(workspaceId);
+    const credential = this.vault.getCredentialLease(workspaceId);
     if (!credential) throw new ApiError(409, "Notion 工作区尚未授权或凭据刷新结果待确认");
+    const observed = await this.store.getNotionConnection(workspaceId);
+    if (observed && observed.status !== "disconnected" && observed.status !== "paused_after_restore" &&
+      observed.status !== "paused_unknown" && observed.credentialRevision !== credential.revision) {
+      await this.store.putNotionConnection({ ...observed, status: "disconnected", updatedAt: this.timestamp() });
+      throw new ApiError(409, "Notion 授权已变化；请先只读核对原有结构并重新连接");
+    }
     const connection = await this.store.transaction(async () => {
       let current = await this.store.getNotionConnection(workspaceId);
       if (review && (!current || current.status === "disconnected")) {
@@ -229,14 +322,16 @@ export class NotionStructureService {
       }
       if (!current) {
         current = { workspaceId, installationId: randomBytes(16).toString("hex"), rootPageId: null,
-          dataSources: {}, status: "paused", updatedAt: this.timestamp() };
+          dataSources: {}, credentialRevision: credential.revision, status: "paused", updatedAt: this.timestamp() };
         await this.store.putNotionConnection(current);
       } else if (current.status === "disconnected") {
         if ((await this.store.listNotionInitializationSteps(workspaceId)).length > 0) {
           throw new ApiError(409, "断开后已有结构需人工核对，不能直接继续初始化");
         }
-        current = { ...current, status: "paused", updatedAt: this.timestamp() };
+        current = { ...current, credentialRevision: credential.revision, status: "paused", updatedAt: this.timestamp() };
         await this.store.putNotionConnection(current);
+      } else if (current.credentialRevision !== credential.revision) {
+        throw new ApiError(409, "Notion 授权已变化；请先只读核对原有结构并重新连接");
       }
       return current;
     });
@@ -247,11 +342,12 @@ export class NotionStructureService {
     }
     if (!progress.nextStep) return progress;
     if (progress.retryAfterAt && Date.parse(progress.retryAfterAt) > this.now()) return progress;
-    const token = credential.access_token;
+    const token = credential.credential.access_token;
     const step = progress.nextStep;
-    if (step === "root") await this.advanceRoot(connection, token, review);
-    else if (tableOrder.includes(step as TableName)) await this.advanceTable(connection, token, step as TableName, review);
-    else await this.advanceRelation(connection, token, step as RelationName, review);
+    if (step === "root") await this.advanceRoot(connection, token, credential.revision, review);
+    else if (tableOrder.includes(step as TableName)) {
+      await this.advanceTable(connection, token, credential.revision, step as TableName, review);
+    } else await this.advanceRelation(connection, token, credential.revision, step as RelationName, review);
     return this.progress(workspaceId);
   }
 
@@ -277,11 +373,11 @@ export class NotionStructureService {
     }
   }
 
-  private async advanceRoot(connection: NotionConnection, token: string,
+  private async advanceRoot(connection: NotionConnection, token: string, credentialRevision: number,
     review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     const title = `NewDay (${connection.installationId})`;
     const { step, created } = await this.recordAttempt(connection.workspaceId, "root", title, null,
-      fingerprint({ kind: "workspace-page", title }), review);
+      fingerprint({ kind: "workspace-page", title }), credentialRevision, review);
     try {
       const id = created ? await this.gateway.createRoot(token, title) : null;
       const candidateIds = [...new Set([...(id ? [id] : []), ...await this.gateway.findRoots(token, title)])];
@@ -291,16 +387,16 @@ export class NotionStructureService {
         if (page.title === title && page.workspaceParent) matches.push(page.id);
       }
       if (matches.length !== 1) return this.markReview(step, matches.length > 1 ? "ambiguous" : "not_found");
-      await this.confirm(step, matches[0], undefined);
+      await this.confirm(step, matches[0], credentialRevision, undefined);
     } catch (error) { await this.markReview(step, classifyRemoteFailure(error), error); }
   }
 
-  private async advanceTable(connection: NotionConnection, token: string, name: TableName,
+  private async advanceTable(connection: NotionConnection, token: string, credentialRevision: number, name: TableName,
     review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     if (!connection.rootPageId) throw new ApiError(409, "Notion 根页面尚未确认");
     const schema = tableSchemas[name];
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, schema.title, connection.rootPageId,
-      fingerprint({ kind: "data-source", name, schema: schema.expected }), review);
+      fingerprint({ kind: "data-source", name, schema: schema.expected }), credentialRevision, review);
     try {
       if (created) {
         // The first call has not sent a create yet. A same-title child may be a
@@ -336,18 +432,19 @@ export class NotionStructureService {
         return;
       }
       const remote = matchingTitle[0];
-      await this.confirm(step, remote.id, { table: name, dataSourceId: remote.dataSourceId, propertyIds: remote.propertyIds });
+      await this.confirm(step, remote.id, credentialRevision,
+        { table: name, dataSourceId: remote.dataSourceId, propertyIds: remote.propertyIds });
     } catch (error) { await this.markReview(step, classifyRemoteFailure(error), error); }
   }
 
-  private async advanceRelation(connection: NotionConnection, token: string, name: RelationName,
+  private async advanceRelation(connection: NotionConnection, token: string, credentialRevision: number, name: RelationName,
     review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     const relation = relations[name];
     const source = connection.dataSources[relation.source];
     const target = connection.dataSources[relation.target];
     if (!source || !target) throw new ApiError(409, "Notion 关联目标尚未确认");
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, relation.name, source.dataSourceId,
-      fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), review);
+      fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), credentialRevision, review);
     try {
       if (created) {
         const existing = (await this.gateway.getDataSourceProperties(
@@ -364,14 +461,20 @@ export class NotionStructureService {
         await this.markReview(step, "schema_mismatch");
         return;
       }
-      await this.confirm(step, property.id, { table: relation.source, propertyName: relation.name });
+      await this.confirm(step, property.id, credentialRevision, { table: relation.source, propertyName: relation.name });
     } catch (error) { await this.markReview(step, classifyRemoteFailure(error), error); }
   }
 
   private async recordAttempt(workspaceId: string, name: NotionInitializationStepName, expectedTitle: string,
     parentId: string | null, schemaFingerprint: string,
+    credentialRevision: number,
     review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<{ step: NotionInitializationStep; created: boolean }> {
     return this.store.transaction(async () => {
+      const connection = await this.store.getNotionConnection(workspaceId);
+      if (!connection || connection.credentialRevision !== credentialRevision ||
+        !this.vault.matchesCredentialRevision(workspaceId, credentialRevision)) {
+        throw new ApiError(409, "Notion 授权已变化；本次结构操作已停止");
+      }
       const existing = await this.store.getNotionInitializationStep(workspaceId, name);
       if (review && (review.step !== name || !existing || existing.status !== "needs_review" ||
         existing.attemptedAt !== review.attemptedAt)) {
@@ -398,12 +501,16 @@ export class NotionStructureService {
     });
   }
 
-  private async confirm(step: NotionInitializationStep, remoteId: string,
+  private async confirm(step: NotionInitializationStep, remoteId: string, credentialRevision: number,
     details?: { table: TableName; dataSourceId: string; propertyIds: Record<string, string> } |
       { table: TableName; propertyName: string }): Promise<void> {
     await this.store.transaction(async () => {
       const current = await this.store.getNotionConnection(step.workspaceId);
       if (!current) throw new Error("Notion initialization workspace disappeared");
+      if (current.credentialRevision !== credentialRevision ||
+        !this.vault.matchesCredentialRevision(step.workspaceId, credentialRevision)) {
+        throw new ApiError(409, "Notion 授权在结构操作期间变化；远端结果需要重新核对");
+      }
       if (current.status === "paused_after_restore" || current.status === "paused_unknown") {
         throw new ApiError(409, "Notion 结构在扫描期间被恢复或暂停，不能确认本次写入");
       }
@@ -450,6 +557,20 @@ function basePropertyIds(actual: Record<string, StructureProperty>, expected: Re
     ids[name] = found.id;
   }
   return ids;
+}
+
+/** A disconnected partial initialization may contain a confirmed prefix and
+ * one attempted next step. The latter stays read-only on the next advance. */
+function reconnectReviewSteps(steps: NotionInitializationStep[]): NotionInitializationStepName[] {
+  const byStep = new Map(steps.map((step) => [step.step, step]));
+  let confirmed = 0;
+  while (confirmed < stepOrder.length && byStep.get(stepOrder[confirmed])?.status === "confirmed") confirmed += 1;
+  const valid = steps.every((step) => {
+    const index = stepOrder.indexOf(step.step);
+    return index >= 0 && (index < confirmed && step.status === "confirmed" ||
+      index === confirmed && step.status !== "confirmed");
+  }) && steps.length <= confirmed + (byStep.has(stepOrder[confirmed]) ? 1 : 0);
+  return valid ? stepOrder.slice(0, confirmed) : stepOrder;
 }
 
 function fingerprint(value: unknown): string {

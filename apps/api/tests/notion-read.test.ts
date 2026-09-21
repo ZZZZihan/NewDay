@@ -36,7 +36,8 @@ function connection(): NotionConnection {
     databaseId: `database-${name}`, dataSourceId: `source-${name}`,
     propertyIds, schemaFingerprint: `fingerprint-${name}`,
   });
-  return { workspaceId, installationId: "install-read", rootPageId: "root-1", status: "active", updatedAt: at,
+  return { workspaceId, installationId: "install-read", rootPageId: "root-1", credentialRevision: 2,
+    status: "active", updatedAt: at,
     dataSources: {
       areas: ref("areas", { Name: "area-title" }),
       projects: ref("projects", { Name: "project-title", Area: "project-area" }),

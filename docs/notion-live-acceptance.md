@@ -1,6 +1,6 @@
 # NewDay / Notion 真实验收与恢复记录（COL-39）
 
-记录日期：2026-09-21。本文是 T8 的执行清单和当前证据，不代表已经完成真实验收。所有 Notion 请求须先指定**独立测试工作区**、Public OAuth connection、Worker 地址和允许修改的测试数据范围；令牌、服务密钥、真实任务正文和完整工作区 ID 不写入仓库、PR 或 Linear。
+记录日期：2026-09-21。本文是 T8 的执行清单。首轮真实执行、修复、逐项结论和 NO-GO 门禁见[隔离工作区真实验收报告](./notion-live-acceptance-2026-09-21.md)；A3/R2/W2 的后续真实故障注入使用[回环 Notion 故障代理协议](./notion-live-fault-proxy.md)，普通 fake gateway 结果不计入这些门禁。清单本身不代表已经完成真实验收。所有 Notion 请求须先指定**独立测试工作区**、Public OAuth connection、Worker 地址和允许修改的测试数据范围；令牌、服务密钥、真实任务正文和完整工作区 ID 不写入仓库、PR 或 Linear。
 
 ## 当前候选与证据边界
 
@@ -13,10 +13,10 @@
 | 授权与结构 T2/T3 | [PR #6](https://github.com/ZZZZihan/NewDay/pull/6)、[PR #7](https://github.com/ZZZZihan/NewDay/pull/7) | 本地 Worker/API 与假网关测试 | Worker 部署、真实授权/轮换、私有根和四表关系读回 |
 | 读取、写回 T4～T6 | [PR #8](https://github.com/ZZZZihan/NewDay/pull/8)、[PR #5](https://github.com/ZZZZihan/NewDay/pull/5)、[PR #9](https://github.com/ZZZZihan/NewDay/pull/9) | SQLite、假 Notion 网关/传输、HTTP 与浏览器测试 | 真实分页、限流、回收站、冲突和往返；适用的条件写入能力 |
 | 规则与实例 T7 | [PR #10](https://github.com/ZZZZihan/NewDay/pull/10)，`c9b5b2b7bdeac932847b164bf4e76f0fef304aac` | 此 SHA 的 `pnpm check`、`pnpm build`、Chrome/WebKit Notion E2E 10/10 通过；此前 `b1425c6` 的 Notion + 日程 E2E 36/36；月末、改期、停用、重启及 Tasks 中断重试的假网关测试 | 真实规则属性、发生键、实例创建/读回与跨日运行 |
-| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11)、[PR #14](https://github.com/ZZZZihan/NewDay/pull/14)、[PR #15](https://github.com/ZZZZihan/NewDay/pull/15) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对、恢复隔离明细与远端只读核对、离线验收矩阵；具体候选 SHA 和验证见 PR | A1～D1 真实执行、恢复演练与用户认可；隔离仍未核销 |
+| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11)、[PR #14](https://github.com/ZZZZihan/NewDay/pull/14)、[PR #15](https://github.com/ZZZZihan/NewDay/pull/15) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对、恢复隔离明细与远端只读核对；2026-09-21 首轮真实 OAuth、读写、规则和恢复记录见[执行报告](./notion-live-acceptance-2026-09-21.md) | A1/A3/R2/W2/W3 剩余子项、最终候选门禁与用户认可；当前结论 NO-GO |
 | G3 / G4 | [COL-23](https://linear.app/colife/issue/COL-23)、[COL-24](https://linear.app/colife/issue/COL-24)；[PR #12](https://github.com/ZZZZihan/NewDay/pull/12)、[PR #13](https://github.com/ZZZZihan/NewDay/pull/13) | G3 零真实调用预检和 G4 前瞻记录协议 | 冻结预算与真实模型评测；人工基线和连续七天原始记录 |
 
-`pnpm build` 中 Worker 的 `wrangler deploy --dry-run` 只验证打包，不是部署。COL-39 的真实 OAuth、Notion 读写和恢复均为**未执行**；缺失证据不能记为通过。
+`pnpm build` 中 Worker 的 `wrangler deploy --dry-run` 只验证打包，不是部署。COL-39 已执行一轮真实 OAuth、Notion 读写和独立恢复演练，但故障注入矩阵及部分收尾仍未完成；具体通过项和缺口以[执行报告](./notion-live-acceptance-2026-09-21.md)为准，缺失证据继续记为未执行。
 
 ## 启动真实隔离测试前
 

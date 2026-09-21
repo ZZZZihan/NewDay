@@ -123,3 +123,72 @@ test("undo refreshes the active task table", async ({ page, request }) => {
   expect((await (await request.get("/api/life/workspace")).json()).tasks[0].status).toBe("open");
   await expect(page.getByRole("button", { name: "标为完成" })).toBeVisible();
 });
+
+test("an older workspace read cannot hide a newly saved resource", async ({ page, request }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "资料库", exact: true }).click();
+  await expect(page.getByText("这里还没有资料")).toBeVisible();
+  await page.getByRole("button", { name: "今天", exact: true }).click();
+
+  let releaseOldRead!: () => void;
+  const oldReadReleased = new Promise<void>((resolve) => { releaseOldRead = resolve; });
+  let markOldReadCaptured!: () => void;
+  const oldReadCaptured = new Promise<void>((resolve) => { markOldReadCaptured = resolve; });
+  let holdNextRead = true;
+  await page.route("**/api/life/workspace", async (route) => {
+    if (!holdNextRead) return route.continue();
+    holdNextRead = false;
+    const oldWorkspace = await request.get("/api/life/workspace");
+    expect(oldWorkspace.ok()).toBe(true);
+    const oldBody = await oldWorkspace.text();
+    markOldReadCaptured();
+    await oldReadReleased;
+    await route.fulfill({ status: 200, contentType: "application/json", body: oldBody });
+  });
+
+  await page.getByRole("button", { name: "资料库", exact: true }).click();
+  await oldReadCaptured;
+  await page.getByRole("button", { name: "新建资料", exact: true }).click();
+  const editor = page.getByRole("region", { name: "新建资料" });
+  await editor.getByLabel("资料标题").fill("竞态保存资料");
+  await editor.getByRole("button", { name: "创建资料" }).click();
+  await expect(page.getByRole("button", { name: /竞态保存资料/ })).toBeVisible();
+
+  const oldReadResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/api/life/workspace") && response.request().method() === "GET");
+  releaseOldRead();
+  await oldReadResponse;
+  await page.evaluate(() => new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole("button", { name: /竞态保存资料/ })).toBeVisible();
+});
+
+test("replacement import reveals resources when the selected folder no longer exists", async ({ page, request }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "资料库", exact: true }).click();
+  page.once("dialog", (dialog) => dialog.accept("旧文件夹"));
+  await page.getByRole("button", { name: "新建一级文件夹" }).click();
+  const oldFolder = page.getByRole("navigation", { name: "资料文件夹" }).getByRole("button", { name: /^旧文件夹/ });
+  await oldFolder.click();
+  await expect(oldFolder).toHaveClass(/selected/);
+
+  const backup = await (await request.get("/api/planner/backup")).json();
+  const now = new Date().toISOString();
+  const replacement = {
+    ...backup,
+    exportedAt: now,
+    folders: [{ id: "replacement-folder", parentId: null, name: "新文件夹", createdAt: now, updatedAt: now }],
+    resources: [{ id: "replacement-resource", folderId: "replacement-folder", kind: "note", title: "恢复后的资料", content: "新内容", source: "", createdAt: now, updatedAt: now }],
+  };
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("import-input").setInputFiles({
+    name: "replacement-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(replacement)),
+  });
+
+  await expect(page.getByText("导入完成：0 项任务、1 份资料")).toBeVisible();
+  await expect(page.getByRole("button", { name: /恢复后的资料/ })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "资料文件夹" }).getByRole("button", { name: /^全部资料/ })).toHaveClass(/selected/);
+  await expect(oldFolder).toHaveCount(0);
+});

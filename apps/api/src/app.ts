@@ -56,18 +56,21 @@ export function createApp(options: AppOptions = {}) {
   const store = new SQLitePlannerStore(options.databasePath ?? config.databasePath);
   const notionOptions = options.notionOAuth === undefined ? config.notionOAuth : options.notionOAuth;
   const notionVault = notionOptions ? new NotionCredentialVault(notionOptions.vaultPath, notionOptions.encryptionKey) : null;
-  const notionOAuth = notionOptions && notionVault
-    ? new NotionOAuthService(notionOptions.workerOrigin, notionOptions.workerApiKey, notionVault, options.notionFetcher, options.clock)
-    : null;
   const notionStructure = notionVault
-    ? new NotionStructureService(store, notionVault, options.notionStructureGateway ?? new NotionSdkStructureGateway(), options.clock)
+    ? new NotionStructureService(store, notionVault, options.notionStructureGateway ??
+      new NotionSdkStructureGateway({ baseUrl: notionOptions?.apiBaseUrl }), options.clock)
+    : null;
+  const notionOAuth = notionOptions && notionVault
+    ? new NotionOAuthService(notionOptions.workerOrigin, notionOptions.workerApiKey, notionVault,
+      options.notionFetcher, options.clock, (workspaceId) => notionStructure!.markCredentialChanged(workspaceId))
     : null;
   const notionRead = notionVault
-    ? new NotionReadService(store, notionVault, options.notionReadGateway ?? new NotionSdkReadGateway(), options.clock)
+    ? new NotionReadService(store, notionVault, options.notionReadGateway ??
+      new NotionSdkReadGateway(undefined, { baseUrl: notionOptions?.apiBaseUrl }), options.clock)
     : null;
   const notionSync = notionVault
     ? new NotionSyncService(store, new NotionOutboxDispatcher(store,
-      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault),
+      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault, { baseUrl: notionOptions?.apiBaseUrl }),
       () => new Date((options.clock ?? Date.now)()).toISOString()))
     : null;
   const planner = new PlannerService(store, options.clock);
@@ -110,7 +113,12 @@ export function createApp(options: AppOptions = {}) {
     return reply.code(500).send({ message: "服务器暂时无法完成请求", ...(request.url.startsWith("/api/agent/") ? { code: "INTERNAL_ERROR", status: 500, retryable: true } : {}) });
   });
 
-  app.addHook("onReady", async () => { await runs.initialize(); notionRead?.startPolling(); notionSync?.startPolling(); });
+  app.addHook("onReady", async () => {
+    await runs.initialize();
+    await notionStructure?.fenceCredentialBindings();
+    notionRead?.startPolling();
+    notionSync?.startPolling();
+  });
   app.addHook("onClose", async () => { notionSync?.close(); notionRead?.close(); await runs.close(); notionVault?.close(); store.close(); });
   registerPlannerRoutes(app, planner);
   registerLifeRoutes(app, life);

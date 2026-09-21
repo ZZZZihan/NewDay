@@ -3,7 +3,7 @@ import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from 
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type NotionCredential = Record<string, unknown> & {
+export type NotionCredential = {
   access_token: string;
   refresh_token: string;
   bot_id: string;
@@ -19,6 +19,11 @@ export type NotionCredentialSummary = {
   updatedAt: string;
 };
 
+export type NotionCredentialLease = {
+  credential: NotionCredential;
+  revision: number;
+};
+
 type CredentialRow = {
   workspace_id: string;
   workspace_name: string | null;
@@ -26,6 +31,7 @@ type CredentialRow = {
   status: "active" | "reauthorization_required";
   encrypted: string;
   refresh_attempt_id: string | null;
+  revision: number;
   updated_at: string;
 };
 
@@ -63,7 +69,8 @@ export class NotionCredentialVault {
         CREATE TABLE IF NOT EXISTS credentials (
           workspace_id TEXT PRIMARY KEY, workspace_name TEXT, bot_id TEXT NOT NULL,
           status TEXT NOT NULL CHECK(status IN ('active','reauthorization_required')),
-          encrypted TEXT NOT NULL, refresh_attempt_id TEXT, updated_at TEXT NOT NULL
+          encrypted TEXT NOT NULL, refresh_attempt_id TEXT, revision INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
         );`);
       this.database.prepare("INSERT OR IGNORE INTO oauth_sequence(id,value) VALUES(1,0)").run();
       // Pending sessions from an older vault are conservatively treated as old.
@@ -71,6 +78,19 @@ export class NotionCredentialVault {
       if (!pendingColumns.some((column) => column.name === "start_sequence")) {
         this.database.exec("ALTER TABLE oauth_pending ADD COLUMN start_sequence INTEGER NOT NULL DEFAULT 0");
       }
+      const credentialColumns = this.database.prepare("PRAGMA table_info(credentials)").all();
+      if (!credentialColumns.some((column) => column.name === "revision")) {
+        this.database.exec("ALTER TABLE credentials ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
+      }
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        const legacy = this.database.prepare("SELECT workspace_id FROM credentials WHERE revision=0 ORDER BY workspace_id").all();
+        for (const row of legacy) {
+          this.database.prepare("UPDATE credentials SET revision=? WHERE workspace_id=?")
+            .run(this.nextSequence(), String(row.workspace_id));
+        }
+        this.database.exec("COMMIT");
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
     } catch (error) { this.database.close(); throw error; }
   }
 
@@ -122,11 +142,12 @@ export class NotionCredentialVault {
         return null;
       }
       const summary = summaryOf(credential, "active", now);
-      this.database.prepare(`INSERT INTO credentials(workspace_id,workspace_name,bot_id,status,encrypted,refresh_attempt_id,updated_at)
-        VALUES(?,?,?,?,?,NULL,?) ON CONFLICT(workspace_id) DO UPDATE SET
+      const revision = this.nextSequence();
+      this.database.prepare(`INSERT INTO credentials(workspace_id,workspace_name,bot_id,status,encrypted,refresh_attempt_id,revision,updated_at)
+        VALUES(?,?,?,?,?,NULL,?,?) ON CONFLICT(workspace_id) DO UPDATE SET
         workspace_name=excluded.workspace_name,bot_id=excluded.bot_id,status=excluded.status,
-        encrypted=excluded.encrypted,refresh_attempt_id=NULL,updated_at=excluded.updated_at`)
-        .run(summary.workspaceId, summary.workspaceName, summary.botId, summary.status, this.encrypt(credential), now);
+        encrypted=excluded.encrypted,refresh_attempt_id=NULL,revision=excluded.revision,updated_at=excluded.updated_at`)
+        .run(summary.workspaceId, summary.workspaceName, summary.botId, summary.status, this.encrypt(credential), revision, now);
       this.database.prepare("DELETE FROM oauth_pending WHERE state=?").run(state);
       this.database.exec("COMMIT");
       return summary;
@@ -144,8 +165,20 @@ export class NotionCredentialVault {
   }
 
   getCredential(workspaceId: string): NotionCredential | null {
-    const row = this.database.prepare("SELECT encrypted FROM credentials WHERE workspace_id=? AND status='active' AND refresh_attempt_id IS NULL").get(workspaceId);
-    return row ? this.decrypt(String(row.encrypted)) as NotionCredential : null;
+    return this.getCredentialLease(workspaceId)?.credential ?? null;
+  }
+
+  getCredentialLease(workspaceId: string): NotionCredentialLease | null {
+    const row = this.database.prepare(`SELECT encrypted,revision FROM credentials
+      WHERE workspace_id=? AND status='active' AND refresh_attempt_id IS NULL`).get(workspaceId);
+    return row ? { credential: this.decrypt(String(row.encrypted)) as NotionCredential,
+      revision: Number(row.revision) } : null;
+  }
+
+  matchesCredentialRevision(workspaceId: string, revision: number): boolean {
+    const row = this.database.prepare(`SELECT 1 FROM credentials
+      WHERE workspace_id=? AND status='active' AND refresh_attempt_id IS NULL AND revision=?`).get(workspaceId, revision);
+    return Boolean(row);
   }
 
   beginRefresh(workspaceId: string): { attemptId: string; credential: NotionCredential } | null {
@@ -170,17 +203,22 @@ export class NotionCredentialVault {
       if (!row || row.refresh_attempt_id !== attemptId || row.bot_id !== credential.bot_id ||
         credential.workspace_id !== workspaceId) throw new Error("Notion refresh result does not match the current connection");
       const summary = summaryOf(credential, "active", now);
+      const revision = this.nextSequence();
       this.database.prepare(`UPDATE credentials SET workspace_name=?,bot_id=?,status='active',encrypted=?,
-        refresh_attempt_id=NULL,updated_at=? WHERE workspace_id=?`)
-        .run(summary.workspaceName, summary.botId, this.encrypt(credential), now, workspaceId);
+        refresh_attempt_id=NULL,revision=?,updated_at=? WHERE workspace_id=?`)
+        .run(summary.workspaceName, summary.botId, this.encrypt(credential), revision, now, workspaceId);
       this.database.exec("COMMIT");
       return summary;
     } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 
   requireReauthorization(workspaceId: string, attemptId: string, now: string): void {
-    this.database.prepare(`UPDATE credentials SET status='reauthorization_required',updated_at=?
-      WHERE workspace_id=? AND refresh_attempt_id=?`).run(now, workspaceId, attemptId);
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare(`UPDATE credentials SET status='reauthorization_required',revision=?,updated_at=?
+        WHERE workspace_id=? AND refresh_attempt_id=?`).run(this.nextSequence(), now, workspaceId, attemptId);
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 
   disconnect(workspaceId: string): boolean {

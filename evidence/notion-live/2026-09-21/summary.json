@@ -1,0 +1,344 @@
+{
+  "schemaVersion": 3,
+  "recordedAt": "2026-09-21T12:33:53Z",
+  "candidate": {
+    "liveAcceptanceBaseCommit": "4ae0a5bb2abe565dbf1d7b045d9d51bbca838dbd",
+    "firstCandidateCommit": "2f6f0b18be92d5e1d90491e8116afb498fb5e046",
+    "implementationCandidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
+    "implementationTree": "3908e8b47a3dee1ca33ef9d1b958f04f2ef11ee9",
+    "regressionCoverageCandidateCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+    "regressionCoverageTree": "1838916168d515a549c9aafe57c4b56b0871900c",
+    "patchFromFirstCandidateSha256": "23c53792ccb1ed1cf78b34caff3e400f7876cf389e20e16137651f0d31f6cb64",
+    "branch": "codex/col-33-oauth-worker-hardening",
+    "state": "P0-P2 review clean; P3 regression coverage committed and exact-candidate rereview pending"
+  },
+  "evidenceHistory": [
+    {
+      "at": "2026-09-21T11:25:00Z",
+      "state": "live acceptance recorded against the stated base plus then-uncommitted fixes; no final candidate claim"
+    },
+    {
+      "candidateCommit": "2f6f0b18be92d5e1d90491e8116afb498fb5e046",
+      "state": "independent review found three P2 findings and one P3 metadata finding; candidate retained as failed history"
+    },
+    {
+      "candidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
+      "state": "partial reconnect, credential revision fence, reconnect review UI, and public metadata remediation implemented and gated"
+    },
+    {
+      "candidateCommit": "acadd84cbb08d7e75b5e5d279d2868005a0a61ac",
+      "state": "second independent review found P0=0, P1=0, P2=0, P3=1; the P3 was permanent regression coverage for already passing race scenarios"
+    },
+    {
+      "candidateCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+      "state": "the unconfirmed-next-step, mid-read credential replacement, mid-create credential replacement, and reconnect needs_review browser cases are now permanent regression tests"
+    }
+  ],
+  "candidateVerification": {
+    "sourceTreeMatchesImplementationCommit": false,
+    "sourceTreeMatchesRegressionCoverageCommit": true,
+    "regressionCoverageCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+    "check": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:31:00Z",
+      "vitest": "24 files / 259 tests",
+      "api": "255 tests",
+      "worker": "9 tests",
+      "agentIntegration": "23 tests"
+    },
+    "build": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:31:00Z",
+      "workerMode": "dry-run"
+    },
+    "e2e": {
+      "status": "passed",
+      "completedAt": "2026-09-21T12:33:53Z",
+      "tests": 94,
+      "browsers": [
+        "chrome",
+        "safari-webkit"
+      ],
+      "database": "disposable SQLite on isolated test services"
+    },
+    "secondIndependentReview": {
+      "candidateCommit": "acadd84cbb08d7e75b5e5d279d2868005a0a61ac",
+      "P0": 0,
+      "P1": 0,
+      "P2": 0,
+      "P3": 1,
+      "P3Disposition": "covered by permanent tests in regressionCoverageCommit; exact-candidate rereview pending"
+    },
+    "liveMatrixRerunOnImplementationCandidate": false,
+    "liveMatrixRerunOnRegressionCoverageCandidate": false,
+    "claimBoundary": "Real remote observations remain bound to the earlier recorded execution. Later candidate gates are regression evidence and do not claim a second live matrix run."
+  },
+  "scope": {
+    "workspaceAlias": "notion-20260921-live-01",
+    "workspaceIdSuffix": "9bced353",
+    "workspaceName": "NewDay 验收 2026-09-21",
+    "personalWorkspaceWritesAuthorized": false,
+    "personalWorkspaceWritesPerformed": false,
+    "workerDeploymentAlias": "notion-oauth-worker-live-01",
+    "notionSdkVersion": "5.23.0",
+    "notionApiVersion": "2026-03-11"
+  },
+  "results": {
+    "A1": {
+      "status": "passed",
+      "verified": [
+        "cancelled authorization left zero connections",
+        "successful OAuth claim persisted across API restart",
+        "refresh rotated ciphertext and cleared refresh_pending",
+        "disconnect rejected the stale callback with HTTP 409",
+        "fresh browser authorization restored one encrypted credential",
+        "initial reconnect stayed disconnected when the isolated root was not shared",
+        "after sharing only the isolated root and descendants, all nine recorded structures matched and reconnect became ready",
+        "reconnect performed zero remote mutation methods",
+        "credential key was rotated after accidental terminal disclosure and the existing credential was re-encrypted and verified"
+      ],
+      "structureChecks": 9,
+      "outboxBefore": {
+        "confirmed": 118
+      },
+      "outboxAfter": {
+        "confirmed": 118
+      },
+      "restoreQuarantineBefore": 0,
+      "restoreQuarantineAfter": 0
+    },
+    "A2": {
+      "status": "passed",
+      "confirmedInitializationSteps": 9,
+      "structureState": "ready"
+    },
+    "A3": {
+      "status": "passed",
+      "verified": [
+        "root, table and relation requests each reached the real upstream and received 2xx before the downstream connection was dropped",
+        "three ambiguous structure steps entered needs_review and recovered through read-only reconciliation",
+        "final structure state was ready with nine confirmed steps and no duplicate remote creation or adoption"
+      ],
+      "proxyRequests": 47,
+      "ambiguousSteps": 3,
+      "finalConfirmedSteps": 9
+    },
+    "R1": {
+      "status": "passed",
+      "verified": [
+        "area and project ownership",
+        "same-day and inclusive cross-day dates",
+        "undated and cleared-date tasks",
+        "restart and repeated scans produced no duplicate mappings"
+      ]
+    },
+    "R2": {
+      "status": "passed",
+      "scenarios": [
+        {
+          "name": "permission",
+          "httpStatus": 500,
+          "watermarkError": "permission",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "not_found",
+          "httpStatus": 500,
+          "watermarkError": "schema",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "schema_missing_properties",
+          "httpStatus": 500,
+          "watermarkError": "schema",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "partial_pagination",
+          "httpStatus": 500,
+          "watermarkError": "network",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 2
+        }
+      ],
+      "verified": [
+        "failed table success watermarks did not advance",
+        "business hashes, archived task counts and outbox counts did not change",
+        "connection remained active"
+      ]
+    },
+    "W1": {
+      "status": "passed",
+      "verified": [
+        "create, title and date update, complete and reopen",
+        "one remote page and one stable client key",
+        "same-field Notion-wins conflict recorded once"
+      ]
+    },
+    "W2": {
+      "status": "passed",
+      "scenarios": [
+        {
+          "name": "create_response_loss",
+          "pageCreateRequests": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_network",
+          "pausedBeforeWrite": true,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_429",
+          "pausedBeforeWrite": true,
+          "earlyResumeStatus": 409,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_529",
+          "pausedBeforeWrite": true,
+          "earlyResumeStatus": 409,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        }
+      ],
+      "verified": [
+        "the lost create response was reconciled by a complete stable-key readback without a duplicate create",
+        "network and rate-limit faults occurred before any page write",
+        "every scenario ended active with no unresolved operation"
+      ]
+    },
+    "W3": {
+      "status": "passed",
+      "verified": [
+        "different-field merge",
+        "date range resolved atomically with Notion as winner",
+        "a real Notion title update was read back and applied by a full scan",
+        "the scan advanced plannerRevision and the old proposal apply returned HTTP 409 VERSION_CONFLICT",
+        "focus records were unchanged"
+      ],
+      "proposalGenerator": "local deterministic contract output; excluded from model-quality claims",
+      "conflictRecords": 2
+    },
+    "C1": {
+      "status": "passed",
+      "counts": {
+        "daily": 32,
+        "weekdays": 24,
+        "weeklyMonWedFri": 14,
+        "monthlyDay31InitialWindow": 1,
+        "monthlyControlledFebruary": 1
+      },
+      "controlledClock": "2027-02-01",
+      "controlledClockRemoteReadback": "2027-02-28"
+    },
+    "C2": {
+      "status": "passed_after_fix",
+      "verified": [
+        "instance rename, reschedule, complete and reopen retained identity",
+        "rule edit preserved existing exceptions",
+        "rule moved to trash disabled the series without deleting two existing pages",
+        "a full real scan succeeded after handling Notion hiding relations to trashed rules"
+      ],
+      "archivedRulePageSuffix": "7b936707",
+      "existingInstances": 2,
+      "unresolvedOperations": 0
+    },
+    "C3": {
+      "status": "passed",
+      "controlledRecoveryDate": "2026-12-01",
+      "recoveryWindowEnd": "2027-01-01",
+      "existingDailyInstances": 32,
+      "newDailyInstances": 32,
+      "downtimeHistoryInstances": 0,
+      "totalDailyInstances": 64,
+      "uniqueDailyOccurrenceKeys": 64,
+      "uniqueDailyRemotePages": 64
+    },
+    "D1": {
+      "status": "passed",
+      "backupVersion": 6,
+      "backupTasks": 1,
+      "backupOutbox": {
+        "confirmed": 7,
+        "pending": 1
+      },
+      "restoredConnectionStatus": "paused_after_restore",
+      "quarantinedOperations": 1,
+      "credentialRowsInRestoreVault": 0,
+      "readOnlyReviewOutcome": "unreadable",
+      "rollbackPreservedFence": true
+    }
+  },
+  "finalObservedState": {
+    "connectionStatus": "active",
+    "confirmedInitializationSteps": 9,
+    "taskMappingsWithRemotePage": 113,
+    "uniqueRemotePages": 113,
+    "uniqueClientKeys": 113,
+    "outboxConfirmed": 123,
+    "outboxUnresolved": 0,
+    "conflictRecords": 2,
+    "readWatermarks": 4,
+    "restoreQuarantine": 0,
+    "credentialRows": 1,
+    "credentialRefreshPending": false
+  },
+  "artifacts": {
+    "baselineBackup": {
+      "file": "baseline-before-oauth.json",
+      "sha256": "e015331f880b9299b7ca9bc54263a450df58b03febadff8c4ac72465d5498ae0",
+      "mode": "0600",
+      "credentialMarkerMatches": 0
+    },
+    "pausedBusinessBackup": {
+      "file": "business-backup-paused.json",
+      "sha256": "02aab1e09ee048dbfadd8c100fb8b0fc1b965cf05b4ec0a256ab6043d7271139",
+      "mode": "0600",
+      "credentialMarkerMatches": 0
+    },
+    "restoreSnapshot": {
+      "file": "planner-imported-snapshot.sqlite",
+      "sha256": "b5a389aaee88a1b7e9a6293a132d23065b065e1542b22f8f74c683aa80e52027",
+      "mode": "0600"
+    },
+    "credentialVaultMode": "0600"
+  },
+  "releaseDecision": {
+    "recordedAt": "2026-09-21T11:25:00Z",
+    "historicalSnapshot": true,
+    "status": "no_go",
+    "push": false,
+    "merge": false,
+    "completedEngineeringAcceptance": [
+      "A1",
+      "A2",
+      "A3",
+      "R1",
+      "R2",
+      "W1",
+      "W2",
+      "W3",
+      "C1",
+      "C2",
+      "C3",
+      "D1"
+    ],
+    "openAcceptance": [
+      "independent rereview of regression-coverage candidate 26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+      "one authorized H-N01 guarded real-model pilot on the exact clean candidate",
+      "full G3 40 x 3 heldout trials with human review and cost accounting",
+      "G4 prospective seven-day use record"
+    ],
+    "claimBoundary": "The H-N01 pilot, if run, is one synthetic guarded trial and cannot establish G3. Notion acceptance cannot establish G3 or G4."
+  }
+}

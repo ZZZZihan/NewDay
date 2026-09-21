@@ -286,4 +286,74 @@ test("explicitly unavailable refresh requires reauthorization, and config requir
   assert.throws(() => loadConfig({ NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey, NEWDAY_NOTION_CREDENTIAL_KEY: "bad" }), /32-byte/);
   const valid = loadConfig({ NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey, NEWDAY_NOTION_CREDENTIAL_KEY: key.toString("base64url") });
   assert.equal(valid.notionOAuth?.workerOrigin, origin);
+  const credentials = { NEWDAY_NOTION_WORKER_ORIGIN: origin, NEWDAY_NOTION_WORKER_API_KEY: workerApiKey,
+    NEWDAY_NOTION_CREDENTIAL_KEY: key.toString("base64url") };
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1" }), /requires NEWDAY_NOTION_API_BASE_URL/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_API_BASE_URL: "http://127.0.0.1:3012" }), /explicit acceptance/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "http://localhost:3012" }), /loopback HTTP origin/);
+  assert.throws(() => loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "https://127.0.0.1:3012" }), /loopback HTTP origin/);
+  const proxied = loadConfig({ ...credentials, NEWDAY_NOTION_ACCEPTANCE_PROXY: "1",
+    NEWDAY_NOTION_API_BASE_URL: "http://127.0.0.1:3012" });
+  assert.equal(proxied.notionOAuth?.apiBaseUrl, "http://127.0.0.1:3012");
+});
+
+test("Worker responses are byte-bounded and credential persistence is allowlisted", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const responseWithExtraData = async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const endpoint = new URL(String(input)).pathname;
+    if (endpoint === "/oauth/start") {
+      const authorization = new URL("https://api.notion.com/v1/oauth/authorize");
+      authorization.searchParams.set("state", state);
+      authorization.searchParams.set("redirect_uri", `${origin}/oauth/callback`);
+      return Response.json({ state, authorizationUrl: authorization.href });
+    }
+    if (endpoint === "/oauth/claim") {
+      return Response.json({ ...credential, owner: { person: { email: "must-not-be-persisted@example.test" } } });
+    }
+    assert.equal(endpoint, "/oauth/ack");
+    assert.ok(init);
+    return Response.json({ status: "acknowledged" });
+  };
+  try {
+    const service = new NotionOAuthService(origin, workerApiKey, vault, responseWithExtraData);
+    await service.start();
+    await service.claim(state, ticket);
+    assert.deepEqual(vault.getCredential("workspace-one"), credential);
+
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(16 * 1024 + 1)); },
+    });
+    const oversizedService = new NotionOAuthService(origin, workerApiKey, vault,
+      async () => new Response(oversized, { headers: { "content-type": "application/json" } }));
+    await assert.rejects(oversizedService.start(), (error: unknown) =>
+      error instanceof ApiError && error.statusCode === 502);
+  } finally { vault.close(); }
+});
+
+test("Worker response metadata rejection cancels bodies and preserves sanitized errors", async () => {
+  const vault = new NotionCredentialVault(":memory:", key);
+  const scenarios: Array<{ status: number; headers: Record<string, string>; cancellationFails: boolean }> = [
+    { status: 200, headers: { "content-type": "text/plain" }, cancellationFails: true },
+    { status: 200, headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) }, cancellationFails: false },
+    { status: 503, headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) }, cancellationFails: false },
+  ];
+  try {
+    for (const scenario of scenarios) {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          cancelled = true;
+          if (scenario.cancellationFails) throw new Error("simulated cancellation failure");
+        },
+      }, { highWaterMark: 0 });
+      const service = new NotionOAuthService(origin, workerApiKey, vault,
+        async () => new Response(body, { status: scenario.status, headers: scenario.headers }));
+      await assert.rejects(service.start(), (error: unknown) =>
+        error instanceof ApiError && error.statusCode === 502 &&
+        error.message === "Notion 授权服务返回无效响应");
+      assert.equal(cancelled, true);
+    }
+  } finally { vault.close(); }
 });

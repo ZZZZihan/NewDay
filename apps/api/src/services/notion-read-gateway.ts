@@ -31,10 +31,12 @@ export interface NotionReadGateway {
  * a failed page or property read never applies a partial scan. */
 export class NotionSdkReadGateway implements NotionReadGateway {
   constructor(private readonly pause: (milliseconds: number) => Promise<void> = (milliseconds) =>
-    new Promise<void>((resolve) => setTimeout(resolve, milliseconds))) {}
+    new Promise<void>((resolve) => setTimeout(resolve, milliseconds)),
+  private readonly options: { baseUrl?: string } = {}) {}
 
   private client(token: string) {
-    return new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000 });
+    return new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000,
+      ...(this.options.baseUrl ? { baseUrl: this.options.baseUrl } : {}) });
   }
 
   async scan(token: string, connection: NotionConnection, table: ReadTable): Promise<ReadRow[]> {

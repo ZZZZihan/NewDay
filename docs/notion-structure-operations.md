@@ -1,6 +1,6 @@
 # Notion 结构初始化候选（COL-34）
 
-此实现接在 [OAuth 凭据流程](./notion-oauth-operations.md) 和 [联动契约](./notion-sync-contract.md) 后。`GET /api/notion/connections/:workspaceId/structure` 只读进度；用户在「Notion 连接」中确认后，前端反复调用 `POST .../structure/advance`，每次最多提交一次远端结构变更。`needs_review` 的“重新核对”改用 `POST .../structure/reconcile`，携带当前步骤和尝试时间；服务端拒绝过期视图，不会借一次旧按钮点击创建下一步骤。只有本机 API 持有 access token。尚未部署 Worker，也未对真实 Notion 工作区运行创建请求；浏览器与 API 验证使用假网关。
+此实现接在 [OAuth 凭据流程](./notion-oauth-operations.md) 和 [联动契约](./notion-sync-contract.md) 后。`GET /api/notion/connections/:workspaceId/structure` 只读进度；用户在「Notion 连接」中确认后，前端反复调用 `POST .../structure/advance`，每次最多提交一次远端结构变更。`needs_review` 的“重新核对”改用 `POST .../structure/reconcile`，携带当前步骤和尝试时间；服务端拒绝过期视图，不会借一次旧按钮点击创建下一步骤。只有本机 API 持有 access token。2026-09-21 已在独立测试工作区完成九步真实创建、响应丢失后的只读对账和重新授权后的安全恢复；结果与限制见 [真实验收报告](./notion-live-acceptance-2026-09-21.md)。
 
 ## 创建顺序与持久状态
 
@@ -19,6 +19,16 @@
 
 读回期间如果本机数据集被再次替换、连接或步骤记录改变、授权令牌改变，API 返回 409，丢弃本次结果。界面仅暂存本次检查；刷新连接状态后须重新检查。真实 Notion 工作区的响应和恢复流程仍需隔离工作区验收。
 
+## 重新授权后的只读恢复
+
+断开或凭据失效后重新授权同一工作区时，OAuth 凭据可以恢复，但业务连接仍保持 `disconnected`。界面显示“核对并重新连接”，调用 `POST /api/notion/connections/:workspaceId/structure/reconnect`，body 为 `{}`。服务端复用九项结构核对规则，并额外要求：
+
+1. 当前业务连接仍是 `disconnected`，且本机凭据属于同一工作区。
+2. 根页面、四张表、四个 relation 的确认记录、远端 ID、父级、标题、schema 指纹、属性 ID 和 relation 目标全部一致。
+3. 核对期间 dataset epoch、连接记录、九步记录、workspace/bot 身份和 access token 均未变化。
+
+全部满足后，只在本机事务中把连接改为 `active`；远端请求只有 GET/查询，不调用页面或 data source 的 POST/PATCH。任一项缺失、权限不足、限流、回收站或不一致时返回逐项结果并保持 `disconnected`。该入口不能用于 `paused_after_restore`，恢复备份仍使用上一节的只读核对并保留隔离。
+
 ## 未知结果的处理
 
 远端 POST/PATCH 请求可能已成功但响应丢失。持久尝试一旦存在，同一步后续调用**只读对账**：根页面按安装标记搜索所有分页并核对精确标题及 workspace 父级；数据库读取根页面的全部子块分页，再核对标题、父级、唯一 data source 和属性类型；relation 读取来源 data source 的字段与目标。即使 POST 已返回 ID，也会查询同级对象以检查重复。零个、多个、不可读或字段不符时保持 `needs_review`，不再次提交 POST/PATCH。Notion 标题搜索可能有索引延迟，零结果不能证明创建失败；稍后再次点击「重新核对」仍是只读操作。
@@ -31,6 +41,6 @@
 
 在真实测试前，确认使用的是专门的隔离 Notion 工作区、Public OAuth 连接拥有插入/读取/更新内容能力，且 `NEWDAY_NOTION_WORKER_ORIGIN`、本机服务密钥与本机凭据密钥已按 OAuth 运维说明配置。先在一次性本地数据库完成授权，再手动点「建立或继续结构」。逐项读回根页面、四个 database/data source、基础属性和四个 relation 的实际 ID 与目标；记录 Notion-Version `2026-03-11`、工作区 ID、请求时间及错误类别。不要将测试工作区 ID 或令牌提交进仓库。
 
-故障验收应在隔离工作区中分别中断根页面、表、relation 的响应或进程，再重新调用进度接口，确认只读对账恢复且无副本。还要覆盖搜索暂时零结果、重复标题、字段类型或权限变化、分页未读全、限流、断开与重新授权。只通过本地假网关和 Wrangler dry run 不代表这组真实验收已完成。
+故障验收应在隔离工作区中分别中断根页面、表、relation 的响应或进程，再重新调用进度接口，确认只读对账恢复且无副本。还要覆盖搜索暂时零结果、重复标题、字段类型或权限变化、分页未读全、限流、断开与重新授权。2026-09-21 的 A3 使用真实 Notion 2xx 后丢失下游响应，三个故障步骤只读恢复且最终 9/9 ready；A1 重新授权先因根页面权限不足保持断开，补充隔离根页面 connection 后 9/9 核对恢复 active。后续代码、权限或 API 版本变化仍须重新执行，不能以本地假网关和 Wrangler dry run 代替。
 
 回退代码时保留当前业务数据库与备份，停止继续初始化；不要通过删除尝试记录来重试远端创建。手工清理测试工作区结构应先核对每个远端 ID 和相关数据，并另行执行。

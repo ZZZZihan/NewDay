@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   chmod, lstat, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   AGENT_PROMPT_VERSION, AGENT_SCHEMA_VERSION, type ModelUsage,
   type PlanningModelOutput, type PlanningSnapshot,
@@ -613,12 +613,55 @@ export async function prepareEvidenceDirectory(evidenceDirectory: string, reposi
   const requested = resolve(evidenceDirectory);
   const repositoryReal = await realpath(resolve(repositoryRoot));
   assertOutsideRepository(requested, repositoryReal);
-  await mkdir(requested, { recursive: true, mode: 0o700 });
+
+  const missingSegments: string[] = [];
+  let existingAncestor = requested;
+  let existingEntry;
+  for (;;) {
+    try {
+      existingEntry = await lstat(existingAncestor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(existingAncestor);
+      if (parent === existingAncestor) throw error;
+      missingSegments.unshift(basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
+  if (existingAncestor === requested && existingEntry.isSymbolicLink()) {
+    throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence directory must be a real directory, not a symbolic link");
+  }
+  let evidenceReal = await realpath(existingAncestor);
+  assertOutsideRepository(evidenceReal, repositoryReal);
+  if (!(await stat(evidenceReal)).isDirectory()) {
+    throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence path ancestor must be a directory");
+  }
+  for (const segment of missingSegments) {
+    const next = join(evidenceReal, segment);
+    try { await mkdir(next, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const entry = await lstat(next);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence path components must be real directories, not symbolic links");
+    }
+    const nextReal = await realpath(next);
+    assertOutsideRepository(nextReal, repositoryReal);
+    if (nextReal !== next) {
+      throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence path changed while it was being created");
+    }
+    evidenceReal = nextReal;
+  }
+
   const requestedEntry = await lstat(requested);
   if (!requestedEntry.isDirectory() || requestedEntry.isSymbolicLink()) {
     throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence directory must be a real directory, not a symbolic link");
   }
-  const evidenceReal = await realpath(requested);
+  if (await realpath(requested) !== evidenceReal) {
+    throw new EvaluationGuardError("INSECURE_EVIDENCE_DIRECTORY", "evidence path changed while it was being verified");
+  }
   assertOutsideRepository(evidenceReal, repositoryReal);
   await chmod(evidenceReal, 0o700);
   const mode = (await stat(evidenceReal)).mode & 0o777;

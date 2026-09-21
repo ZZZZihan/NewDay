@@ -331,6 +331,13 @@ describe("guarded real-provider evaluation trial", () => {
     });
     expect((await stat(repository)).mode & 0o777).toBe(0o755);
 
+    const parentLink = join(root, "parent-link");
+    await symlink(repository, parentLink, "dir");
+    await expect(prepareEvidenceDirectory(join(parentLink, "new-evidence"), repository)).rejects.toMatchObject({
+      code: "EVIDENCE_INSIDE_REPOSITORY",
+    });
+    await expect(stat(join(repository, "new-evidence"))).rejects.toMatchObject({ code: "ENOENT" });
+
     const evidence = join(root, "evidence");
     await mkdir(evidence, { mode: 0o700 });
     await symlink(repository, join(evidence, "trials"), "dir");

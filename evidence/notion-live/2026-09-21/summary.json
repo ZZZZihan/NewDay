@@ -1,14 +1,16 @@
 {
   "schemaVersion": 3,
-  "recordedAt": "2026-09-21T11:25:00Z",
+  "recordedAt": "2026-09-21T12:33:53Z",
   "candidate": {
     "liveAcceptanceBaseCommit": "4ae0a5bb2abe565dbf1d7b045d9d51bbca838dbd",
     "firstCandidateCommit": "2f6f0b18be92d5e1d90491e8116afb498fb5e046",
     "implementationCandidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
     "implementationTree": "3908e8b47a3dee1ca33ef9d1b958f04f2ef11ee9",
+    "regressionCoverageCandidateCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+    "regressionCoverageTree": "1838916168d515a549c9aafe57c4b56b0871900c",
     "patchFromFirstCandidateSha256": "23c53792ccb1ed1cf78b34caff3e400f7876cf389e20e16137651f0d31f6cb64",
     "branch": "codex/col-33-oauth-worker-hardening",
-    "state": "implementation gates passed; independent rereview pending"
+    "state": "P0-P2 review clean; P3 regression coverage committed and exact-candidate rereview pending"
   },
   "evidenceHistory": [
     {
@@ -22,34 +24,53 @@
     {
       "candidateCommit": "6685ba45d4bd95cf2e5e0301bf87e0d65b9d14b6",
       "state": "partial reconnect, credential revision fence, reconnect review UI, and public metadata remediation implemented and gated"
+    },
+    {
+      "candidateCommit": "acadd84cbb08d7e75b5e5d279d2868005a0a61ac",
+      "state": "second independent review found P0=0, P1=0, P2=0, P3=1; the P3 was permanent regression coverage for already passing race scenarios"
+    },
+    {
+      "candidateCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
+      "state": "the unconfirmed-next-step, mid-read credential replacement, mid-create credential replacement, and reconnect needs_review browser cases are now permanent regression tests"
     }
   ],
   "candidateVerification": {
-    "sourceTreeMatchesImplementationCommit": true,
+    "sourceTreeMatchesImplementationCommit": false,
+    "sourceTreeMatchesRegressionCoverageCommit": true,
+    "regressionCoverageCommit": "26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
     "check": {
       "status": "passed",
-      "completedAt": "2026-09-21T12:02:00Z",
+      "completedAt": "2026-09-21T12:31:00Z",
       "vitest": "24 files / 259 tests",
-      "api": "252 tests",
+      "api": "255 tests",
       "worker": "9 tests",
       "agentIntegration": "23 tests"
     },
     "build": {
       "status": "passed",
-      "completedAt": "2026-09-21T12:02:00Z",
+      "completedAt": "2026-09-21T12:31:00Z",
       "workerMode": "dry-run"
     },
     "e2e": {
       "status": "passed",
-      "completedAt": "2026-09-21T12:00:00Z",
-      "tests": 92,
+      "completedAt": "2026-09-21T12:33:53Z",
+      "tests": 94,
       "browsers": [
         "chrome",
         "safari-webkit"
       ],
       "database": "disposable SQLite on isolated test services"
     },
+    "secondIndependentReview": {
+      "candidateCommit": "acadd84cbb08d7e75b5e5d279d2868005a0a61ac",
+      "P0": 0,
+      "P1": 0,
+      "P2": 0,
+      "P3": 1,
+      "P3Disposition": "covered by permanent tests in regressionCoverageCommit; exact-candidate rereview pending"
+    },
     "liveMatrixRerunOnImplementationCandidate": false,
+    "liveMatrixRerunOnRegressionCoverageCandidate": false,
     "claimBoundary": "Real remote observations remain bound to the earlier recorded execution. Later candidate gates are regression evidence and do not claim a second live matrix run."
   },
   "scope": {
@@ -313,7 +334,7 @@
       "D1"
     ],
     "openAcceptance": [
-      "independent rereview of the credential-revision and partial-reconnect candidate",
+      "independent rereview of regression-coverage candidate 26ac2219555401b60a9ec5f5e0e86a67bc71cb8a",
       "one authorized H-N01 guarded real-model pilot on the exact clean candidate",
       "full G3 40 x 3 heldout trials with human review and cost accounting",
       "G4 prospective seven-day use record"

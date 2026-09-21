@@ -25,6 +25,8 @@ export function recursOnDate(
 ) {
   const date = localDateSchema.parse(candidateDate);
 
+  if (series.disabled) return false;
+
   if (date < series.startDate) {
     return false;
   }

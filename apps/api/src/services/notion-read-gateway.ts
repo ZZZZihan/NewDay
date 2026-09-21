@@ -1,16 +1,19 @@
 import { Client, iterateAllDataSourceRows, isHTTPResponseError, type PageObjectResponse } from "@notionhq/client";
 import { notionPlanDateSchema, type NotionConnection } from "@newday/core/contracts/notion-sync";
+import { notionRuleSourceSchema, type NotionRuleSource } from "@newday/core/contracts/notion-sync";
+import { localDateSchema, recurrencePatternSchema } from "@newday/core/domain/planner-model";
 
-export type ReadTable = "areas" | "projects" | "tasks";
+export type ReadTable = "areas" | "projects" | "rules" | "tasks";
 type RowBase = { id: string; url: string; createdAt: string; editedAt: string; inTrash: boolean };
 export type AreaRow = RowBase & { kind: "area"; title: string };
 export type ProjectRow = RowBase & { kind: "project"; title: string; areaIds: string[] };
+export type RuleRow = RowBase & { kind: "rule"; source: NotionRuleSource };
 export type TaskRow = RowBase & {
   kind: "task"; title: string; date: [string, string] | null; completed: boolean;
   projectIds: string[]; directAreaIds: string[]; ruleIds: string[]; clientKey: string | null;
   occurrenceKey: string | null;
 };
-export type ReadRow = AreaRow | ProjectRow | TaskRow;
+export type ReadRow = AreaRow | ProjectRow | RuleRow | TaskRow;
 
 export class NotionReadFailure extends Error {
   constructor(public readonly category: "authorization" | "permission" | "rate_limited" | "schema" | "incomplete" | "network" | "remote", message: string) {
@@ -123,6 +126,9 @@ async function validateSchema(client: Client, connection: NotionConnection, tabl
   const expected: Record<ReadTable, Record<string, { type: string; target?: string }>> = {
     areas: { Name: { type: "title" } },
     projects: { Name: { type: "title" }, Area: { type: "relation", target: connection.dataSources.areas?.dataSourceId } },
+    rules: { Name: { type: "title" }, "Active Dates": { type: "date" }, Pattern: { type: "select" },
+      Weekdays: { type: "multi_select" }, "Month Day": { type: "number" },
+      "Excluded Dates": { type: "rich_text" } },
     tasks: {
       Name: { type: "title" }, "Plan Date": { type: "date" }, Completed: { type: "checkbox" },
       Project: { type: "relation", target: connection.dataSources.projects?.dataSourceId },
@@ -158,6 +164,34 @@ export async function parseRow(client: Client, page: PageObjectResponse, table: 
   if (table === "areas") return { ...base, kind: "area", title };
   if (table === "projects") return { ...base, kind: "project", title,
     areaIds: await relations(client, page.id, propertyIds.Area, prop("Area", "relation")) };
+  if (table === "rules") {
+    const active = asRecord(prop("Active Dates", "date")).date;
+    if (!active || typeof active !== "object") throw new NotionReadFailure("schema", "Notion rule Active Dates is empty");
+    const dates = asRecord(active);
+    const startDate = localDateSchema.safeParse(dates.start);
+    const endDate = dates.end === null || dates.end === undefined ? null : localDateSchema.safeParse(dates.end);
+    if (!startDate.success || (endDate && !endDate.success)) {
+      throw new NotionReadFailure("schema", "Notion rule Active Dates must use date-only values");
+    }
+    const patternName = asRecord(prop("Pattern", "select")).select;
+    const kind = patternName && typeof patternName === "object" ? asRecord(patternName).name : null;
+    const weekdaysRaw = asRecord(prop("Weekdays", "multi_select")).multi_select;
+    const monthDay = asRecord(prop("Month Day", "number")).number;
+    if (!Array.isArray(weekdaysRaw)) throw new NotionReadFailure("schema", "Notion rule Weekdays is invalid");
+    const weekdays = weekdaysRaw.map((item) => Number(asRecord(item).name)).sort((a, b) => a - b);
+    const pattern = recurrencePatternSchema.safeParse(kind === "weekly" ? { kind, weekdays }
+      : kind === "monthly" ? { kind, dayOfMonth: monthDay } : { kind });
+    if (!pattern.success) throw new NotionReadFailure("schema", "Notion rule recurrence pattern is invalid");
+    const excludedText = await fullText(client, page.id, propertyIds["Excluded Dates"],
+      prop("Excluded Dates", "rich_text"), "rich_text");
+    let excludedDates: unknown = [];
+    try { if (excludedText.trim()) excludedDates = JSON.parse(excludedText); }
+    catch { throw new NotionReadFailure("schema", "Notion rule Excluded Dates is not JSON"); }
+    const source = notionRuleSourceSchema.safeParse({ title, startDate: startDate.data,
+      endDate: endDate?.success ? endDate.data : null, pattern: pattern.data, excludedDates });
+    if (!source.success) throw new NotionReadFailure("schema", "Notion rule fields are invalid");
+    return { ...base, kind: "rule", source: source.data };
+  }
   const dateProperty = prop("Plan Date", "date");
   if (dateProperty.type !== "date") throw new NotionReadFailure("schema", "Notion date property changed type");
   const rawDate = dateProperty.date;

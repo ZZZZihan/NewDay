@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { localDateSchema } from "../domain/planner-model";
+import { localDateSchema, recurrencePatternSchema } from "../domain/planner-model";
 
 /** A date range is one shared field. Both ends are absent or both are dates. */
 export const notionPlanDateSchema = z.tuple([localDateSchema, localDateSchema]).nullable()
@@ -84,15 +84,54 @@ export const notionTaskMappingSchema = z.object({
   dataSourceId: nonEmptyId,
   remotePageId: nonEmptyId.nullable(),
   clientKey: nonEmptyId,
+  rulePageId: nonEmptyId.optional(),
+  occurrenceKey: nonEmptyId.optional(),
   baseline: notionTaskFieldsSchema.nullable(),
   status: z.enum(["pending_create", "active", "needs_review", "archived"]),
   updatedAt: z.string().datetime({ offset: true }),
 }).strict().superRefine((mapping, context) => {
+  if (Boolean(mapping.rulePageId) !== Boolean(mapping.occurrenceKey)) {
+    context.addIssue({ code: "custom", message: "Notion 实例必须同时绑定规则和发生键" });
+  }
   if (mapping.status === "active" && (mapping.remotePageId === null || mapping.baseline === null)) {
     context.addIssue({ code: "custom", message: "已关联任务必须有远端页面和已确认共同基准" });
   }
 });
 export type NotionTaskMapping = z.infer<typeof notionTaskMappingSchema>;
+
+export const notionRuleSourceSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  startDate: localDateSchema,
+  endDate: localDateSchema.nullable(),
+  pattern: recurrencePatternSchema,
+  excludedDates: z.array(localDateSchema),
+}).strict().superRefine((source, context) => {
+  if (source.endDate !== null && source.endDate < source.startDate) {
+    context.addIssue({ code: "custom", message: "Notion 规则结束日不能早于开始日" });
+  }
+  if (new Set(source.excludedDates).size !== source.excludedDates.length) {
+    context.addIssue({ code: "custom", message: "Notion 规则排除日期不能重复" });
+  }
+});
+export type NotionRuleSource = z.infer<typeof notionRuleSourceSchema>;
+
+export const notionRuleMappingSchema = z.object({
+  workspaceId: nonEmptyId,
+  dataSourceId: nonEmptyId,
+  remotePageId: nonEmptyId,
+  logicalSeriesId: nonEmptyId,
+  source: notionRuleSourceSchema,
+  generationAfter: localDateSchema.optional(),
+  generationReconcilePending: z.boolean().optional(),
+  status: z.enum(["active", "archived"]),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+export type NotionRuleMapping = z.infer<typeof notionRuleMappingSchema>;
+
+export function notionLogicalSeriesId(workspaceId: string, rulePageId: string): string {
+  if (!workspaceId || !rulePageId) throw new Error("Notion rule identity is incomplete");
+  return `notion:${workspaceId}:${rulePageId}`;
+}
 
 export const notionOutboxOperationSchema = z.object({
   operationId: nonEmptyId,
@@ -175,6 +214,7 @@ export const notionSyncArchiveSchema = z.object({
   connections: z.array(notionConnectionSchema),
   initializationSteps: z.array(notionInitializationStepSchema).optional(),
   taskMappings: z.array(notionTaskMappingSchema),
+  ruleMappings: z.array(notionRuleMappingSchema).optional(),
   outbox: z.array(notionOutboxOperationSchema),
   conflicts: z.array(notionConflictRecordSchema),
   watermarks: z.array(notionScanWatermarkSchema),
@@ -185,7 +225,7 @@ export const notionSyncArchiveSchema = z.object({
 export type NotionSyncArchive = z.infer<typeof notionSyncArchiveSchema>;
 
 export function emptyNotionSyncArchive(): NotionSyncArchive {
-  return { version: 1, connections: [], initializationSteps: [], taskMappings: [], outbox: [], conflicts: [], watermarks: [], readNodes: [], readTaskContexts: [], restoreQuarantine: [] };
+  return { version: 1, connections: [], initializationSteps: [], taskMappings: [], ruleMappings: [], outbox: [], conflicts: [], watermarks: [], readNodes: [], readTaskContexts: [], restoreQuarantine: [] };
 }
 
 /** The rich-text key is stable across retries and a restored installation. */

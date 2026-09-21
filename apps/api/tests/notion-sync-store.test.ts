@@ -486,6 +486,7 @@ test("a version 3 database gains sync tables without changing existing planner d
         DROP TABLE notion_conflicts;
         DROP TABLE notion_outbox;
         DROP TABLE notion_task_mappings;
+        DROP TABLE notion_rule_mappings;
         DROP TABLE notion_initialization_steps;
         DROP TABLE notion_connections;
         PRAGMA user_version=3;
@@ -504,7 +505,7 @@ test("a version 3 database gains sync tables without changing existing planner d
     } finally { migrated.close(); }
 
     const reopened = new DatabaseSync(path);
-    try { assert.equal(reopened.prepare("PRAGMA user_version").get()?.user_version, 6); }
+    try { assert.equal(reopened.prepare("PRAGMA user_version").get()?.user_version, 7); }
     finally { reopened.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

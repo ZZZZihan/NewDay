@@ -65,6 +65,10 @@ export function DayPlanner() {
   );
   const taskTotal = (dayPlan?.counts.open ?? 0) + (dayPlan?.counts.completed ?? 0);
   const progress = taskTotal ? Math.round(((dayPlan?.counts.completed ?? 0) / taskTotal) * 100) : 0;
+  const editingTaskLinked = Boolean(editingTask && dayPlan &&
+    [...dayPlan.focus, ...dayPlan.overdue, ...dayPlan.open, ...dayPlan.completed]
+      .some((item) => item.task.id === editingTask.id && item.notion)) ||
+    Boolean(editingTask && life.workspace?.notionByTaskId?.[editingTask.id]);
 
   async function mutateLife(operation: () => Promise<unknown>) {
     const saved = await life.mutate(operation);
@@ -395,11 +399,9 @@ export function DayPlanner() {
         <TaskEditor
           key={`${editingTask.id}:${editingSeries?.updatedAt ?? "one-off"}`}
           task={editingTask}
-          linked={Boolean(dayPlan && [...dayPlan.focus, ...dayPlan.overdue, ...dayPlan.open, ...dayPlan.completed]
-            .some((item) => item.task.id === editingTask.id && item.notion)) ||
-            Boolean(life.workspace?.notionByTaskId?.[editingTask.id])}
+          linked={editingTaskLinked}
           series={editingSeries}
-          allowSeriesActions={editingSeriesActionsAllowed}
+          allowSeriesActions={editingSeriesActionsAllowed && !editingTaskLinked}
           busy={isSaving || isUndoing || seriesLoading || Boolean(seriesError)}
           loading={seriesLoading}
           loadError={seriesError}
@@ -414,7 +416,7 @@ export function DayPlanner() {
             if (saved) { setEditingTaskId(null); await life.refresh(); }
           }}
           onDelete={async () => { await deleteEditingTask(); await life.refresh(); }}
-          onStopRecurrence={editingSeries ? stopEditingRecurrence : undefined}
+          onStopRecurrence={editingSeries && !editingTaskLinked ? stopEditingRecurrence : undefined}
         />
       ) : null}
 

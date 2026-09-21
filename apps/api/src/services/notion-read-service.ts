@@ -2,19 +2,21 @@ import { randomUUID } from "node:crypto";
 
 import { AGENT_NAMESPACES, dateInTimeZone, type AgentPreferences } from "@newday/core/contracts/agent-planning";
 import {
-  notionClientKey, notionTaskFieldsSchema,
+  notionClientKey, notionLogicalSeriesId, notionTaskFieldsSchema,
   type NotionConnection, type NotionReadNode, type NotionReadTaskContext,
   type NotionScanWatermark, type NotionTaskMapping,
 } from "@newday/core/contracts/notion-sync";
-import { taskSchema, type Task } from "@newday/core/domain/planner-model";
+import { localDateSchema, taskSchema, type Task } from "@newday/core/domain/planner-model";
+import { recursOnDate } from "@newday/core/domain/planner-recurrence";
 import { clearUndoReceipts } from "@newday/core/application/planner-undo";
 
 import { ApiError } from "../http/api-error.js";
 import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
 import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
-import { NotionReadFailure, type AreaRow, type NotionReadGateway, type ProjectRow, type ReadRow, type ReadTable, type TaskRow } from "./notion-read-gateway.js";
+import { NotionReadFailure, type AreaRow, type NotionReadGateway, type ProjectRow, type ReadRow, type ReadTable, type RuleRow, type TaskRow } from "./notion-read-gateway.js";
+import { applyNotionRules, enqueueNotionRuleInstances } from "./notion-rule-service.js";
 
-const tables: ReadTable[] = ["areas", "projects", "tasks"];
+const tables: ReadTable[] = ["areas", "projects", "rules", "tasks"];
 type ReadStatus = {
   workspaceId: string; connectionStatus: NotionConnection["status"] | "not_initialized";
   pauseReason: NotionConnection["pauseReason"] | null;
@@ -76,6 +78,7 @@ export class NotionReadService {
     const token = credential.access_token;
     const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
     const existingMappings = (await this.store.listNotionTaskMappings()).filter((mapping) => mapping.workspaceId === workspaceId);
+    const existingRules = await this.store.listNotionRuleMappings(workspaceId);
     const unresolved = (await this.store.listNotionOutboxOperations()).some((operation) =>
       operation.workspaceId === workspaceId && ["pending", "sending", "unknown", "quarantined"].includes(operation.status));
     if (unresolved) throw new ApiError(409, "Notion 待发送或未知操作需先核对，不能直接覆盖本地任务");
@@ -88,12 +91,14 @@ export class NotionReadService {
       await this.setWatermark(workspaceId, sourceId, { lastAttemptAt: startAt });
       try {
         const rows = await this.gateway.scan(token, connection, table);
-        if (rows.some((row) => row.kind !== (table === "areas" ? "area" : table === "projects" ? "project" : "task"))) {
+        const expectedKind = { areas: "area", projects: "project", rules: "rule", tasks: "task" }[table];
+        if (rows.some((row) => row.kind !== expectedKind)) {
           throw new NotionReadFailure("schema", "Notion scan returned a row from a different data source");
         }
-        const distinct = uniqueRows(rows).filter((row) => table === "tasks" || !row.inTrash);
+        const distinct = uniqueRows(rows).filter((row) => table === "tasks" || table === "rules" || !row.inTrash);
         const archivedIds = table === "tasks"
-          ? await this.checkMissingTasks(token, existingMappings, distinct) : [];
+          ? await this.checkMissingTasks(token, existingMappings, distinct)
+          : table === "rules" ? await this.checkMissingRules(token, existingRules, distinct) : [];
         await this.store.transaction(async () => {
           await this.assertCurrent(connection, token, epoch);
           if (table === "areas") {
@@ -113,12 +118,30 @@ export class NotionReadService {
                 kind: "project" as const, title: row.title, url: row.url,
                 areaPageId: row.areaIds[0], updatedAt: row.editedAt };
             }));
+          } else if (table === "rules") {
+            const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
+            if (!preferences?.timeZone && (distinct.length || existingRules.length)) {
+              throw new ApiError(409, "请先确认用户时区，再同步 Notion 重复规则");
+            }
+            const at = this.timestamp();
+            const apply = () => applyNotionRules(this.store, connection, distinct as RuleRow[], archivedIds, at);
+            const changed = preferences?.timeZone
+              ? await this.store.withEventContext({ date: dateInTimeZone(this.clock(), preferences.timeZone),
+                at, source: "system", kind: "notion_observed" }, apply)
+              : await apply();
+            if (changed) clearUndoReceipts(this.store);
           } else {
             const pendingWrite = (await this.store.listNotionOutboxOperations()).some((operation) =>
               operation.workspaceId === workspaceId && ["pending", "sending", "unknown", "quarantined"].includes(operation.status));
             if (pendingWrite) throw new ApiError(409, "Notion 扫描期间有新的待发送操作；先完成写回再重试读取");
             const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
-            const apply = () => this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects);
+            const apply = async () => {
+              const changed = await this.applyTasks(connection, distinct as TaskRow[], archivedIds, areas, projects);
+              if (!preferences?.timeZone) return changed;
+              const generated = await enqueueNotionRuleInstances(this.store, connection,
+                dateInTimeZone(this.clock(), preferences.timeZone), this.timestamp());
+              return changed || generated > 0;
+            };
             const changed = preferences?.timeZone
               ? await this.store.withEventContext({ date: dateInTimeZone(this.clock(), preferences.timeZone),
                 at: this.timestamp(), source: "system", kind: "notion_observed" }, apply)
@@ -153,14 +176,32 @@ export class NotionReadService {
     const mappings = await this.store.listNotionTaskMappings();
     const byRemote = new Map(mappings.filter((mapping) => mapping.workspaceId === connection.workspaceId && mapping.remotePageId)
       .map((mapping) => [mapping.remotePageId!, mapping]));
+    const byOccurrence = new Map(mappings.filter((mapping) => mapping.workspaceId === connection.workspaceId && mapping.occurrenceKey)
+      .map((mapping) => [mapping.occurrenceKey!, mapping]));
+    const rules = new Map((await this.store.listNotionRuleMappings(connection.workspaceId))
+      .map((mapping) => [mapping.remotePageId, mapping]));
+    const seenOccurrences = new Set<string>();
     for (const row of rows) {
       if (row.ruleIds.length > 1) throw new NotionReadFailure("schema", `Notion task ${row.id} has multiple rules`);
       if (Boolean(row.ruleIds.length) !== Boolean(row.occurrenceKey)) {
         throw new NotionReadFailure("schema", `Notion task ${row.id} has an incomplete rule instance identity`);
       }
-      if (row.ruleIds.length === 1) {
-        if (byRemote.has(row.id)) throw new NotionReadFailure("schema", `Linked task ${row.id} became a rule instance`);
-        continue; // Rule instances belong to T7, never materialize as one-off tasks.
+      const rulePageId = row.ruleIds[0] ?? null;
+      const rule = rulePageId ? rules.get(rulePageId) : undefined;
+      let occurrenceDate: string | undefined;
+      if (rulePageId) {
+        if (!rule) throw new NotionReadFailure("schema", `Notion task ${row.id} references an inaccessible rule`);
+        const prefix = `${notionLogicalSeriesId(connection.workspaceId, rulePageId)}:`;
+        const parsedDate = localDateSchema.safeParse(row.occurrenceKey?.startsWith(prefix)
+          ? row.occurrenceKey.slice(prefix.length) : null);
+        if (!parsedDate.success || !row.occurrenceKey || seenOccurrences.has(row.occurrenceKey)) {
+          throw new NotionReadFailure("schema", `Notion task ${row.id} has a duplicate or invalid occurrence key`);
+        }
+        if (!row.date || row.date[0] !== row.date[1]) {
+          throw new NotionReadFailure("schema", `Notion occurrence ${row.id} must have one plan date`);
+        }
+        occurrenceDate = parsedDate.data;
+        seenOccurrences.add(row.occurrenceKey);
       }
       if (row.projectIds.length > 1 || row.directAreaIds.length > 1) {
         throw new NotionReadFailure("schema", `Notion task ${row.id} has ambiguous ownership`);
@@ -170,14 +211,26 @@ export class NotionReadService {
       const areaId = project?.areaIds[0] ?? row.directAreaIds[0] ?? null;
       if (areaId && !areaIds.has(areaId)) throw new NotionReadFailure("schema", `Notion task ${row.id} area is inaccessible`);
       const fields = notionTaskFieldsSchema.parse({ title: row.title, date: row.date, completed: row.completed });
-      const previousMapping = byRemote.get(row.id);
-      if (previousMapping && row.clientKey !== null && row.clientKey !== previousMapping.clientKey) {
+      const previousMapping = byRemote.get(row.id) ?? (row.occurrenceKey ? byOccurrence.get(row.occurrenceKey) : undefined);
+      if (previousMapping && (previousMapping.rulePageId !== (rulePageId ?? undefined) ||
+        previousMapping.occurrenceKey !== (row.occurrenceKey ?? undefined) ||
+        previousMapping.remotePageId !== null && previousMapping.remotePageId !== row.id)) {
+        throw new NotionReadFailure("schema", `Notion task ${row.id} changed its rule identity`);
+      }
+      let localId = previousMapping?.localTaskId ??
+        (row.occurrenceKey ? (await this.store.getTaskByOccurrenceKey(row.occurrenceKey))?.id ?? row.occurrenceKey : randomUUID());
+      if (!row.occurrenceKey) while (!previousMapping && await this.store.getTask(localId)) localId = randomUUID();
+      const previous = await this.store.getTask(localId);
+      if (row.occurrenceKey && previous && previous.occurrenceKey !== row.occurrenceKey) {
+        throw new NotionReadFailure("schema", `Notion occurrence ${row.id} collides with a local task`);
+      }
+      if (row.clientKey !== null && row.clientKey !==
+        (previousMapping?.clientKey ?? notionClientKey(connection.installationId, localId))) {
         throw new NotionReadFailure("schema", `Linked task ${row.id} has a different NewDay Key`);
       }
-      let localId = previousMapping?.localTaskId ?? randomUUID();
-      while (!previousMapping && await this.store.getTask(localId)) localId = randomUUID();
-      const previous = await this.store.getTask(localId);
       if (previousMapping?.status === "needs_review") throw new NotionReadFailure("schema", `Notion mapping ${row.id} requires review`);
+      const series = rule ? await this.store.getRecurrenceSeries(rule.logicalSeriesId) : undefined;
+      if (rule && !series) throw new NotionReadFailure("schema", `Notion rule ${rulePageId} lost its local series`);
       // Notion's checkbox does not identify when completion happened. Keep a
       // known local completion timestamp, otherwise explicitly record unknown.
       const completedAt = fields.completed && previous?.status === "completed" ? previous.completedAt : null;
@@ -189,6 +242,13 @@ export class NotionReadService {
         createdAt: previous?.createdAt ?? row.createdAt,
         updatedAt: at, completedAt, completedOn,
         ...(previous?.archived !== undefined || row.inTrash ? { archived: row.inTrash } : {}),
+        ...(rule && series && occurrenceDate && row.occurrenceKey ? {
+          seriesId: series.id, logicalSeriesId: rule.logicalSeriesId,
+          occurrenceDate, occurrenceKey: row.occurrenceKey,
+          isSeriesException: previous?.isSeriesException === true ||
+            fields.date?.[0] !== occurrenceDate || fields.title !== series.title ||
+            !recursOnDate(series, occurrenceDate),
+        } : {}),
       });
       const sameBusinessState = previous && JSON.stringify({ ...previous, updatedAt: next.updatedAt }) === JSON.stringify(next);
       if (!sameBusinessState) {
@@ -203,6 +263,7 @@ export class NotionReadService {
         localTaskId: localId, workspaceId: connection.workspaceId,
         dataSourceId: connection.dataSources.tasks!.dataSourceId, remotePageId: row.id,
         clientKey: previousMapping?.clientKey ?? notionClientKey(connection.installationId, localId),
+        ...(rulePageId && row.occurrenceKey ? { rulePageId, occurrenceKey: row.occurrenceKey } : {}),
         baseline: fields, status: row.inTrash ? "archived" : "active", updatedAt: at,
       };
       if (!previousMapping || JSON.stringify({ ...previousMapping, updatedAt: at }) !== JSON.stringify(mapping)) {
@@ -236,6 +297,24 @@ export class NotionReadService {
       const page = await this.gateway.readKnownPage(token, mapping.remotePageId);
       if (!page || page.id !== mapping.remotePageId) throw new NotionReadFailure("incomplete", "Known Notion task could not be verified");
       if (!page.inTrash) throw new NotionReadFailure("incomplete", "Known Notion task was absent from a complete query but was not in trash");
+      archived.push(mapping.remotePageId);
+    }
+    return archived;
+  }
+
+  private async checkMissingRules(token: string,
+    mappings: Awaited<ReturnType<SQLitePlannerStore["listNotionRuleMappings"]>>, rows: ReadRow[]): Promise<string[]> {
+    const present = new Set(rows.map((row) => row.id));
+    const archived = rows.filter((row) => row.inTrash).map((row) => row.id);
+    for (const mapping of mappings) {
+      if (present.has(mapping.remotePageId)) continue;
+      const page = await this.gateway.readKnownPage(token, mapping.remotePageId);
+      if (!page || page.id !== mapping.remotePageId) {
+        throw new NotionReadFailure("incomplete", "Known Notion rule could not be verified");
+      }
+      if (!page.inTrash) {
+        throw new NotionReadFailure("incomplete", "Known Notion rule was absent from a complete query but was not in trash");
+      }
       archived.push(mapping.remotePageId);
     }
     return archived;

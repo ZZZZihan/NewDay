@@ -151,7 +151,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 
 ### Notion 连接与同步候选 API
 
-`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化。COL-35/COL-37 候选接入一次性任务读取与写回，仍需在隔离 Notion 工作区验收。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md)、[结构初始化说明](./notion-structure-operations.md)和[一次性任务写回说明](./notion-write-operations.md)。
+`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化。COL-35/COL-37 候选接入一次性任务读取与写回，COL-38 候选增加重复规则读取与稳定实例同步；这些路径仍需在隔离 Notion 工作区验收。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md)、[结构初始化说明](./notion-structure-operations.md)、[一次性任务写回说明](./notion-write-operations.md)和[联动契约](./notion-sync-contract.md)。
 
 | 方法与路径 | 输入 | 成功响应 |
 | --- | --- | --- |
@@ -164,7 +164,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `GET /api/notion/connections/:workspaceId/structure` | 无 | 当前初始化步骤、读回 ID 与待核对类别，不含令牌 |
 | `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
 | `GET /api/notion/connections/:workspaceId/read` | 无 | 各数据源扫描水位与失败类别 |
-| `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、一次性任务 |
+| `POST /api/notion/connections/:workspaceId/read/scan` | `{}` | 完整读取并应用主线、项目、规则、任务与实例；生成窗口内缺少的规则实例进入持久待发送队列 |
 | `GET /api/notion/connections/:workspaceId/sync` | 无 | 写回操作状态及字段冲突，不含凭据 |
 | `POST /api/notion/connections/:workspaceId/sync/drain` | `{}` | 串行尝试待发送操作，返回最新状态 |
 | `POST /api/notion/connections/:workspaceId/sync/operations/:operationId/reconcile` | `{}` | 对未知操作只读核对；不再次发送 |
@@ -174,7 +174,7 @@ Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要
 
 ## 存储、备份与旧数据
 
-默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、收集箱、两级文件夹、资料、资料任务关联、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
+默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、收集箱、两级文件夹、资料、资料任务关联、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite schema v7 增加 Notion 规则映射。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
 
 `PlanningVersion` 由 `datasetEpoch` 与 `plannerRevision` 组成。最外事务中第一次真实任务、重复规则或重点变更使 revision 增加一次，后续同事务变更不重复增加；只读、no-op、运行记录、上下文、偏好与反馈不增加任务 revision。任务替换导入、首次浏览器迁移和独立 Agent 导入成功后产生新 epoch；失败时保留原状态。上下文和偏好各有独立 revision，采纳同时核对任务版本、上下文版本、偏好版本和当天时区。
 
@@ -182,7 +182,7 @@ Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要
 
 执行去重账本与可清除的展示历史分开。一次成功应用在同一事务内保存重点集合、版本、采纳事件、反馈和回执。删除 Agent 历史会删除上下文、快照、运行、提案、反馈、事件和导入归档，同时清除回执详情；最小账本中的 operation ID、请求摘要、proposal ID、数据集和执行终态仍保留，防止旧请求重新执行。清理后的结果查询返回 `details_deleted`，不再提供恢复资格或虚构原详情。任务和显式偏好不受清理影响。
 
-用户备份使用可移植的 JSON。当前 T5/T3 组合候选新导出为版本 6，导入兼容 1～6；v1～v5 视作纯本地数据，不按标题或 ID 推断 Notion 映射。旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。v6 保存连接结构 ID、初始化尝试与读回记录、任务映射、逐字段基准、outbox、冲突、水位和恢复隔离记录，不含 OAuth 令牌或 client secret；导入后连接暂停，未完成发送进入隔离，须完成远端核对后才可恢复发送。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
+用户备份使用可移植的 JSON。当前候选新导出为版本 6，导入兼容 1～6；v1～v5 视作纯本地数据，不按标题或 ID 推断 Notion 映射。旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。v6 保存连接结构 ID、初始化尝试与读回记录、任务与规则映射、逐字段基准、outbox、冲突、水位和恢复隔离记录，不含 OAuth 令牌或 client secret；导入后连接暂停，未完成发送进入隔离，须完成远端核对后才可恢复发送。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
 
 T5 的 `NotionOutboxDispatcher` 已由 COL-37 接入本机 API、定时队列、HTTP 状态接口和固定版本的 SDK 传输。任务命令在同一 SQLite 事务提交业务变更、映射和待发送操作；外部请求在事务外执行。成功响应丢失时按稳定键查找并读回，未知结果暂停且只读核对。远端预读失败而尚未发出写请求时，保留待发送操作并暂停，用户可明确恢复重试。较新的本地意图取代尚未发送的旧意图；逐字段共同基准决定合并与冲突记录。扫描在应用任务前再次检查待发送队列，避免并发扫描覆盖本地修改。假传输、HTTP 和 SQLite 测试验证这些路径；真实隔离工作区的 API 响应、限流和条件写入能力尚未验收。恢复隔离记录的人工核销也仍需后续实现。
 

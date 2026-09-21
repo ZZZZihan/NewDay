@@ -47,7 +47,7 @@ function connection(): NotionConnection {
 }
 
 class FakeReadGateway implements NotionReadGateway {
-  rows: Record<ReadTable, ReadRow[]> = { areas: [area()], projects: [project()], tasks: [task()] };
+  rows: Record<ReadTable, ReadRow[]> = { areas: [area()], projects: [project()], rules: [], tasks: [task()] };
   fail: ReadTable | null = null;
   knownPageTrash = new Map<string, boolean>();
   calls: ReadTable[] = [];
@@ -124,14 +124,14 @@ test("incomplete pages retain the old task and watermark; only explicit trash ar
     const service = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
     await service.scan(workspaceId);
     const [mapping] = await store.listNotionTaskMappings();
-    const oldSuccess = (await service.status(workspaceId)).sources[2].watermark?.lastSuccessAt;
+    const oldSuccess = (await service.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt;
     gateway.rows.tasks = [task(["2026-09-23", "2026-09-23"], "改过的任务")];
     gateway.fail = "tasks";
     await assert.rejects(service.scan(workspaceId), /lost its final page/);
     assert.equal((await store.getTask(mapping.localTaskId))?.title, "读书");
     let status = await service.status(workspaceId);
-    assert.equal(status.sources[2].watermark?.lastSuccessAt, oldSuccess);
-    assert.equal(status.sources[2].watermark?.lastError, "incomplete");
+    assert.equal(status.sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt, oldSuccess);
+    assert.equal(status.sources.find((source) => source.table === "tasks")?.watermark?.lastError, "incomplete");
     gateway.fail = null;
     await service.scan(workspaceId);
     assert.equal((await store.getTask(mapping.localTaskId))?.title, "改过的任务");
@@ -145,7 +145,7 @@ test("incomplete pages retain the old task and watermark; only explicit trash ar
     assert.equal((await store.getNotionTaskMapping(mapping.localTaskId))?.status, "archived");
     assert.equal((await getDayPlan(store, { selectedDate: "2026-09-23", asOfDate: "2026-09-23" })).open.length, 0);
     status = await service.status(workspaceId);
-    assert.equal(status.sources[2].watermark?.lastError, null);
+    assert.equal(status.sources.find((source) => source.table === "tasks")?.watermark?.lastError, null);
   } finally { store.close(); credentials.close(); }
 });
 
@@ -158,11 +158,11 @@ test("a linked page with a changed NewDay Key cannot overwrite its local task", 
     const service = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
     await service.scan(workspaceId);
     const [mapping] = await store.listNotionTaskMappings();
-    const success = (await service.status(workspaceId)).sources[2].watermark?.lastSuccessAt;
+    const success = (await service.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt;
     gateway.rows.tasks = [{ ...task(["2026-09-23", "2026-09-23"], "错误归属"), clientKey: "another-installation" }];
     await assert.rejects(service.scan(workspaceId), /different NewDay Key/);
     assert.equal((await store.getTask(mapping.localTaskId))?.title, "读书");
-    assert.equal((await service.status(workspaceId)).sources[2].watermark?.lastSuccessAt, success);
+    assert.equal((await service.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt, success);
   } finally { store.close(); credentials.close(); }
 });
 
@@ -175,7 +175,7 @@ test("a scan begun before a local linked edit cannot overwrite that pending writ
     const read = new NotionReadService(store, credentials, gateway, () => Date.parse(at));
     await read.scan(workspaceId);
     const [mapping] = await store.listNotionTaskMappings();
-    const previousSuccess = (await read.status(workspaceId)).sources[2].watermark?.lastSuccessAt;
+    const previousSuccess = (await read.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt;
     let enter!: () => void;
     let release!: () => void;
     const entered = new Promise<void>((resolve) => { enter = resolve; });
@@ -195,7 +195,7 @@ test("a scan begun before a local linked edit cannot overwrite that pending writ
     await assert.rejects(inFlight, /新的待发送操作/);
     assert.equal((await store.getTask(mapping.localTaskId))?.title, "本机最新标题");
     assert.equal((await store.listNotionOutboxOperations())[0]?.status, "pending");
-    assert.equal((await read.status(workspaceId)).sources[2].watermark?.lastSuccessAt, previousSuccess);
+    assert.equal((await read.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt, previousSuccess);
   } finally { store.close(); credentials.close(); }
 });
 
@@ -214,7 +214,7 @@ test("half-present rule identity fails the task scan without advancing its water
       await assert.rejects(service.scan(workspaceId), (error: unknown) =>
         error instanceof NotionReadFailure && error.category === "schema");
       assert.equal((await store.listNotionTaskMappings()).length, 0);
-      const watermark = (await service.status(workspaceId)).sources[2].watermark;
+      const watermark = (await service.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark;
       assert.equal(watermark?.lastSuccessAt, null);
       assert.equal(watermark?.lastError, "schema");
     } finally { store.close(); credentials.close(); }

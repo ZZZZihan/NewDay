@@ -1,0 +1,19 @@
+{
+  "name": "@newday/core",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "date-fns": "^4.4.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,49 @@
+.panel { margin: 1rem 0 1.4rem; padding: 1.15rem; border: 1px solid var(--line); border-radius: var(--radius-sheet); background: var(--surface); color: var(--ink); font-size: .88rem; line-height: 1.65; min-width: 0; }
+.header { display: flex; gap: 1rem; align-items: center; justify-content: space-between; }
+.header h2 { font-size: 1.05rem; font-weight: 650; margin: 0; }
+.panel p { margin: .35rem 0; }
+.kicker { color: var(--accent); font-size: .7rem; letter-spacing: .12em; }
+.muted, .optional { color: var(--muted); font-size: .78rem; }
+.optional { margin-left: .6rem; font-weight: 400; }
+.body { margin-top: 1rem; }
+.form, .form fieldset { display: grid; gap: .85rem; }
+.panel fieldset { min-width: 0; padding: 0; border: 0; margin: 0; }
+.panel label { display: block; font-weight: 550; }
+.panel input:not([type=checkbox]), .panel textarea, .panel select { display: block; width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: .45rem; background: var(--field-background); color: var(--ink); padding: .65rem .7rem; margin-top: .3rem; font: inherit; font-weight: 400; }
+.panel textarea { resize: vertical; }
+.panel input:focus-visible, .panel textarea:focus-visible, .panel select:focus-visible, .panel button:focus-visible, .panel summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.panel button { min-height: 2.65rem; border-radius: .5rem; padding: .55rem .9rem; font-weight: 550; cursor: pointer; line-height: 1.4; }
+.primary { background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent); }
+.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.panel button:disabled, .panel input:disabled, .panel textarea:disabled { cursor: default; opacity: .55; }
+.panel button:not(:disabled):hover { filter: brightness(.94); }
+.actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.panel .checkbox { display: flex; align-items: flex-start; gap: .65rem; font-weight: 400; padding: .35rem 0; }
+.checkbox input { flex: 0 0 auto; width: 1rem; height: 1rem; margin-top: .3rem; accent-color: var(--accent); }
+.preferences { border-top: 1px solid var(--line); padding-top: .7rem; }
+.preferences label { margin: .75rem 0; }
+.taskConstraint { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.taskConstraint:last-child { border-bottom: 0; }
+.panel summary { cursor: pointer; font-weight: 550; padding: .4rem 0; }
+.proposal { margin-top: 1.15rem; padding: 1rem; border: 1px solid var(--line-strong); border-radius: .65rem; }
+.proposal h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.suggestions { padding-left: 1.3rem; }
+.suggestions > li { margin: .9rem 0; }
+.sources { color: var(--muted); font-size: .78rem; padding-left: 1rem; }
+.panel .selection { border-top: 1px solid var(--line); margin-top: .9rem; padding-top: .5rem; }
+.selection legend { font-weight: 600; padding: .2rem .3rem .2rem 0; }
+.preview, .assumptions { background: var(--surface-muted); padding: .8rem; border-radius: .5rem; margin: .85rem 0; }
+.preview dl { margin: .6rem 0; }
+.preview dl > div { display: grid; grid-template-columns: 3.3rem 1fr; gap: .4rem; padding: .2rem 0; }
+.preview dt { color: var(--muted); }
+.preview dd { margin: 0; overflow-wrap: anywhere; }
+.assumptions ul { margin: .4rem 0; padding-left: 1.25rem; }
+.error, .pending { margin-top: .8rem; padding: .8rem; border: 1px solid var(--danger); border-radius: .5rem; color: var(--error-text); }
+.pending { border-color: var(--line-strong); color: var(--ink); }
+.notice { color: var(--success); padding: .7rem 0; }
+.history { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .5rem; }
+.historyEntry { padding: .9rem 0; border-bottom: 1px solid var(--line); }
+.historyEntry:last-child { border-bottom: 0; }
+.historyEntry ul { padding-left: 1.25rem; }
+@media (max-width: 560px) { .panel { padding: .9rem; } .header { align-items: stretch; flex-direction: column; gap: .65rem; } .columns { grid-template-columns: 1fr; } .proposal { padding: .8rem; } .actions > button { flex-grow: 1; } }

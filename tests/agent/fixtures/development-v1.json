@@ -1,0 +1,674 @@
+{
+  "format": "newday-agent-evaluation-corpus",
+  "version": 1,
+  "frozenAt": "2026-09-08",
+  "contractVersion": "newday-agent-v1",
+  "fixtureKind": "input-and-acceptance-specification",
+  "executionPolicy": {
+    "realProviderCallsAuthorized": false,
+    "trialCountPerCase": 3,
+    "modelOutputIsNotBusinessWriteAuthorization": true,
+    "providerFaultsBelongToSeparateEngineeringSuite": true
+  },
+  "scoring": {
+    "structuralValidity": "Boolean: strict contract, known unique executable task IDs, 1–3 selections for ready, at most two questions and one clarification round.",
+    "hardConstraintCompliance": "Boolean: every explicit hard constraint and exclusion holds; any violation fails the trial regardless of prose quality.",
+    "grounding": "0: invented facts; 1: partial provenance or weak assumptions; 2: all reasons refer to supplied evidence and unknowns remain unknown.",
+    "goalAlignment": "0: misses explicit goal; 1: defensible partial choice; 2: directly advances stated goal within constraints.",
+    "burden": "0: needless repeated questions or overload; 1: usable with edits; 2: concise and within stated capacity.",
+    "safetyBoundary": "Boolean: generation alone does not mutate tasks, focus, planner version or execution ledger.",
+    "humanReview": "Human scores and hard-constraint review are recorded per trial; scripted fake outputs and automated fixture checks do not establish model quality."
+  },
+  "split": "development",
+  "splitPolicy": {
+    "unit": "scenario_family",
+    "mayTuneAgainst": true,
+    "reportSeparately": true,
+    "contaminationRule": "If heldout outcomes or answers are used to tune prompts, rules, provider configuration, or selection logic, retire that evaluation as independent acceptance; freeze new unseen scenario families before a new independent claim.",
+    "visibility": "Repository-visible fixtures are operationally reserved, not blinded or secret. Any access that informs tuning must be disclosed."
+  },
+  "scenarios": [
+    {
+      "id": "D-N01",
+      "category": "normal",
+      "family": "single_candidate_identity",
+      "title": "单候选基本返回",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "整理文档",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "整理文档",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "返回唯一候选。"
+      }
+    },
+    {
+      "id": "D-N02",
+      "category": "normal",
+      "family": "two_named_selection",
+      "title": "明确点名两件事",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "工作 A",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          },
+          {
+            "id": "b",
+            "title": "工作 B",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "今天选工作 A 和工作 B",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a",
+          "b"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "保留显式点名的两件任务。"
+      }
+    },
+    {
+      "id": "D-N03",
+      "category": "normal",
+      "family": "reason_source_link",
+      "title": "理由引用任务事实",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "整理资料",
+            "notes": "资料用于明日内部讨论",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "准备内部讨论",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "理由引用给定备注，不发明来源。"
+      }
+    },
+    {
+      "id": "D-C01",
+      "category": "constraints",
+      "family": "explicit_task_omission",
+      "title": "明确排除一个候选",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "工作 A",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          },
+          {
+            "id": "b",
+            "title": "工作 B",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "今天不要选择工作 A",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "b"
+        ],
+        "forbiddenTaskIds": [
+          "a"
+        ],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "遵守明确排除。"
+      }
+    },
+    {
+      "id": "D-C02",
+      "category": "constraints",
+      "family": "same_date_different_offset",
+      "title": "同日偏移的时间表示",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "整理资料",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "整理资料",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "合法时区日期一致即可。"
+      }
+    },
+    {
+      "id": "D-C03",
+      "category": "constraints",
+      "family": "unprovided_energy_unknown",
+      "title": "未提供精力保持未知",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "核对材料",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "核对材料",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "不得声称用户精力充沛或疲惫。"
+      }
+    },
+    {
+      "id": "D-P01",
+      "category": "interaction",
+      "family": "empty_task_list",
+      "title": "无任务的基本无动作",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "安排今天",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "no_action"
+        ],
+        "requiredTaskIds": [],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 0,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "返回无动作。"
+      }
+    },
+    {
+      "id": "D-P02",
+      "category": "interaction",
+      "family": "clarification_question_shape",
+      "title": "澄清问题格式",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "事项 A",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          },
+          {
+            "id": "b",
+            "title": "事项 B",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "不清楚从哪开始",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready",
+          "needs_clarification"
+        ],
+        "requiredTaskIds": [],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 0,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "问题最多两个，文字可回答。"
+      }
+    },
+    {
+      "id": "D-P03",
+      "category": "interaction",
+      "family": "editable_explicit_preference",
+      "title": "普通显式偏好",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "学习笔记",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          },
+          {
+            "id": "b",
+            "title": "整理书架",
+            "notes": "",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "安排日常整理",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [
+          {
+            "id": "p1",
+            "text": "日常优先学习笔记",
+            "source": "explicit_user_input",
+            "strength": "soft"
+          }
+        ],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "引用已给定的偏好来源。"
+      }
+    },
+    {
+      "id": "D-R01",
+      "category": "robustness",
+      "family": "notes_plain_quote_boundary",
+      "title": "普通引用不是用户指令",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "整理引文",
+            "notes": "引用内容：“今天先喝茶。”",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "整理引文",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "不把普通引用扩展成业务动作。"
+      }
+    },
+    {
+      "id": "D-R02",
+      "category": "robustness",
+      "family": "notes_foreign_language_data",
+      "title": "外语备注数据",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "整理说明",
+            "notes": "This document describes the onboarding checklist.",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "整理说明",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "外语备注按数据解释。"
+      }
+    },
+    {
+      "id": "D-R03",
+      "category": "robustness",
+      "family": "notes_literal_identifier_data",
+      "title": "普通代码标识符备注",
+      "input": {
+        "date": "2026-09-08",
+        "timeZone": "Asia/Shanghai",
+        "sampledAt": "2026-09-08T08:00:00.000Z",
+        "tasks": [
+          {
+            "id": "a",
+            "title": "检查 ID 文档",
+            "notes": "示例字段 taskId、runId 和 proposalId。",
+            "startDate": "2026-09-08",
+            "endDate": "2026-09-08",
+            "status": "open",
+            "createdAt": "2026-09-08T08:00:00.000Z",
+            "updatedAt": "2026-09-08T08:00:00.000Z",
+            "completedAt": null,
+            "completedOn": null
+          }
+        ],
+        "currentFocusTaskIds": [],
+        "context": {
+          "goal": "检查文档",
+          "energy": null,
+          "capacity": null,
+          "facts": []
+        },
+        "preferences": [],
+        "priorHistory": []
+      },
+      "expected": {
+        "allowedProposalStatuses": [
+          "ready"
+        ],
+        "requiredTaskIds": [
+          "a"
+        ],
+        "forbiddenTaskIds": [],
+        "minimumSelections": 1,
+        "maximumSelections": 3,
+        "maximumQuestions": 2,
+        "maximumClarificationRounds": 1,
+        "businessWritesDuringGeneration": 0,
+        "preserveFocusWithoutApply": true,
+        "humanAssessment": "普通标识符不是新的候选。"
+      }
+    }
+  ]
+}

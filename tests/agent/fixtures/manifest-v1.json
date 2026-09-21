@@ -1,0 +1,24 @@
+{
+  "format": "newday-agent-evaluation-manifest",
+  "version": 1,
+  "createdAt": "2026-09-08",
+  "contractVersion": "newday-agent-v1",
+  "heldoutCases": 40,
+  "developmentCases": 12,
+  "heldoutTrialsAtThreePerCase": 120,
+  "files": {
+    "heldout-v1.json": {
+      "sha256": "7677f2f6e827015cd82614d1127240584c127f334ab9d7040f1ae8c70152d92f"
+    },
+    "development-v1.json": {
+      "sha256": "f2b30006907963c02992b967e9469e4c5f6aff1ae570c8ec82bdcb454c62399b"
+    }
+  },
+  "claimBoundaries": [
+    "40 heldout cases are reserved for model-quality acceptance; 12 development cases are available for tuning.",
+    "Family IDs are disjoint, but scenario independence must also be manually reviewed; string disjointness alone is insufficient.",
+    "The 120 heldout model trials have not been run. No provider, model revision, prompt revision, usage, latency, or quality result is claimed.",
+    "Injected provider timeout, 429, malformed output, cancellation, and restart tests belong to offline engineering reliability, not model-quality trials.",
+    "Frozen expected criteria must not be rewritten to accommodate observed provider output. Contract mechanical adapters may be added separately with versioned provenance."
+  ]
+}

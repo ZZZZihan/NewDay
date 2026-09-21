@@ -3,7 +3,12 @@ import { parsePlannerBackup } from "@newday/core/contracts/planner-backup";
 import type { PlannerCommand } from "@newday/core/application/planner-command";
 import { shiftDate, todayKey } from "@newday/core/domain/planner-date";
 import { hasTaskDates, type DatedTask, type RecurrenceSeries, type Task } from "@newday/core/domain/planner-model";
-import { plannerApi, type CommandPreconditions, type CommandReceipt } from "../api/planner-api";
+import {
+  plannerApi,
+  type CommandPreconditions,
+  type CommandReceipt,
+  type RecurrenceSeriesSnapshot,
+} from "../api/planner-api";
 import type { TaskEditorValues } from "../components/task-editor";
 import { downloadBackup } from "../lib/backup-download";
 import { useLegacyMigration } from "../migration/use-legacy-migration";
@@ -42,7 +47,7 @@ export function useDayPlanner() {
   // Polls may replace task props while this editor is open. Keep the opening
   // snapshot stable so the API can reject a save based on stale input.
   const [editingTaskSnapshot, setEditingTaskSnapshot] = useState<Task | null>(null);
-  const [editingSeriesSnapshot, setEditingSeriesSnapshot] = useState<RecurrenceSeries | null>(null);
+  const [editingSeriesSnapshot, setEditingSeriesSnapshot] = useState<RecurrenceSeriesSnapshot | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
@@ -93,7 +98,7 @@ export function useDayPlanner() {
     setEditingSeriesSnapshot((current) =>
       current?.id === editingSeriesId ? current : liveEditingSeries);
   }, [editingSeriesId, liveEditingSeries]);
-  const editingSeries: RecurrenceSeries | undefined = editingSeriesId
+  const editingSeries: RecurrenceSeriesSnapshot | undefined = editingSeriesId
     ? editingSeriesSnapshot?.id === editingSeriesId
       ? editingSeriesSnapshot ?? undefined
       : liveEditingSeries?.id === editingSeriesId ? liveEditingSeries : undefined
@@ -297,7 +302,7 @@ export function useDayPlanner() {
 
   async function saveEditor(
     task: DatedTask,
-    series: RecurrenceSeries | undefined,
+    series: RecurrenceSeriesSnapshot | undefined,
     values: TaskEditorValues,
   ) {
     if (series && (seriesLoading || seriesError)) return false;
@@ -349,7 +354,7 @@ export function useDayPlanner() {
           },
         },
         "后续重复已更新",
-        { expectedSeries: series },
+        { expectedSeries: series, expectedSeriesTailRevision: series.tailRevision },
       );
     }
 

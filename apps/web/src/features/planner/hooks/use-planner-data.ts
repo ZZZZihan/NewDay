@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DayPlan, RecurrenceSeries } from "@newday/core/domain/planner-model";
+import type { DayPlan } from "@newday/core/domain/planner-model";
 
-import { plannerApi } from "../api/planner-api";
+import { plannerApi, type RecurrenceSeriesSnapshot } from "../api/planner-api";
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -80,7 +80,7 @@ export function usePlannerSeries(
   refreshRevision?: DayPlan,
 ) {
   const key = `${seriesId}:${taskRevision}`;
-  const [result, setResult] = useState<{ key: string; series: RecurrenceSeries | null }>();
+  const [result, setResult] = useState<{ key: string; series: RecurrenceSeriesSnapshot | null }>();
   const [settled, setSettled] = useState<{
     key: string;
     refreshRevision?: DayPlan;

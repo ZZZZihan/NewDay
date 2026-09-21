@@ -17,7 +17,14 @@ const dayUrl = `/api/planner/day?selectedDate=${today}&asOfDate=${today}`;
 type CommandPreconditions = {
   expectedTask?: Task;
   expectedSeries?: RecurrenceSeries;
+  expectedSeriesTailRevision?: string;
 };
+
+type RecurrenceSeriesSnapshot = RecurrenceSeries & { tailRevision: string };
+
+function seriesPreconditions(snapshot: RecurrenceSeriesSnapshot): CommandPreconditions {
+  return { expectedSeries: snapshot, expectedSeriesTailRevision: snapshot.tailRevision };
+}
 
 function commands(
   app: FastifyInstance,
@@ -137,8 +144,8 @@ test("recurrence edits require a target-bound opening series snapshot", async (c
       pattern: { kind: "daily" }, end: { kind: "never" }, now,
     } }])).statusCode, 200);
   }
-  const openingSnapshot = (await app.inject("/api/planner/series/daily")).json() as RecurrenceSeries;
-  const otherSnapshot = (await app.inject("/api/planner/series/other")).json() as RecurrenceSeries;
+  const openingSnapshot = (await app.inject("/api/planner/series/daily")).json() as RecurrenceSeriesSnapshot;
+  const otherSnapshot = (await app.inject("/api/planner/series/other")).json() as RecurrenceSeriesSnapshot;
   const update = (newSeriesId: string): PlannerCommand => ({ type: "updateRecurrenceSeries", input: {
     seriesId: openingSnapshot.id,
     newSeriesId,
@@ -151,16 +158,104 @@ test("recurrence edits require a target-bound opening series snapshot", async (c
   assert.equal(missing.statusCode, 409);
   assert.equal(missing.json().message, "重复规则编辑基线缺失；请刷新后重试");
 
+  const missingTailRevision = await commands(app, [update("missing-tail-revision")], client,
+    { expectedSeries: openingSnapshot });
+  assert.equal(missingTailRevision.statusCode, 409);
+  assert.equal(missingTailRevision.json().message, "重复规则编辑基线缺失；请刷新后重试");
+
   const mismatched = await commands(app, [update("mismatched-baseline-replacement")], client,
-    { expectedSeries: otherSnapshot });
+    seriesPreconditions(otherSnapshot));
   assert.equal(mismatched.statusCode, 409);
   assert.equal(mismatched.json().message, "重复规则编辑基线与修改目标不一致；请刷新后重试");
 
   const saved = await commands(app, [update("fresh-replacement")], client,
-    { expectedSeries: openingSnapshot });
+    seriesPreconditions(openingSnapshot));
   assert.equal(saved.statusCode, 200);
   assert.equal((await app.inject("/api/planner/series/fresh-replacement")).json().title,
     "更新后的重复规则");
+
+  const deletedWhileOpen = await commands(app, [update("stale-after-replacement")], client,
+    seriesPreconditions(openingSnapshot));
+  assert.equal(deletedWhileOpen.statusCode, 409);
+  assert.equal(deletedWhileOpen.json().message,
+    "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+});
+
+test("series preconditions preserve missing-target and same-batch create semantics", async (context) => {
+  const app = createApp({ databasePath: ":memory:", clock: () => Date.parse(now) });
+  context.after(() => app.close());
+
+  const missing = await commands(app, [{ type: "updateRecurrenceSeries", input: {
+    seriesId: "absent-series",
+    newSeriesId: "absent-replacement",
+    title: "不存在的系列",
+    materialization: { asOfDate: today, throughDate: "2026-10-08" },
+    now,
+  } }]);
+  assert.equal(missing.statusCode, 400);
+  assert.equal(missing.json().message, "重复系列不存在：absent-series");
+
+  const sameBatch = await commands(app, [
+    { type: "createRecurrenceSeries", input: {
+      id: "same-batch-series", title: "同批新建", startDate: today,
+      pattern: { kind: "daily" }, end: { kind: "never" }, now,
+    } },
+    { type: "updateRecurrenceSeries", input: {
+      seriesId: "same-batch-series",
+      newSeriesId: "same-batch-replacement",
+      title: "同批更新",
+      materialization: { asOfDate: today, throughDate: "2026-10-08" },
+      now: "2026-09-08T08:00:01.000Z",
+    } },
+  ]);
+  assert.equal(sameBatch.statusCode, 200);
+  assert.equal((await app.inject("/api/planner/series/same-batch-replacement")).json().title,
+    "同批更新");
+});
+
+test("a root series snapshot cannot overwrite a successor changed after the editor opened", async (context) => {
+  const app = createApp({ databasePath: ":memory:", clock: () => Date.parse(now) });
+  context.after(() => app.close());
+  assert.equal((await commands(app, [{ type: "createRecurrenceSeries", input: {
+    id: "root", title: "root", startDate: today,
+    pattern: { kind: "daily" }, end: { kind: "never" }, now,
+  } }])).statusCode, 200);
+  const initialRoot = (await app.inject("/api/planner/series/root")).json() as RecurrenceSeriesSnapshot;
+  assert.equal((await commands(app, [{ type: "updateRecurrenceSeries", input: {
+    seriesId: "root", newSeriesId: "successor", title: "successor",
+    effectiveDate: "2026-09-15",
+    materialization: { asOfDate: today, throughDate: "2026-10-08" },
+    now: "2026-09-08T08:00:01.000Z",
+  } }], client, seriesPreconditions(initialRoot))).statusCode, 200);
+
+  const staleRoot = (await app.inject("/api/planner/series/root")).json() as RecurrenceSeriesSnapshot;
+  const successor = (await app.inject("/api/planner/series/successor")).json() as RecurrenceSeriesSnapshot;
+  assert.equal((await commands(app, [{ type: "updateRecurrenceSeries", input: {
+    seriesId: "successor", newSeriesId: "server-winner", title: "SERVER-WINNER",
+    effectiveDate: "2026-09-15",
+    materialization: { asOfDate: today, throughDate: "2026-10-08" },
+    now: "2026-09-08T08:00:02.000Z",
+  } }], client, seriesPreconditions(successor))).statusCode, 200);
+
+  const currentRoot = (await app.inject("/api/planner/series/root")).json() as RecurrenceSeriesSnapshot;
+  assert.notEqual(currentRoot.tailRevision, staleRoot.tailRevision);
+  const winnerBefore = (await app.inject("/api/planner/series/server-winner")).json() as RecurrenceSeriesSnapshot;
+  const winnerTasksBefore = ((await app.inject("/api/planner/backup")).json().tasks as Task[])
+    .filter((item) => item.logicalSeriesId === "root");
+
+  const stale = await commands(app, [{ type: "updateRecurrenceSeries", input: {
+    seriesId: "root", newSeriesId: "stale-editor", title: "STALE-EDITOR",
+    effectiveDate: today,
+    materialization: { asOfDate: today, throughDate: "2026-10-08" },
+    now: "2026-09-08T08:00:03.000Z",
+  } }], client, seriesPreconditions(staleRoot));
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().message,
+    "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+  assert.deepEqual((await app.inject("/api/planner/series/server-winner")).json(), winnerBefore);
+  assert.deepEqual(((await app.inject("/api/planner/backup")).json().tasks as Task[])
+    .filter((item) => item.logicalSeriesId === "root"), winnerTasksBefore);
+  assert.equal((await app.inject("/api/planner/series/stale-editor")).json(), null);
 });
 
 test("API-backed tasks persist when the independent backend restarts", async () => {

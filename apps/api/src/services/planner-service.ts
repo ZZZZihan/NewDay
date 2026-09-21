@@ -9,11 +9,13 @@ import { executePlannerCommands, previewStopRecurrenceSeries, type PlannerComman
 import { clearUndoReceipts, undoPlannerCommand, type UndoReceipt } from "@newday/core/application/planner-undo";
 import { notionClientKey, notionTaskFieldsSchema, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 import {
+  focusRecordSchema,
   recurrenceSeriesSchema,
   taskSchema,
   type RecurrenceSeries,
   type Task,
 } from "@newday/core/domain/planner-model";
+import { resourceTaskLinkSchema } from "@newday/core/domain/life-model";
 import { ApiError } from "../http/api-error.js";
 import { AgentApiError } from "../http/agent-error.js";
 import { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
@@ -25,6 +27,7 @@ type PendingUndo = { receipt: UndoReceipt; token: string; clientId: string; expi
 type CommandPreconditions = {
   expectedTask?: Task;
   expectedSeries?: RecurrenceSeries;
+  expectedSeriesTailRevision?: string;
 };
 
 const TASK_EDIT_COMMANDS = new Set<PlannerCommand["type"]>([
@@ -67,13 +70,17 @@ export class PlannerService {
   }
 
   series(id: string) {
-    return this.run(async () => (await this.store.getRecurrenceSeries(id)) ?? null);
+    return this.run(async () => {
+      const series = await this.store.getRecurrenceSeries(id);
+      if (!series) return null;
+      return { ...series, tailRevision: await this.recurrenceTailRevision(series) };
+    });
   }
 
   commands(
     commands: readonly PlannerCommand[],
     clientId: string,
-    { expectedTask, expectedSeries }: CommandPreconditions = {},
+    { expectedTask, expectedSeries, expectedSeriesTailRevision }: CommandPreconditions = {},
   ) {
     return this.run(async () => {
       const editedTaskIds = new Set(commands.flatMap((command) =>
@@ -100,18 +107,26 @@ export class PlannerService {
       const editedSeriesIds = new Set(commands.flatMap((command) =>
         command.type === "updateRecurrenceSeries" ? [command.input.seriesId] : []));
       if (editedSeriesIds.size > 0) {
-        if (!expectedSeries) {
-          throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
-        }
-        if (editedSeriesIds.size !== 1 || !editedSeriesIds.has(expectedSeries.id)) {
-          throw new ApiError(409, "重复规则编辑基线与修改目标不一致；请刷新后重试");
-        }
-        const current = await this.store.getRecurrenceSeries(expectedSeries.id);
-        if (!current || !isDeepStrictEqual(
-          recurrenceSeriesSchema.parse(current),
-          recurrenceSeriesSchema.parse(expectedSeries),
-        )) {
-          throw new ApiError(409, "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+        if (expectedSeries || expectedSeriesTailRevision) {
+          if (!expectedSeries || !expectedSeriesTailRevision) {
+            throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
+          }
+          if (editedSeriesIds.size !== 1 || !editedSeriesIds.has(expectedSeries.id)) {
+            throw new ApiError(409, "重复规则编辑基线与修改目标不一致；请刷新后重试");
+          }
+          const current = await this.store.getRecurrenceSeries(expectedSeries.id);
+          if (!current || !isDeepStrictEqual(
+            recurrenceSeriesSchema.parse(current),
+            recurrenceSeriesSchema.parse(expectedSeries),
+          ) || await this.recurrenceTailRevision(current) !== expectedSeriesTailRevision) {
+            throw new ApiError(409, "重复规则已在其他页面或后台同步更新；请关闭编辑窗口后重新打开");
+          }
+        } else {
+          for (const seriesId of editedSeriesIds) {
+            if (await this.store.getRecurrenceSeries(seriesId)) {
+              throw new ApiError(409, "重复规则编辑基线缺失；请刷新后重试");
+            }
+          }
         }
       }
       const today = await this.configuredToday();
@@ -304,6 +319,37 @@ export class PlannerService {
     const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
     if (!preferences?.timeZone) return undefined;
     return { date: dateInTimeZone(this.clock(), preferences.timeZone), timeZone: preferences.timeZone };
+  }
+
+  /** Hash the complete tail write set used by updateRecurrenceSeries. This is
+   * intentionally broader than the source segment: the command may replace
+   * successor segments and rewrite or delete their occurrences, focus records,
+   * and resource links. Callers compare this inside the same outer transaction
+   * that performs the command. */
+  private async recurrenceTailRevision(source: RecurrenceSeries) {
+    const chain = await this.store.listRecurrenceSeriesByLogicalSeriesId(source.logicalSeriesId);
+    const sourceIndex = chain.findIndex((series) => series.id === source.id);
+    if (sourceIndex < 0) {
+      throw new Error(`重复系列谱系不完整：${source.logicalSeriesId}`);
+    }
+    const series = chain.slice(sourceIndex).map((item) => recurrenceSeriesSchema.parse(item));
+    const tasks = (await Promise.all(series.map((item) => this.store.listTasksBySeries(item.id))))
+      .flat()
+      .map((task) => taskSchema.parse(task))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const focusRecords = (await Promise.all(tasks.map((task) => this.store.listFocusRecordsForTask(task.id))))
+      .flat()
+      .map((record) => focusRecordSchema.parse(record))
+      .sort((left, right) => left.id.localeCompare(right.id));
+    const resourceTaskLinks = this.store.listResourceTaskLinksForTask
+      ? (await Promise.all(tasks.map((task) => this.store.listResourceTaskLinksForTask!(task.id))))
+        .flat()
+        .map((link) => resourceTaskLinkSchema.parse(link))
+        .sort((left, right) => `${left.taskId}\0${left.resourceId}`.localeCompare(`${right.taskId}\0${right.resourceId}`))
+      : [];
+    return createHash("sha256")
+      .update(JSON.stringify({ series, tasks, focusRecords, resourceTaskLinks }))
+      .digest("hex");
   }
 
   /** A failed preflight read has sent no write. The workspace remains paused

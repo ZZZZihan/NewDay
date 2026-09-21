@@ -83,6 +83,7 @@ export const commandRequestSchema = z.strictObject({
   commands: z.array(commandSchema).min(1).max(100),
   expectedTask: taskSchema.optional(),
   expectedSeries: recurrenceSeriesSchema.optional(),
+  expectedSeriesTailRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export const dayQuerySchema = z.strictObject({ selectedDate: localDateSchema, asOfDate: localDateSchema });
 export const seriesParamsSchema = z.strictObject({ id: identifier });

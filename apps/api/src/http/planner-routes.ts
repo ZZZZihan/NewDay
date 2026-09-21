@@ -19,6 +19,7 @@ export function registerPlannerRoutes(app: FastifyInstance, planner: PlannerServ
     return planner.commands(body.commands, clientId, {
       expectedTask: body.expectedTask,
       expectedSeries: body.expectedSeries,
+      expectedSeriesTailRevision: body.expectedSeriesTailRevision,
     });
   });
 

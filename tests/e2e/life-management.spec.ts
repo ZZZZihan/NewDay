@@ -5,7 +5,10 @@ import { expect, test } from "./fixtures";
 type PlannerPreconditions = {
   expectedTask?: Task;
   expectedSeries?: RecurrenceSeries;
+  expectedSeriesTailRevision?: string;
 };
+
+type RecurrenceSeriesSnapshot = RecurrenceSeries & { tailRevision: string };
 
 async function plannerCommands(
   request: APIRequestContext,
@@ -29,7 +32,7 @@ async function taskSnapshot(request: APIRequestContext, id: string) {
 async function seriesSnapshot(request: APIRequestContext, id: string) {
   const response = await request.get(`/api/planner/series/${encodeURIComponent(id)}`);
   expect(response.ok(), await response.text()).toBe(true);
-  const series = await response.json() as RecurrenceSeries | null;
+  const series = await response.json() as RecurrenceSeriesSnapshot | null;
   expect(series, `Series ${id} must exist`).not.toBeNull();
   return series!;
 }
@@ -272,7 +275,10 @@ test("background refresh preserves a recurring draft and rejects its stale serie
     effectiveDate: today,
     materialization: { asOfDate: today, throughDate: shiftLocalDate(today, 31) },
     now: changedAt,
-  } }], "series-draft-update", { expectedSeries });
+  } }], "series-draft-update", {
+    expectedSeries,
+    expectedSeriesTailRevision: expectedSeries.tailRevision,
+  });
 
   await page.clock.runFor(30_000);
   await expect(dialog).toBeVisible();

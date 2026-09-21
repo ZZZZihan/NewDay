@@ -20,6 +20,7 @@ export type ApiConfig = {
   agent: {
     provider: "disabled" | "openai-compatible" | "scripted";
     baseUrl: string;
+    requestProfile: "openai-structured" | "deepseek-json";
     modelId?: string;
     apiKey?: string;
     allowHttpOrigin?: string;
@@ -54,9 +55,16 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
   if (provider === "openai-compatible" && (!environment.NEWDAY_AGENT_API_KEY || !environment.NEWDAY_AGENT_MODEL)) {
     throw new Error("OpenAI-compatible Agent requires NEWDAY_AGENT_API_KEY and NEWDAY_AGENT_MODEL");
   }
+  const requestProfile = environment.NEWDAY_AGENT_REQUEST_PROFILE ?? "openai-structured";
+  if (!["openai-structured", "deepseek-json"].includes(requestProfile)) {
+    throw new Error("NEWDAY_AGENT_REQUEST_PROFILE must be openai-structured or deepseek-json");
+  }
   const reasoningEffort = environment.NEWDAY_AGENT_REASONING_EFFORT;
   if (reasoningEffort !== undefined && !["none", "low", "medium", "high"].includes(reasoningEffort)) {
     throw new Error("NEWDAY_AGENT_REASONING_EFFORT must be none, low, medium or high");
+  }
+  if (requestProfile === "deepseek-json" && reasoningEffort === "medium") {
+    throw new Error("NEWDAY_AGENT_REASONING_EFFORT must be none, low or high for deepseek-json");
   }
 
   const workerOrigin = environment.NEWDAY_NOTION_WORKER_ORIGIN;
@@ -98,6 +106,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
     notionOAuth,
     agent: {
       provider: provider as ApiConfig["agent"]["provider"], baseUrl,
+      requestProfile: requestProfile as ApiConfig["agent"]["requestProfile"],
       modelId: environment.NEWDAY_AGENT_MODEL, apiKey: environment.NEWDAY_AGENT_API_KEY,
       allowHttpOrigin: environment.NEWDAY_AGENT_ALLOW_HTTP_ORIGIN,
       reasoningEffort: reasoningEffort as ApiConfig["agent"]["reasoningEffort"],

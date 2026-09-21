@@ -30,6 +30,7 @@ if (!Number.isInteger(maxCalls) || maxCalls < 1 || maxCalls > 3) throw new Error
 const calls: { startedAt: string; status?: number; headersMs?: number; elapsedMs?: number; outcome?: string; providerError?: Record<string, string>; completion?: Record<string, unknown> }[] = [];
 const model = new OpenAICompatiblePlanningModel({
   baseUrl: config.agent.baseUrl, apiKey: config.agent.apiKey!, modelId: config.agent.modelId!,
+  requestProfile: config.agent.requestProfile,
   allowHttpOrigin: config.agent.allowHttpOrigin, reasoningEffort: config.agent.reasoningEffort,
   maxOutputTokens: config.agent.maxOutputTokens,
   fetch: async (url, options) => {
@@ -67,6 +68,7 @@ const planningModel: PlanningModel = {
 const settings = {
   providerOrigin: new URL(config.agent.baseUrl).origin,
   endpointSha256: hash(config.agent.baseUrl), configuredModel: model.modelId,
+  requestProfile: config.agent.requestProfile,
   reasoningEffort: config.agent.reasoningEffort ?? "provider_default",
   maxOutputTokens: config.agent.maxOutputTokens, timeoutMs: config.agent.timeoutMs,
   maxOutboundCalls: maxCalls, dataScope: "three synthetic tasks; no development database or heldout cases",

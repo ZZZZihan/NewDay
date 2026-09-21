@@ -218,12 +218,13 @@ T5 的 `NotionOutboxDispatcher` 已由 COL-37 接入本机 API、定时队列、
 | `NEWDAY_NOTION_CREDENTIAL_PATH` | `data/notion-vault/credentials.sqlite`；与业务数据库分开 |
 | `NEWDAY_AGENT_PROVIDER` | `disabled`；真实生成可设 `openai-compatible`；`scripted` 仅允许隔离 E2E 数据库 |
 | `NEWDAY_AGENT_BASE_URL` | `https://api.openai.com/v1`；适配器向该前缀的 `/chat/completions` 请求，默认要求 HTTPS；回环或下方明确许可的精确 HTTP 来源除外 |
+| `NEWDAY_AGENT_REQUEST_PROFILE` | `openai-structured`；OpenAI Structured Outputs 请求使用该值；DeepSeek Chat Completions 显式设为 `deepseek-json`，改用 `json_object` 与 `max_tokens`，并在提示中携带冻结的输出 JSON Schema |
 | `NEWDAY_AGENT_MODEL` | 无默认模型；启用真实 provider 时必须显式设置 |
 | `NEWDAY_AGENT_API_KEY` | API 进程持有的 provider 密钥；启用真实 provider 时必填 |
 | `NEWDAY_AGENT_ALLOW_HTTP_ORIGIN` | 默认未设置；已有 HTTP 中转的精确来源许可，必须匹配协议/主机/端口，禁止路径、凭据、query/hash 和通配符 |
-| `NEWDAY_AGENT_REASONING_EFFORT` | 默认不发送；支持该参数的模型可设 `none`、`low`、`medium`、`high` |
+| `NEWDAY_AGENT_REASONING_EFFORT` | 默认不发送；支持该参数的模型可设 `none`、`low`、`medium`、`high`；`deepseek-json` 只接受其中的 `none`、`low`、`high` |
 | `NEWDAY_AGENT_TIMEOUT_MS` | `30000`；可设 `1`–`30000` 毫秒，是每次模型请求上限 |
-| `NEWDAY_AGENT_MAX_OUTPUT_TOKENS` | `1200`；可设 `100`–`4000`，发送为 `max_completion_tokens` |
+| `NEWDAY_AGENT_MAX_OUTPUT_TOKENS` | `1200`；可设 `100`–`4000`；按请求 profile 发送为 `max_completion_tokens` 或 `max_tokens` |
 
 `pnpm build` 直接构建两个工作区，不加载根 `.env`。生产转发目标在 Next 构建时固定，调整 API origin 后要先在构建进程中设置 `NEWDAY_API_ORIGIN` 再重新构建；只改变 `pnpm start` 的环境不更新已有 rewrite。
 

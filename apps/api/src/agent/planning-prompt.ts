@@ -18,12 +18,21 @@ Use Chinese for user-facing text. Keep reasons concise and grounded; do not incl
  * https://developers.openai.com/api/docs/guides/structured-outputs */
 export const planningProviderJsonSchema = z.toJSONSchema(z.strictObject({ output: z.union(planningModelOutputSchema.options) }));
 
-export function planningMessages(snapshot: PlanningSnapshot, answers: PlanningAnswers, repair?: ModelRepair) {
+export function planningMessages(
+  snapshot: PlanningSnapshot,
+  answers: PlanningAnswers,
+  repair?: ModelRepair,
+  options: { includeOutputSchema?: boolean } = {},
+) {
   return [
     { role: "system" as const, content: PLANNING_SYSTEM_PROMPT },
     { role: "user" as const, content: JSON.stringify({
       promptVersion: AGENT_PROMPT_VERSION, schemaVersion: AGENT_SCHEMA_VERSION,
       snapshot, answers, clarificationRoundUsed: answers.length > 0,
+      ...(options.includeOutputSchema ? { outputContract: {
+        instruction: "Return one JSON object that validates exactly against this JSON Schema.",
+        jsonSchema: planningProviderJsonSchema,
+      } } : {}),
       ...(repair ? { formatRepair: { instruction: "Your previous response failed validation. Correct these structural issues once.", issues: repair.issues } } : {}),
     }) },
   ];

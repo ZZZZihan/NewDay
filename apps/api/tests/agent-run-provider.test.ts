@@ -32,7 +32,9 @@ test("provider sends only the bounded structured request, preserves data roles, 
       assert.equal(body.messages[0].content, PLANNING_SYSTEM_PROMPT);
       assert.equal(body.messages[0].content.includes(snapshot.candidates[0].task.notes), false);
       assert.equal(body.messages[1].role, "user");
-      assert.equal(JSON.parse(body.messages[1].content).snapshot.candidates[0].task.notes, snapshot.candidates[0].task.notes);
+      const userMessage = JSON.parse(body.messages[1].content);
+      assert.equal(userMessage.snapshot.candidates[0].task.notes, snapshot.candidates[0].task.notes);
+      assert.equal(userMessage.outputContract, undefined);
       assert.equal(body.response_format.type, "json_schema");
       assert.equal(body.response_format.json_schema.strict, true);
       assert.equal(body.response_format.json_schema.schema.type, "object");
@@ -240,6 +242,44 @@ test("configured reasoning effort is sent explicitly, including none", async () 
   }
   for (const reasoningEffort of ["minimal", "xhigh", "", null])
     assert.throws(() => new OpenAICompatiblePlanningModel({ apiKey: "placeholder", modelId: "model", reasoningEffort: reasoningEffort as never }), /reasoning effort/);
+});
+
+test("DeepSeek JSON profile uses the provider-supported chat-completion fields", async () => {
+  let calls = 0;
+  const model = new OpenAICompatiblePlanningModel({
+    apiKey: "placeholder", modelId: "deepseek-flash", requestProfile: "deepseek-json",
+    reasoningEffort: "none", maxOutputTokens: 1200,
+    fetch: async (_url, init) => {
+      calls++;
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "deepseek-flash");
+      assert.deepEqual(body.response_format, { type: "json_object" });
+      assert.equal(body.max_tokens, 1200);
+      assert.equal(body.reasoning_effort, "none");
+      assert.equal(body.max_completion_tokens, undefined);
+      assert.equal(body.store, undefined);
+      assert.equal(body.n, undefined);
+      assert.equal(body.messages[0].role, "system");
+      assert.equal(body.messages[1].role, "user");
+      const userMessage = JSON.parse(body.messages[1].content);
+      assert.match(userMessage.outputContract.instruction, /validates exactly/);
+      assert.equal(userMessage.outputContract.jsonSchema.type, "object");
+      assert.deepEqual(Object.keys(userMessage.outputContract.jsonSchema.properties), ["output"]);
+      assert.equal(userMessage.outputContract.jsonSchema.properties.output.anyOf.length, 3);
+      return Response.json(completion({ model: "deepseek-flash" }));
+    },
+  });
+  const result = await model.generate(snapshotFixture, [], new AbortController().signal);
+  assert.equal(result.modelId, "deepseek-flash");
+  assert.equal(calls, 1);
+  for (const requestProfile of ["auto", "", null]) {
+    assert.throws(() => new OpenAICompatiblePlanningModel({
+      apiKey: "placeholder", modelId: "model", requestProfile: requestProfile as never,
+    }), /request profile/);
+  }
+  assert.throws(() => new OpenAICompatiblePlanningModel({
+    apiKey: "placeholder", modelId: "deepseek-flash", requestProfile: "deepseek-json", reasoningEffort: "medium",
+  }), /none, low or high/);
 });
 
 test("an oversized provider body is cancelled while streaming rather than fully buffered", async () => {

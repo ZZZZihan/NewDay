@@ -179,6 +179,36 @@ test("root response loss survives API restart; four databases and relations are 
   }
 });
 
+test("a stale structure review cannot advance into the next remote create step", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-review-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  fake.lostOnce = "root";
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  try {
+    const base = `/api/notion/connections/${workspaceId}/structure`;
+    const first = await app.inject({ method: "POST", url: `${base}/advance`, payload: {} });
+    assert.equal(first.statusCode, 200, first.body);
+    assert.equal(first.json().state, "needs_review");
+    assert.equal(first.json().nextStep, "root");
+    const staleReview = { step: first.json().nextStep, attemptedAt: first.json().reviewAttemptedAt };
+    assert.ok(staleReview.attemptedAt);
+    const [confirmed, stale] = await Promise.all([
+      app.inject({ method: "POST", url: `${base}/reconcile`, payload: staleReview }),
+      app.inject({ method: "POST", url: `${base}/reconcile`, payload: staleReview }),
+    ]);
+    assert.equal(confirmed.statusCode, 200, confirmed.body);
+    assert.equal(confirmed.json().nextStep, "areas");
+    assert.equal(stale.statusCode, 409, stale.body);
+    assert.equal(fake.creates.root, 1);
+    assert.equal(fake.creates.database, 0, "a stale review must not create Areas");
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("429 Retry-After blocks readback until due and never replays the create request", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-structure-"));
   const vaultPath = join(directory, "vault.sqlite");

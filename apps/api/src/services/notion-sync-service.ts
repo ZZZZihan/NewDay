@@ -18,6 +18,7 @@ export class NotionSyncService {
     const conflicts = (await this.store.listNotionConflicts()).filter((item) => item.workspaceId === workspaceId);
     return { workspaceId, connectionStatus: connection.status,
       pauseReason: connection.pauseReason ?? null,
+      retryAfterAt: connection.retryAfterAt ?? null,
       operations: operations.map(({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt }) =>
         ({ operationId, localTaskId, status, attemptCount, createdAt, lastAttemptAt })),
       conflicts };
@@ -53,21 +54,42 @@ export class NotionSyncService {
     });
   }
 
+  /** Commit a durable workspace fence before acknowledging the request. An
+   * already started provider request may still finish and remains visible as
+   * sending/unknown until readback settles it. */
+  async pause(workspaceId: string) {
+    await this.store.transaction(async () => {
+      const connection = await this.store.getNotionConnection(workspaceId);
+      if (!connection) throw new ApiError(404, "Notion 工作区不存在");
+      if (connection.status === "paused" && connection.pauseReason === "manual") return;
+      if (connection.status !== "active") throw new ApiError(409, "此工作区已有其他暂停或待核对状态");
+      await this.store.putNotionConnection({ ...connection, status: "paused", pauseReason: "manual",
+        retryAfterAt: undefined, updatedAt: new Date().toISOString() });
+    });
+    return this.status(workspaceId);
+  }
+
   resume(workspaceId: string) {
     return this.run(async () => {
-      const connection = await this.store.getNotionConnection(workspaceId);
-      if (!connection || !["paused", "paused_unknown"].includes(connection.status)) throw new ApiError(409, "工作区无需恢复发送");
-      const operations = await this.store.listNotionOutboxOperations();
-      if (connection.status === "paused" && connection.pauseReason !== "preflight_read") {
-        throw new ApiError(409, "此暂停状态不是待发送预读失败，不能由写回入口恢复");
-      }
-      if (operations.some((item) => item.workspaceId === workspaceId &&
-        ["sending", "unknown", "quarantined"].includes(item.status)) ||
-        (await this.store.listNotionRestoreQuarantine()).some((item) => item.operation.workspaceId === workspaceId)) {
-        throw new ApiError(409, "仍有待核对或隔离的 Notion 操作");
-      }
-      await this.store.putNotionConnection({ ...connection, status: "active", pauseReason: undefined,
-        updatedAt: new Date().toISOString() });
+      await this.store.transaction(async () => {
+        const connection = await this.store.getNotionConnection(workspaceId);
+        if (!connection || !["paused", "paused_unknown"].includes(connection.status)) throw new ApiError(409, "工作区无需恢复发送");
+        const operations = await this.store.listNotionOutboxOperations();
+        if (connection.status === "paused" && !["preflight_read", "manual"].includes(connection.pauseReason ?? "")) {
+          throw new ApiError(409, "此暂停状态不能由写回入口恢复");
+        }
+        if (connection.retryAfterAt && Date.parse(connection.retryAfterAt) > Date.now()) {
+          throw new ApiError(409, `Notion 限流退避至 ${connection.retryAfterAt}，此时不能恢复发送`);
+        }
+        if (operations.some((item) => item.workspaceId === workspaceId &&
+          ["sending", "unknown", "quarantined"].includes(item.status)) ||
+          (await this.store.listNotionRestoreQuarantine()).some((item) => item.operation.workspaceId === workspaceId)) {
+          throw new ApiError(409, "仍有待核对或隔离的 Notion 操作");
+        }
+        await this.store.putNotionConnection({ ...connection, status: "active", pauseReason: undefined,
+          retryAfterAt: undefined,
+          updatedAt: new Date().toISOString() });
+      });
       return this.status(workspaceId);
     });
   }

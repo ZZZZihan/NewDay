@@ -20,6 +20,8 @@ NewDay 是一个在本机运行的每日任务清单，只关注“哪几天需�
 
 以上复跑使用独立工作树、端口 `3100/3002` 和临时 SQLite；GitHub 当前未返回候选 Check Runs 或审查结论。替换导入前下载安全备份及 JSON 备份恢复属于候选实现，尚未在个人真实数据上试用。NewDay/Notion 联动的完整进度由 [COL-31](https://linear.app/colife/issue/COL-31) 跟踪，T1～T8 分项为 COL-32～COL-39。COL-33 的 OAuth 隔离候选配置与未验收边界见 [Notion OAuth 运维说明](./docs/notion-oauth-operations.md)。
 
+2026-09-21 的后续候选为 [PR #6 OAuth](https://github.com/ZZZZihan/NewDay/pull/6)、[PR #7 结构](https://github.com/ZZZZihan/NewDay/pull/7)、[PR #8 读取](https://github.com/ZZZZihan/NewDay/pull/8)、[PR #5 同步底座](https://github.com/ZZZZihan/NewDay/pull/5)、[PR #9 一次性任务写回](https://github.com/ZZZZihan/NewDay/pull/9)、[PR #10 重复实例](https://github.com/ZZZZihan/NewDay/pull/10)及[PR #11 暂停与验收手册](https://github.com/ZZZZihan/NewDay/pull/11)。这些 PR 仍为未合并候选；真实隔离 Notion 工作区尚未验收。执行矩阵、已知限制和恢复步骤见 [COL-39 真实验收记录](./docs/notion-live-acceptance.md)。本段是后续快照，不覆盖上表 2026-09-20 的历史证据。
+
 ## 核心功能
 
 - 桌面端采用左右分栏：左侧显示大号当前时钟，右侧专注每日任务

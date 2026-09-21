@@ -51,6 +51,7 @@ export type NotionStructureProgress = {
   nextStep: NotionInitializationStepName | null;
   reviewReason: ReviewReason | null;
   retryAfterAt: string | null;
+  reviewAttemptedAt: string | null;
   rootPageId: string | null;
   dataSources: NotionConnection["dataSources"];
   completedSteps: NotionInitializationStepName[];
@@ -80,6 +81,7 @@ export class NotionStructureService {
     return {
       workspaceId, state, nextStep, reviewReason: next?.reviewReason ?? null,
       retryAfterAt: next?.retryAfterAt ?? null,
+      reviewAttemptedAt: next?.status === "needs_review" ? next.attemptedAt : null,
       rootPageId: connection?.rootPageId ?? null, dataSources: connection?.dataSources ?? {},
       completedSteps: stepOrder.filter((step) => steps.some((value) => value.step === step && value.status === "confirmed")),
     };
@@ -89,11 +91,21 @@ export class NotionStructureService {
     return this.withWorkspaceLock(workspaceId, () => this.advanceLocked(workspaceId));
   }
 
-  private async advanceLocked(workspaceId: string): Promise<NotionStructureProgress> {
+  /** A stale browser must never turn a read-only review click into a new
+   * create step. The attempt identity is checked again in recordAttempt. */
+  async reconcile(workspaceId: string, step: NotionInitializationStepName, attemptedAt: string): Promise<NotionStructureProgress> {
+    return this.withWorkspaceLock(workspaceId, () => this.advanceLocked(workspaceId, { step, attemptedAt }));
+  }
+
+  private async advanceLocked(workspaceId: string,
+    review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<NotionStructureProgress> {
     const credential = this.vault.getCredential(workspaceId);
     if (!credential) throw new ApiError(409, "Notion 工作区尚未授权或凭据刷新结果待确认");
     const connection = await this.store.transaction(async () => {
       let current = await this.store.getNotionConnection(workspaceId);
+      if (review && (!current || current.status === "disconnected")) {
+        throw new ApiError(409, "结构核对视图已过期；请刷新后重新检查当前步骤");
+      }
       if (current?.status === "paused_after_restore" || current?.status === "paused_unknown") {
         throw new ApiError(409, "Notion 数据恢复或未知写入仍待核对，不能初始化结构");
       }
@@ -111,13 +123,17 @@ export class NotionStructureService {
       return current;
     });
     const progress = await this.progress(workspaceId);
+    if (review && (progress.state !== "needs_review" || progress.nextStep !== review.step ||
+      progress.reviewAttemptedAt !== review.attemptedAt)) {
+      throw new ApiError(409, "结构核对视图已过期；请刷新后重新检查当前步骤");
+    }
     if (!progress.nextStep) return progress;
     if (progress.retryAfterAt && Date.parse(progress.retryAfterAt) > this.now()) return progress;
     const token = credential.access_token;
     const step = progress.nextStep;
-    if (step === "root") await this.advanceRoot(connection, token);
-    else if (tableOrder.includes(step as TableName)) await this.advanceTable(connection, token, step as TableName);
-    else await this.advanceRelation(connection, token, step as RelationName);
+    if (step === "root") await this.advanceRoot(connection, token, review);
+    else if (tableOrder.includes(step as TableName)) await this.advanceTable(connection, token, step as TableName, review);
+    else await this.advanceRelation(connection, token, step as RelationName, review);
     return this.progress(workspaceId);
   }
 
@@ -143,10 +159,11 @@ export class NotionStructureService {
     }
   }
 
-  private async advanceRoot(connection: NotionConnection, token: string): Promise<void> {
+  private async advanceRoot(connection: NotionConnection, token: string,
+    review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     const title = `NewDay (${connection.installationId})`;
     const { step, created } = await this.recordAttempt(connection.workspaceId, "root", title, null,
-      fingerprint({ kind: "workspace-page", title }));
+      fingerprint({ kind: "workspace-page", title }), review);
     try {
       const id = created ? await this.gateway.createRoot(token, title) : null;
       const candidateIds = [...new Set([...(id ? [id] : []), ...await this.gateway.findRoots(token, title)])];
@@ -160,11 +177,12 @@ export class NotionStructureService {
     } catch (error) { await this.markReview(step, classifyRemoteFailure(error), error); }
   }
 
-  private async advanceTable(connection: NotionConnection, token: string, name: TableName): Promise<void> {
+  private async advanceTable(connection: NotionConnection, token: string, name: TableName,
+    review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     if (!connection.rootPageId) throw new ApiError(409, "Notion 根页面尚未确认");
     const schema = tableSchemas[name];
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, schema.title, connection.rootPageId,
-      fingerprint({ kind: "data-source", name, schema: schema.expected }));
+      fingerprint({ kind: "data-source", name, schema: schema.expected }), review);
     try {
       if (created) {
         // The first call has not sent a create yet. A same-title child may be a
@@ -204,13 +222,14 @@ export class NotionStructureService {
     } catch (error) { await this.markReview(step, classifyRemoteFailure(error), error); }
   }
 
-  private async advanceRelation(connection: NotionConnection, token: string, name: RelationName): Promise<void> {
+  private async advanceRelation(connection: NotionConnection, token: string, name: RelationName,
+    review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<void> {
     const relation = relations[name];
     const source = connection.dataSources[relation.source];
     const target = connection.dataSources[relation.target];
     if (!source || !target) throw new ApiError(409, "Notion 关联目标尚未确认");
     const { step, created } = await this.recordAttempt(connection.workspaceId, name, relation.name, source.dataSourceId,
-      fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }));
+      fingerprint({ kind: "relation", name: relation.name, target: target.dataSourceId }), review);
     try {
       if (created) {
         const existing = (await this.gateway.getDataSourceProperties(token, source.dataSourceId))[relation.name];
@@ -230,9 +249,14 @@ export class NotionStructureService {
   }
 
   private async recordAttempt(workspaceId: string, name: NotionInitializationStepName, expectedTitle: string,
-    parentId: string | null, schemaFingerprint: string): Promise<{ step: NotionInitializationStep; created: boolean }> {
+    parentId: string | null, schemaFingerprint: string,
+    review?: { step: NotionInitializationStepName; attemptedAt: string }): Promise<{ step: NotionInitializationStep; created: boolean }> {
     return this.store.transaction(async () => {
       const existing = await this.store.getNotionInitializationStep(workspaceId, name);
+      if (review && (review.step !== name || !existing || existing.status !== "needs_review" ||
+        existing.attemptedAt !== review.attemptedAt)) {
+        throw new ApiError(409, "结构核对尝试已改变；请刷新后重新检查");
+      }
       if (existing) {
         if (existing.expectedTitle !== expectedTitle || existing.parentId !== parentId ||
           existing.schemaFingerprint !== schemaFingerprint) throw new ApiError(409, "Notion 初始化契约已改变，需要人工核对");

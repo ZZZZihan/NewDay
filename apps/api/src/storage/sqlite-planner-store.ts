@@ -479,19 +479,41 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   /** A provider read failed before any create or update request was sent.
    * Keep the intent retryable but pause the workspace for an explicit retry. */
-  async pauseNotionUnsent(operationId: string, at: string): Promise<boolean> {
+  async pauseNotionUnsent(operationId: string, at: string, retryAfterAt?: string): Promise<boolean> {
     return this.transaction(async () => {
       const operation = await this.getNotionOutboxOperation(operationId);
       if (!operation || operation.status !== "sending") return false;
       const connection = await this.getNotionConnection(operation.workspaceId);
-      if (!connection || connection.status !== "active" ||
+      if (!connection || !(connection.status === "active" ||
+        (connection.status === "paused" && connection.pauseReason === "manual")) ||
         (await this.getPlanningVersion()).datasetEpoch !== operation.datasetEpoch) return false;
       // The preflight never sent HTTP. A newer local intent may have arrived
       // while the read was in flight; do not revive an obsolete pending write.
       if (!await this.supersedeNotionUnsentIfNewer(operationId)) {
         this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
       }
-      await this.putNotionConnection({ ...connection, status: "paused", pauseReason: "preflight_read", updatedAt: at });
+      if (connection.status === "active") {
+        await this.putNotionConnection({ ...connection, status: "paused", pauseReason: "preflight_read",
+          retryAfterAt, updatedAt: at });
+      } else if (retryAfterAt && (!connection.retryAfterAt || retryAfterAt > connection.retryAfterAt)) {
+        await this.putNotionConnection({ ...connection, retryAfterAt, updatedAt: at });
+      }
+      return true;
+    });
+  }
+
+  /** No provider write has started: return a claimed attempt to pending when
+   * the user paused during its remote preflight. Other fences stay conservative. */
+  async deferNotionUnsentAfterManualPause(operationId: string, datasetEpoch: string): Promise<boolean> {
+    return this.transaction(async () => {
+      const operation = await this.getNotionOutboxOperation(operationId);
+      if (!operation || operation.status !== "sending" || operation.datasetEpoch !== datasetEpoch) return false;
+      const connection = await this.getNotionConnection(operation.workspaceId);
+      if (connection?.status !== "paused" || connection.pauseReason !== "manual" ||
+        (await this.getPlanningVersion()).datasetEpoch !== datasetEpoch) return false;
+      if (!await this.supersedeNotionUnsentIfNewer(operationId)) {
+        this.updateNotionOutbox({ ...operation, status: "pending", sendingOwner: undefined });
+      }
       return true;
     });
   }

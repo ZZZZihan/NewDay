@@ -1,6 +1,6 @@
 # Notion 结构初始化候选（COL-34）
 
-此实现接在 [OAuth 凭据流程](./notion-oauth-operations.md) 和 [联动契约](./notion-sync-contract.md) 后。`GET /api/notion/connections/:workspaceId/structure` 只读进度；用户在「Notion 连接」中确认后，前端反复调用 `POST .../structure/advance`，每次最多提交一次远端结构变更。只有本机 API 持有 access token。尚未部署 Worker，也未对真实 Notion 工作区运行创建请求；浏览器与 API 验证使用假网关。
+此实现接在 [OAuth 凭据流程](./notion-oauth-operations.md) 和 [联动契约](./notion-sync-contract.md) 后。`GET /api/notion/connections/:workspaceId/structure` 只读进度；用户在「Notion 连接」中确认后，前端反复调用 `POST .../structure/advance`，每次最多提交一次远端结构变更。`needs_review` 的“重新核对”改用 `POST .../structure/reconcile`，携带当前步骤和尝试时间；服务端拒绝过期视图，不会借一次旧按钮点击创建下一步骤。只有本机 API 持有 access token。尚未部署 Worker，也未对真实 Notion 工作区运行创建请求；浏览器与 API 验证使用假网关。
 
 ## 创建顺序与持久状态
 

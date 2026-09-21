@@ -16,6 +16,7 @@ export type NotionStructureProgress = {
   nextStep: string | null;
   reviewReason: "not_found" | "ambiguous" | "unreadable" | "schema_mismatch" | "permission" | "rate_limited" | "request_unknown" | null;
   retryAfterAt: string | null;
+  reviewAttemptedAt: string | null;
   rootPageId: string | null;
   dataSources: Record<string, { databaseId: string; dataSourceId: string; propertyIds: Record<string, string> }>;
   completedSteps: string[];
@@ -24,7 +25,7 @@ export type NotionStructureProgress = {
 export type NotionReadStatus = {
   workspaceId: string;
   connectionStatus: "active" | "disconnected" | "paused" | "paused_after_restore" | "paused_unknown" | "not_initialized";
-  pauseReason: "preflight_read" | null;
+  pauseReason: "preflight_read" | "manual" | null;
   sources: Array<{
     table: "areas" | "projects" | "rules" | "tasks";
     dataSourceId: string | null;
@@ -40,6 +41,7 @@ export type NotionSyncStatus = {
   workspaceId: string;
   connectionStatus: NotionReadStatus["connectionStatus"];
   pauseReason: NotionReadStatus["pauseReason"];
+  retryAfterAt: string | null;
   operations: Array<{ operationId: string; localTaskId: string;
     status: "pending" | "sending" | "unknown" | "confirmed" | "superseded" | "quarantined";
     attemptCount: number; createdAt: string; lastAttemptAt: string | null }>;
@@ -60,10 +62,14 @@ export const notionApi = {
   refresh: (workspaceId: string) => post<{ connection: NotionConnection }>(`/connections/${encodeURIComponent(workspaceId)}/refresh`, {}),
   structure: (workspaceId: string) => request<NotionStructureProgress>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/structure`),
   advanceStructure: (workspaceId: string) => post<NotionStructureProgress>(`/connections/${encodeURIComponent(workspaceId)}/structure/advance`, {}),
+  reconcileStructure: (workspaceId: string, step: NonNullable<NotionStructureProgress["nextStep"]>,
+    attemptedAt: string) => post<NotionStructureProgress>(
+    `/connections/${encodeURIComponent(workspaceId)}/structure/reconcile`, { step, attemptedAt }),
   readStatus: (workspaceId: string) => request<NotionReadStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/read`),
   scan: (workspaceId: string) => post<NotionReadStatus>(`/connections/${encodeURIComponent(workspaceId)}/read/scan`, {}),
   syncStatus: (workspaceId: string) => request<NotionSyncStatus>(`/api/notion/connections/${encodeURIComponent(workspaceId)}/sync`),
   drain: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/drain`, {}),
+  pause: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/pause`, {}),
   reconcile: (workspaceId: string, operationId: string) => post<NotionSyncStatus>(
     `/connections/${encodeURIComponent(workspaceId)}/sync/operations/${encodeURIComponent(operationId)}/reconcile`, {}),
   resume: (workspaceId: string) => post<NotionSyncStatus>(`/connections/${encodeURIComponent(workspaceId)}/sync/resume`, {}),

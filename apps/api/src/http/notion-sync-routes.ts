@@ -16,6 +16,10 @@ export function registerNotionSyncRoutes(app: FastifyInstance, service: NotionSy
     if (!service) throw new ApiError(503, "本机尚未配置 Notion 连接");
     return service.drain(params.parse(request.params).workspaceId);
   });
+  app.post("/api/notion/connections/:workspaceId/sync/pause", async (request) => {
+    if (!service) throw new ApiError(503, "本机尚未配置 Notion 连接");
+    return service.pause(params.parse(request.params).workspaceId);
+  });
   app.post("/api/notion/connections/:workspaceId/sync/operations/:operationId/reconcile", async (request) => {
     if (!service) throw new ApiError(503, "本机尚未配置 Notion 连接");
     const { workspaceId, operationId } = operationParams.parse(request.params);

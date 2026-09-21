@@ -5,7 +5,7 @@ type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
   const { status, structures, reads, syncs, message, busy, refresh, start, disconnect,
-    retryRefresh, initializeStructure, scan, drain, reconcile, resume } = connection;
+    retryRefresh, initializeStructure, scan, drain, pause, reconcile, resume } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
@@ -33,6 +33,8 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
           <div>
             <strong>{item.workspaceName || "未命名工作区"}</strong>
             <p>{syncs[item.workspaceId]?.connectionStatus === "paused_unknown" ? "写入结果待核对；已暂停发送"
+              : syncs[item.workspaceId]?.connectionStatus === "paused" && syncs[item.workspaceId]?.pauseReason === "manual"
+                ? "已手动暂停同步"
               : item.status === "active" ? "已授权；结构就绪后可同步一次性任务"
                 : item.status === "refresh_pending" ? "刷新结果待确认；旧令牌暂停使用" : "需要重新授权；任务同步不可用"}</p>
             {structures[item.workspaceId] ? (
@@ -46,8 +48,12 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             </div> : null}
             {syncs[item.workspaceId] ? <div className="notion-read-status" aria-label="写回状态">
               <p>写回：{syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"
-                : syncs[item.workspaceId].connectionStatus === "paused" ? "远端预读失败，等待手动重试"
+                : syncs[item.workspaceId].connectionStatus === "paused" && syncs[item.workspaceId].pauseReason === "manual"
+                  ? "已手动暂停；不再启动新一轮读取或发送"
+                  : syncs[item.workspaceId].connectionStatus === "paused" ? "远端预读失败，等待手动重试"
                   : syncs[item.workspaceId].connectionStatus === "active" ? "可发送" : "已暂停"}</p>
+              {syncs[item.workspaceId].retryAfterAt ?
+                <p>Notion 限流退避至 {new Date(syncs[item.workspaceId].retryAfterAt!).toLocaleString("zh-CN")}</p> : null}
               {syncs[item.workspaceId].operations.filter((operation) =>
                 ["pending", "sending", "unknown", "quarantined"].includes(operation.status)).map((operation) => (
                 <p key={operation.operationId}>任务 {operation.localTaskId}：{operation.status === "pending" ? "待发送"
@@ -67,8 +73,11 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             {item.status === "active" && structures[item.workspaceId]?.state !== "ready" &&
               structures[item.workspaceId]?.state !== "paused_after_restore" ? (
                 <button type="button" disabled={busy || !structures[item.workspaceId]} onClick={() => {
-                  if (window.confirm(`即将在工作区 ${item.workspaceName || item.workspaceId} 建立或核对 NewDay 私有页面和四张表，继续吗？`)) {
-                    void initializeStructure(item.workspaceId);
+                  const reviewOnly = structures[item.workspaceId]?.state === "needs_review";
+                  if (window.confirm(reviewOnly
+                    ? `只读核对工作区 ${item.workspaceName || item.workspaceId} 已尝试的结构步骤，继续吗？`
+                    : `即将在工作区 ${item.workspaceName || item.workspaceId} 建立或核对 NewDay 私有页面和四张表，继续吗？`)) {
+                    void initializeStructure(item.workspaceId, reviewOnly);
                   }
                 }}>{structures[item.workspaceId]?.state === "needs_review" ? "重新核对" : "建立或继续结构"}</button>
               ) : null}
@@ -79,9 +88,11 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             {syncs[item.workspaceId]?.connectionStatus === "active" &&
               syncs[item.workspaceId].operations.some((operation) => operation.status === "pending") ?
               <button type="button" disabled={busy} onClick={() => void drain(item.workspaceId)}>发送待同步任务</button> : null}
+            {syncs[item.workspaceId]?.connectionStatus === "active" ?
+              <button type="button" disabled={busy} onClick={() => void pause(item.workspaceId)}>暂停同步</button> : null}
             {(syncs[item.workspaceId]?.connectionStatus === "paused_unknown" ||
               (syncs[item.workspaceId]?.connectionStatus === "paused" &&
-                syncs[item.workspaceId]?.pauseReason === "preflight_read")) &&
+                ["preflight_read", "manual"].includes(syncs[item.workspaceId]?.pauseReason ?? ""))) &&
               !syncs[item.workspaceId].operations.some((operation) => ["sending", "unknown", "quarantined"].includes(operation.status)) ?
               <button type="button" disabled={busy} onClick={() => void resume(item.workspaceId)}>恢复发送</button> : null}
             <button type="button" disabled={busy} onClick={() => {

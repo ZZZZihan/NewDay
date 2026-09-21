@@ -68,6 +68,71 @@ function fakeTransport() {
   return { transport, pages, calls, setSearchComplete(value: boolean) { searchComplete = value; } };
 }
 
+test("manual pause fences a preflight before any page write and keeps its intent pending", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  let releaseRead!: () => void;
+  let readStarted!: () => void;
+  const readStartedPromise = new Promise<void>((resolve) => { readStarted = resolve; });
+  const readReleased = new Promise<void>((resolve) => { releaseRead = resolve; });
+  fake.transport.findByClientKey = async () => {
+    readStarted();
+    await readReleased;
+    return { complete: true, pages: [] };
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    const sync = new NotionSyncService(store, dispatcher);
+    const sending = dispatcher.dispatch("operation-1");
+    await readStartedPromise;
+    const paused = await sync.pause("workspace-1");
+    assert.equal(paused.connectionStatus, "paused");
+    assert.equal(paused.pauseReason, "manual");
+    assert.equal(paused.operations[0]?.status, "sending", "the in-flight request stays visible");
+    releaseRead();
+    assert.equal(await sending, "paused");
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "pending");
+    assert.equal(fake.calls.create, 0);
+    assert.equal(fake.calls.update, 0);
+    await assert.rejects(sync.drain("workspace-1"), /已暂停/);
+    await sync.resume("workspace-1");
+    assert.equal((await store.getNotionConnection("workspace-1"))?.status, "active");
+  } finally { store.close(); }
+});
+
+test("manual pause during an existing page preflight defers a conflict merge without inventing an unknown write", async () => {
+  const desired: NotionTaskFields = { ...fields, date: ["2026-09-09", "2026-09-09"] };
+  const store = await setup("remote-1", desired);
+  const fake = fakeTransport();
+  const remoteFields = { ...fields, title: "Notion 改名" };
+  fake.pages.set("remote-1", { workspaceId: "workspace-1", dataSourceId: "tasks-source-1",
+    remotePageId: "remote-1", clientKey: null, fields: remoteFields, inTrash: false });
+  let releaseRead!: () => void;
+  let readStarted!: () => void;
+  const started = new Promise<void>((resolve) => { readStarted = resolve; });
+  const released = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const read = fake.transport.readPage;
+  fake.transport.readPage = async (...args) => {
+    readStarted();
+    await released;
+    return read(...args);
+  };
+  try {
+    const dispatcher = new NotionOutboxDispatcher(store, fake.transport, () => at);
+    const sync = new NotionSyncService(store, dispatcher);
+    const sending = dispatcher.dispatch("operation-1");
+    await started;
+    await sync.pause("workspace-1");
+    releaseRead();
+    assert.equal(await sending, "paused");
+    assert.equal((await store.getNotionConnection("workspace-1"))?.pauseReason, "manual");
+    assert.equal((await store.getNotionOutboxOperation("operation-1"))?.status, "pending");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+    assert.deepEqual(fake.pages.get("remote-1")?.fields, remoteFields);
+    assert.equal((await store.getTask("task-1"))?.title, desired.title);
+  } finally { store.close(); }
+});
+
 test("a create response lost after remote success binds one page by stable key", async () => {
   const store = await setup();
   const fake = fakeTransport();
@@ -123,6 +188,28 @@ test("failed remote preflight pauses an unsent intent and explicit resume retrie
     assert.equal((await sync.drain("workspace-1")).operations[0]?.status, "confirmed");
     assert.equal(fake.calls.update, 1);
   } finally { store.close(); }
+});
+
+test("429 and 529 preflight retain Retry-After and block early resume", async () => {
+  for (const [httpStatus, header] of [[429, "120"], [529, new Date(Date.now() + 120_000).toUTCString()]] as const) {
+    const store = await setup();
+    const fake = fakeTransport();
+    fake.transport.findByClientKey = async () => {
+      throw Object.assign(new Error("limited"), { status: httpStatus,
+        headers: new Headers({ "retry-after": header }) });
+    };
+    try {
+      const dispatcher = new NotionOutboxDispatcher(store, fake.transport);
+      assert.equal(await dispatcher.dispatch("operation-1"), "paused");
+      const sync = new NotionSyncService(store, dispatcher);
+      const status = await sync.status("workspace-1");
+      assert.equal(status.pauseReason, "preflight_read");
+      assert.ok(status.retryAfterAt && Date.parse(status.retryAfterAt) > Date.now() + 110_000);
+      assert.equal(status.operations[0]?.status, "pending");
+      assert.equal(fake.calls.create, 0);
+      await assert.rejects(sync.resume("workspace-1"), /限流退避至/);
+    } finally { store.close(); }
+  }
 });
 
 test("a setup failure after successful preflight stays retryable without claiming an ambiguous page write", async () => {

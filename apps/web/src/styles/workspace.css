@@ -691,6 +691,7 @@ html:fullscreen .time-panel__bottom {
 .notion-panel .life-primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 .notion-panel__connection { display: flex; justify-content: space-between; align-items: start; gap: 1rem; margin-top: .6rem; }
 .notion-panel__connection p { margin: .35rem 0; }
+.notion-read-status p { overflow-wrap: anywhere; }
 .notion-panel__connection small { overflow-wrap: anywhere; }
 .notion-panel__connection-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .life-panel { min-width: 0; }

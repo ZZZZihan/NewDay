@@ -47,7 +47,11 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               {reads[item.workspaceId].sources.map((source) => <p key={source.table}>{source.table === "areas" ? "主线" : source.table === "projects" ? "项目" : source.table === "rules" ? "规则" : "任务"}：{!source.watermark?.lastSuccessAt ? "尚未成功同步" : `上次成功 ${new Date(source.watermark.lastSuccessAt).toLocaleString("zh-CN")}`}{source.watermark?.lastAttemptAt ? `；上次尝试 ${new Date(source.watermark.lastAttemptAt).toLocaleString("zh-CN")}` : ""}{source.watermark?.lastError ? `；失败类别 ${source.watermark.lastError}` : ""}</p>)}
             </div> : null}
             {syncs[item.workspaceId] ? <div className="notion-read-status" aria-label="写回状态">
-              <p>写回：{syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"
+              <p>写回：{!syncs[item.workspaceId].restoreQuarantine ? "隔离明细不可用，已停用发送入口"
+                : syncs[item.workspaceId].restoreQuarantine.length > 0 ||
+                  syncs[item.workspaceId].operations.some((operation) => operation.status === "quarantined")
+                  ? "恢复隔离待核对，不能发送"
+                : syncs[item.workspaceId].connectionStatus === "paused_unknown" ? "待核对，已暂停发送"
                 : syncs[item.workspaceId].connectionStatus === "paused" && syncs[item.workspaceId].pauseReason === "manual"
                   ? "已手动暂停；不再启动新一轮读取或发送"
                   : syncs[item.workspaceId].connectionStatus === "paused" ? "远端预读失败，等待手动重试"
@@ -62,6 +66,20 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
                   {operation.status === "unknown" ? <button type="button" disabled={busy}
                     onClick={() => void reconcile(item.workspaceId, operation.operationId)}>只读核对</button> : null}</p>
               ))}
+              {!syncs[item.workspaceId].restoreQuarantine ? (
+                <p>恢复隔离明细未返回；请更新本机 API 并刷新状态，当前不能恢复发送。</p>
+              ) : syncs[item.workspaceId].restoreQuarantine.length ? (
+                <div aria-label="恢复前隔离操作">
+                  <p>恢复前隔离 {syncs[item.workspaceId].restoreQuarantine.length} 项；须核对原工作区与远端结果，当前不能恢复发送。</p>
+                  {syncs[item.workspaceId].restoreQuarantine.map((entry) => (
+                    <p key={`${entry.sourceEpoch}:${entry.operationId}`}>
+                      任务 {entry.localTaskId} · 操作 {entry.operationId} · 原状态 {entry.originalStatus} · 尝试 {entry.attemptCount} 次；
+                      远端页面 {entry.remotePageId ?? "未确认"} · 稳定键 {entry.clientKey} · 数据源 {entry.dataSourceId}；
+                      隔离于 {new Date(entry.quarantinedAt).toLocaleString("zh-CN")}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               {syncs[item.workspaceId].conflicts.slice(-10).map((conflict) => (
                 <p key={conflict.id}>冲突：任务 {conflict.localTaskId} 的 {conflict.field}，Notion 值优先。
                   基准 {JSON.stringify(conflict.baseline)}；本机 {JSON.stringify(conflict.local)}；Notion {JSON.stringify(conflict.remote)}</p>
@@ -86,6 +104,8 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               reads[item.workspaceId]?.connectionStatus === "active" ?
               <button type="button" disabled={busy} onClick={() => void scan(item.workspaceId)}>立即读取 Notion</button> : null}
             {syncs[item.workspaceId]?.connectionStatus === "active" &&
+              syncs[item.workspaceId].restoreQuarantine?.length === 0 &&
+              !syncs[item.workspaceId].operations.some((operation) => operation.status === "quarantined") &&
               syncs[item.workspaceId].operations.some((operation) => operation.status === "pending") ?
               <button type="button" disabled={busy} onClick={() => void drain(item.workspaceId)}>发送待同步任务</button> : null}
             {syncs[item.workspaceId]?.connectionStatus === "active" ?
@@ -93,6 +113,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             {(syncs[item.workspaceId]?.connectionStatus === "paused_unknown" ||
               (syncs[item.workspaceId]?.connectionStatus === "paused" &&
                 ["preflight_read", "manual"].includes(syncs[item.workspaceId]?.pauseReason ?? ""))) &&
+              syncs[item.workspaceId].restoreQuarantine?.length === 0 &&
               !syncs[item.workspaceId].operations.some((operation) => ["sending", "unknown", "quarantined"].includes(operation.status)) ?
               <button type="button" disabled={busy} onClick={() => void resume(item.workspaceId)}>恢复发送</button> : null}
             <button type="button" disabled={busy} onClick={() => {

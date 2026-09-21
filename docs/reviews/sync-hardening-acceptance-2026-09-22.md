@@ -3,26 +3,26 @@ batch: newday-sync-consistency-hardening
 status: IN_PROGRESS
 reviewed_base_sha: 853898d27203e53fc38c8d289d9ae13910bfce8e
 actual_base_sha: 853898d27203e53fc38c8d289d9ae13910bfce8e
-source_candidate_sha: 471279d93634f77996e9060e9f87472334c1de05
-source_candidate_tree: a0dc094e94dbb7c76b95584b8978ff5171a9d5bf
-latest_verified_candidate_sha: cb2a72633ff73f84cbdea0985455a77358d92aec
-latest_verified_candidate_tree: 8c0011ca84cd3ffeb73ca5a257a44d141f703e76
+source_candidate_sha: 2dc407d1daf9c550c618a79bb55cb1349e63bfa4
+source_candidate_tree: 34a3a942a73a53723ee4fa47295ccac8f4a5a18f
+latest_verified_candidate_sha: 8e92fb4854754d901b81960747e1d8c361832dd4
+latest_verified_candidate_tree: 9a26ae7c57cfb399401a78b144fc2c0fd0cd0f2c
 final_candidate_sha: null
 final_candidate_tree: null
 node_version: v26.7.0
 pnpm_version: 10.29.1
 lockfile_sha256: 0229b4113c3d821db229ff4d885659cb518c6ace1d1a9ac245b1b994cd72ca1f
 pr_url: https://github.com/ZZZZihan/NewDay/pull/21
-hosted_run_url: https://github.com/ZZZZihan/NewDay/actions/runs/35647517050
-hosted_checkout_sha: e1b27085f48066aa9a1c0b34e00e3f1ca1db2eb0
-hosted_checkout_tree: 8c0011ca84cd3ffeb73ca5a257a44d141f703e76
+hosted_run_url: https://github.com/ZZZZihan/NewDay/actions/runs/35649607021
+hosted_checkout_sha: 14af99f287dd9138db5d66f40d5fd136e3cb2a3f
+hosted_checkout_tree: 9a26ae7c57cfb399401a78b144fc2c0fd0cd0f2c
 hosted_event: pull_request
 controlled_failure_sha: 7583b25bc2bd544b6abe3de1fddecd065a325716
 controlled_failure_run_url: https://github.com/ZZZZihan/NewDay/actions/runs/35648673796
-independent_review: REVIEW_PENDING
+independent_review: CHANGES_REQUESTED_RECHECK_PENDING
 admin_gate: ACTIVE_RULESET_VERIFIED
 standing_authorization: NEWDAY_AUTONOMOUS_V2
-execution_state: FINAL_VERIFICATION
+execution_state: REVIEW_REMEDIATION
 native_goal_status: active
 state_sync: NATIVE_GOAL_ACTIVE
 merged_sha: null
@@ -61,7 +61,7 @@ g4_acceptance: OUT_OF_SCOPE_STILL_OPEN
 | --- | --- | --- |
 | S01 | `a cloned stale task scan cannot overwrite a local edit after the real dispatcher confirms it`：深拷贝旧 rows 后挂起，真实 dispatcher confirmed，旧响应拒绝且水位不前进 | PASS |
 | S02 | 同一测试覆盖标题、完成、重开、改期，并比较写回后任务、focus、mapping baseline 与事件 | PASS |
-| S03 | 既有 pending 用例，加上 sending/unknown/quarantined fence 定向子测试；无重放、水位不推进 | PASS |
+| S03 | 既有 pending 用例，加上 sending/unknown fence 定向子测试；无重放、水位不推进 | PASS |
 | S04 | `separate SQLite readers persistently reject an older task response that finishes last`，两个 service/连接交错 | PASS |
 | S05 | `dataset epoch rotation rejects an in-flight task response...` 与既有凭据替换中断测试 | PASS |
 | S06 | 完整扫描与完全相同重复扫描；无重复任务/事件且成功水位可推进 | PASS |
@@ -76,29 +76,33 @@ g4_acceptance: OUT_OF_SCOPE_STILL_OPEN
 
 ## H02：U01–U08
 
-修复前后证据为 `h02-polling-red.log`（旧 hook 4 项中 3 项失败）与 `h02-polling-green.log`（4/4 通过）。实现提交 `d83c7b8`；30 秒仅前台轮询，重新可见/聚焦时立即刷新，generation + abort 双重拒绝旧响应，错误时保留数据。表单与筛选仍由 `LifePanel` 本地状态持有。
+轮询修复前后证据为 `h02-polling-red.log`（旧 hook 4 项中 3 项失败）与 `h02-polling-green.log`（4/4 通过）。首次独立审查随后发现：只保留本地表单状态仍允许旧草稿保存覆盖服务器新版本。补充的真实保存场景在修复前稳定 2/2 失败，日志为 `independent-review/u06-stale-save-red.log`；提交 `2dc407d…` 在 API 事务中比较编辑器打开时的完整实体快照，并由任务/资料界面保留该基线，修复后 Chrome/WebKit 4/4 通过，日志为 `independent-review/u06-stale-save-green.log`。30 秒轮询仍只在前台运行，重新可见/聚焦时立即刷新，generation + abort 双重拒绝旧响应，错误时保留数据。
 
 | ID | 自动化/断言 | 当前结果 |
 | --- | --- | --- |
-| U01 | Hook fake clock 与双浏览器 `the open task table reflects backend changes...` 覆盖后端标题、状态和日期变化，无手动 reload/scan | PASS |
-| U02 | 同一 Hook/E2E 调度覆盖后端新增和归档，沿用现有归档显示规则且无复制 | PASS |
+| U01 | Hook fake clock 与双浏览器 `the open task table reflects backend changes...` 把同一任务改到不同日期并断言新日期，同时覆盖标题、完成状态；无手动 reload/scan | PASS |
+| U02 | Hook 从首屏既有未归档任务切换为同 ID 已归档任务，同时加入第二个新任务，并断言 ID 集合无重复；沿用现有归档显示规则 | PASS |
 | U03 | `stops polling while hidden and revalidates once visibility or focus returns`；timer/listener 清理 | PASS |
 | U04 | Hook 使用忽略 abort 的慢 Promise；E2E `an older workspace read cannot hide a newly saved resource` | PASS |
 | U05 | `retains loaded data on failure and clears the error after the next successful poll` | PASS |
-| U06 | 双浏览器 `background refresh preserves task filters and an unsaved editor draft` | PASS |
+| U06 | API 定向测试验证任务/资料旧快照均返回 409 且胜出写入不变；双浏览器分别验证任务与资料的草稿保留、旧保存被拒绝、服务器标题/备注/日期/内容不被覆盖 | PASS |
 | U07 | 既有 restore、undo、manual refresh 跨视图 E2E 保持通过 | PASS |
-| U08 | `life-management.spec.ts` Chrome/WebKit 18/18 | PASS |
+| U08 | `life-management.spec.ts` Chrome/WebKit 20/20；其中 U01、U04、任务与资料 U06 均有双浏览器代表旅程 | PASS |
 
-H02 后 `pnpm check` exit 0（Vitest 264、API 266、Worker 9、Agent integration 23）。这是后端已提交数据到 UI 的新鲜度证据，不是个人 Notion 工作区端到端延迟验收。
+独立审查修复后 `pnpm check` exit 0（Vitest 265、API 268、Worker 9、Agent integration 23），`life-management.spec.ts` 双浏览器 20/20。这是后端已提交数据到 UI 的新鲜度和并发保存保护证据，不是个人 Notion 工作区端到端延迟验收；最终全套 E2E 仍须绑定最终报告 head 重跑。
+
+### 首次独立审查与处置
+
+同一独立审查者在 `8e92fb4…` 上给出 `CHANGES_REQUESTED`：P1 为 U06 旧草稿可静默覆盖服务器新版本；P2 为 U01/U02 的报告超出实际断言；P3 为 S03 多写了合同未要求、也未定向执行的 `quarantined`。提交 `2dc407d…` 已修复 P1，并补上 API 与双浏览器失败/通过成对证据；U01/U02 自动化已改为真实日期变化和既有任务归档转变；本报告已删除 S03 的多余声称。该审查者的修复后复核尚未完成，因此当前仍不能合并。
 
 ## H03：C01–C07
 
 | ID | 证据 | 当前结果 |
 | --- | --- | --- |
-| C01 | hosted run `35647517050` 在全新 `ubuntu-24.04` 成功；Node 24.20.0、pnpm 10.29.1、lock SHA-256 与记录一致；check 264/266/9/23、build、Chrome/WebKit 98/98 全部通过 | PASS |
-| C02 | `471279d…`、`cb2a726…` 及后续每个 PR head 都触发新 run；`51c4d63…` 的无效哨兵 run `35648608779` 被新 head 按 concurrency 取消；最终报告 head 尚待验证 | PASS_WITH_FINAL_RECHECK_PENDING |
-| C03 | 受控候选 `7583b25…` / run `35648673796` 的 `Check` 因 `tests/unit/controlled-ci-gate-failure.test.ts` 唯一断言而失败（264 pass + 1 fail），build/E2E 被跳过，PR `mergeStateStatus=BLOCKED`；`fb696dc…` 已删除哨兵并恢复到 `cb2a726…` 的相同 tree，恢复 run `35649161772` 运行中 | RED_PROVED_RECOVERY_RUNNING |
-| C04 | run `35647517050` 事件为 `pull_request`，PR head `cb2a726…`、base `853898d…`；GitHub 实际 checkout 为合并提交 `e1b27085f48066aa9a1c0b34e00e3f1ca1db2eb0`，tree `8c0011c…` 与 PR head tree 一致 | PASS |
+| C01 | hosted run `35649607021` 在全新 `ubuntu-24.04` 成功；Node 24.20.0、pnpm 10.29.1、lock SHA-256 与记录一致；check 264/266/9/23、build、Chrome/WebKit 98/98 全部通过 | PASS_WITH_REMEDIATION_RECHECK_PENDING |
+| C02 | `471279d…`、`cb2a726…`、`8e92fb4…` 及后续每个已推送 PR head 都触发新 run；`51c4d63…` 的无效哨兵 run `35648608779` 被新 head 按 concurrency 取消；`2dc407d…` 的修复和最终报告 head 尚待推送验证 | PASS_WITH_FINAL_RECHECK_PENDING |
+| C03 | 受控候选 `7583b25…` / run `35648673796` 的 `Check` 因 `tests/unit/controlled-ci-gate-failure.test.ts` 唯一断言而失败（264 pass + 1 fail），build/E2E 被跳过，PR `mergeStateStatus=BLOCKED`；`fb696dc…` 已删除哨兵，后续 `8e92fb4…` / run `35649607021` 全绿 | RED_PROVED_RECOVERED |
+| C04 | run `35649607021` 事件为 `pull_request`，PR head `8e92fb4…`、base `853898d…`；GitHub 实际 checkout 为合并提交 `14af99f287dd9138db5d66f40d5fd136e3cb2a3f`，tree `9a26ae7…` 与 PR head tree 一致 | PASS |
 | C05 | workflow 权限 `contents: read`，无 secrets，Worker dry run，E2E 3100/3002 + disposable SQLite | PASS_BY_INSPECTION |
 | C06 | 初始规则回读为 main 未保护、rulesets `[]`；现已建立只匹配 `refs/heads/main` 的 active ruleset `23787864`：禁止删除/非快进，必须经 PR，审批数 0，无额外归属审批 | PASS |
 | C07 | ruleset 回读确认 required check 为 `newday-quality-gate`、GitHub Actions integration `15368`、strict 最新基线、无 bypass actor；branch API 返回 `protected: true`，红灯 run 时 PR 实际为 BLOCKED | PASS |
@@ -114,19 +118,19 @@ H02 后 `pnpm check` exit 0（Vitest 264、API 266、Worker 9、Agent integratio
 | D05 | PR/Linear/报告最终 candidate 与结论需在 H06 绑定 | PENDING |
 | D06 | 文档不含令牌、密钥、完整远端 ID、个人任务正文、私有证据路径或机器标识 | PASS_BY_REVIEW |
 
-H05 设计见 `docs/notion-restore-resolution-design.md`；本批次不新增解除隔离、删除隔离审计或重放旧写入的入口。受控故障与规则回读已完成；H06 的独立审查、最终 head hosted 绿灯、正常合并和 main push CI 仍为 `PENDING`，因此当前不能标记 `BATCH_COMPLETE`。
+H05 设计见 `docs/notion-restore-resolution-design.md`；本批次不新增解除隔离、删除隔离审计或重放旧写入的入口。受控故障与规则回读已完成；首次独立审查的实质缺陷已经修复，但复核、最终 head 全套本机/hosted 绿灯、正常合并和 main push CI 仍为 `PENDING`，因此当前不能标记 `BATCH_COMPLETE`。
 
 ## 本机完整回归与证据索引
 
-候选 `cb2a72633ff73f84cbdea0985455a77358d92aec` / tree `8c0011ca84cd3ffeb73ca5a257a44d141f703e76` 在干净 worktree 运行完整门禁；随后 `fb696dc…` 只移除受控失败哨兵，tree 精确恢复为同一值。日志保存在仓库外的受控 evidence bundle：
+候选 `8e92fb4854754d901b81960747e1d8c361832dd4` / tree `9a26ae7c57cfb399401a78b144fc2c0fd0cd0f2c` 在干净 worktree 运行完整门禁，hosted run `35649607021` 也成功。独立审查修复 `2dc407d…` 已通过全量 `pnpm check` 和生活管理双浏览器 20/20；最终文档提交后仍将重跑完整门禁。日志保存在仓库外的受控 evidence bundle：
 
 | 命令 | 结果 | 日志 |
 | --- | --- | --- |
-| `pnpm check` | exit 0；Vitest 264、API 266、Worker 9、Agent integration 23 | `final-candidate-cb2a726/pnpm-check.log` |
-| `pnpm build` | exit 0；API、Next.js、Worker dry run | `final-candidate-cb2a726/pnpm-build.log` |
-| `pnpm test:e2e --project=chrome --project=safari-webkit` | exit 0；98/98 | `final-candidate-cb2a726/pnpm-e2e-chrome-webkit.log` |
-| `git diff --check` / `git diff --cached --check` | exit 0 / exit 0 | `final-candidate-cb2a726/git-diff-check.log`、`git-diff-cached-check.log` |
-| hosted `35647517050` | success；实际 checkout `e1b2708…`，98/98 | `hosted/run-35647517050.log` |
+| `pnpm check` | `8e92fb4…` exit 0：264/266/9/23；`2dc407d…` exit 0：265/268/9/23 | `final-candidate-8e92fb4/pnpm-check.log`、`independent-review/post-review-pnpm-check.log` |
+| `pnpm build` | `8e92fb4…` exit 0；API、Next.js、Worker dry run；修复后最终重跑 pending | `final-candidate-8e92fb4/pnpm-build.log` |
+| `pnpm test:e2e --project=chrome --project=safari-webkit` | `8e92fb4…` exit 0；98/98；修复后生活管理 20/20，最终全套 pending | `final-candidate-8e92fb4/pnpm-e2e-chrome-webkit.log`、`independent-review/post-review-life-e2e.log` |
+| `git diff --check` / `git diff --cached --check` | `8e92fb4…` exit 0 / 0；最终 head 仍需重跑 | `final-candidate-8e92fb4/git-diff-check.log`、`git-diff-cached-check.log` |
+| hosted `35649607021` | success；实际 checkout `14af99f…`、tree `9a26ae7…`，98/98 | `hosted/run-35649607021.log` |
 | hosted `35648673796` | expected failure；唯一哨兵断言失败，门禁阻止合并 | `hosted/run-35648673796-controlled-failure.log` |
 
 ## 附录 C：A01–A06
@@ -144,12 +148,12 @@ H05 设计见 `docs/notion-restore-resolution-design.md`；本批次不新增解
 
 | 项目 | 结果 |
 | --- | --- |
-| 最终 candidate SHA/tree | PENDING；最近完整本机/hosted 绿灯为 `cb2a726…` / `8c0011c…`，恢复提交 `fb696dc…` 为同 tree |
-| `pnpm check` | `cb2a726…` exit 0；最终报告 head 仍需重跑 |
-| `pnpm build` | `cb2a726…` exit 0；最终报告 head 仍需重跑 |
-| Chrome/WebKit full E2E | `cb2a726…` 98/98；最终报告 head 仍需重跑 |
-| `git diff --check` / `git diff --cached --check` | `cb2a726…` exit 0 / 0；最终 head 仍需重跑 |
-| 独立审查 | REVIEW_PENDING |
+| 最终 candidate SHA/tree | PENDING；当前修复提交 `2dc407d…` / `34a3a94…` 已通过 check 与生活管理双浏览器，最终文档 head 尚未生成 |
+| `pnpm check` | `2dc407d…` exit 0；Vitest 265、API 268、Worker 9、Agent integration 23；最终报告 head 仍需重跑 |
+| `pnpm build` | 最近完整候选 `8e92fb4…` exit 0；修复后最终报告 head 仍需重跑 |
+| Chrome/WebKit full E2E | 最近完整候选 `8e92fb4…` 98/98；`2dc407d…` 生活管理 20/20；最终报告 head 仍需全套重跑 |
+| `git diff --check` / `git diff --cached --check` | `2dc407d…` 修复提交前均 exit 0；最终 head 仍需重跑 |
+| 独立审查 | 首次 `CHANGES_REQUESTED`，修复已提交；RECHECK_PENDING |
 | final PR hosted run | PENDING |
 | main protection readback | PASS；ruleset `23787864` active，branch `protected: true` |
 | merge SHA | POST_MERGE_PENDING |

@@ -37,6 +37,7 @@ export interface Env {
 
 const AUTHORIZATION_LIFETIME_MS = 10 * 60_000;
 const REFRESH_RESULT_LIFETIME_MS = 24 * 60 * 60_000;
+const MAX_JSON_BODY_BYTES = 4096;
 const opaqueToken = /^[A-Za-z0-9_-]{43}$/;
 const digest = /^[a-f0-9]{64}$/;
 
@@ -158,13 +159,15 @@ function validConfiguration(env: Env): boolean {
   } catch { return false; }
 }
 
-function authorized(request: Request, apiKey: string): boolean {
+async function authorized(request: Request, apiKey: string): Promise<boolean> {
   const received = request.headers.get("authorization") ?? "";
   const expected = `Bearer ${apiKey}`;
-  if (received.length !== expected.length) return false;
-  let difference = 0;
-  for (let index = 0; index < expected.length; index += 1) difference |= received.charCodeAt(index) ^ expected.charCodeAt(index);
-  return difference === 0;
+  const encoder = new TextEncoder();
+  const [receivedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(received)),
+    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(receivedHash, expectedHash);
 }
 
 function json(value: unknown, status = 200): Response {
@@ -184,8 +187,41 @@ function redirectToLocal(env: Env, result: string, state: string, ticket?: strin
 
 async function readSmallJson(request: Request): Promise<Record<string, unknown> | null> {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get("content-type") ?? "")) return null;
-  const body = await request.text();
-  if (body.length > 4096) return null;
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const length = Number(declaredLength);
+    if (!Number.isInteger(length) || length < 0 || length > MAX_JSON_BODY_BYTES) return null;
+  }
+  if (!request.body) return null;
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_JSON_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let body: string;
+  try { body = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes); }
+  catch { return null; }
   try {
     const value: unknown = JSON.parse(body);
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -229,7 +265,7 @@ export async function handleOAuthRequest(request: Request, env: Env): Promise<Re
   const url = new URL(request.url);
   if (url.pathname === "/health" && request.method === "GET") return json({ status: "ok" });
   if (!validConfiguration(env)) return json({ error: "oauth_not_configured" }, 503);
-  if (url.pathname !== "/oauth/callback" && !authorized(request, env.LOCAL_API_KEY)) return json({ error: "unauthorized" }, 401);
+  if (url.pathname !== "/oauth/callback" && !await authorized(request, env.LOCAL_API_KEY)) return json({ error: "unauthorized" }, 401);
 
   if (url.pathname === "/oauth/start" && request.method === "POST") {
     const body = await readSmallJson(request);

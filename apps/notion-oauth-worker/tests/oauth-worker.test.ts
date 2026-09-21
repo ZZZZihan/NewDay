@@ -25,6 +25,52 @@ describe("OAuth Worker handoff", () => {
     }), workerEnv);
     expect(response.status).toBe(401);
   });
+
+  it("rejects oversized JSON before consuming a declared body", async () => {
+    let bodyRead = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        bodyRead = true;
+        controller.enqueue(new TextEncoder().encode("{}"));
+        controller.close();
+      },
+    }, { highWaterMark: 0 });
+    const response = await handleOAuthRequest(new Request("https://oauth.example.test/oauth/start", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": "4097",
+        authorization: `Bearer ${workerEnv.LOCAL_API_KEY}`,
+      },
+      body,
+    }), workerEnv);
+    expect(response.status).toBe(400);
+    expect(bodyRead).toBe(false);
+  });
+
+  it("rejects chunked JSON as soon as it exceeds the byte limit", async () => {
+    let cancelled = false;
+    const chunk = new Uint8Array(4097);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = await handleOAuthRequest(new Request("https://oauth.example.test/oauth/start", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${workerEnv.LOCAL_API_KEY}`,
+      },
+      body,
+    }), workerEnv);
+    expect(response.status).toBe(400);
+    expect(cancelled).toBe(true);
+  });
+
   it("requires a bound verifier, allows committed redelivery, and rejects replay after acknowledgement", async () => {
     const verifier = "v".repeat(43);
     const challenge = await hash(verifier);

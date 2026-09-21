@@ -609,6 +609,54 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return this.many<NotionScanWatermark>("SELECT payload FROM notion_scan_watermarks ORDER BY workspace_id,data_source_id");
   }
 
+  /** Starts one durable read attempt. BEGIN IMMEDIATE makes the timestamp
+   * strictly increasing even when separate API processes share a clock tick. */
+  async beginNotionScanAttempt(workspaceId: string, dataSourceId: string, requestedAt: string): Promise<string> {
+    const requestedMilliseconds = Date.parse(requestedAt);
+    if (!Number.isFinite(requestedMilliseconds)) throw new Error("Notion scan attempt timestamp is invalid");
+    return this.transaction(async () => {
+      if (!await this.getNotionConnection(workspaceId)) throw new Error("Notion scan workspace does not exist");
+      const old = (await this.listNotionScanWatermarks()).find((item) =>
+        item.workspaceId === workspaceId && item.dataSourceId === dataSourceId);
+      const previousMilliseconds = old?.lastAttemptAt ? Date.parse(old.lastAttemptAt) : Number.NaN;
+      const attemptAt = new Date(Math.max(requestedMilliseconds,
+        Number.isFinite(previousMilliseconds) ? previousMilliseconds + 1 : requestedMilliseconds)).toISOString();
+      await this.putNotionScanWatermark({
+        workspaceId,
+        dataSourceId,
+        completedThrough: old?.completedThrough ?? null,
+        lastAttemptAt: attemptAt,
+        lastSuccessAt: old?.lastSuccessAt ?? null,
+        lastError: old?.lastError ?? null,
+        lastErrorAt: old?.lastErrorAt ?? null,
+      });
+      return attemptAt;
+    });
+  }
+
+  async isNotionScanAttemptCurrent(workspaceId: string, dataSourceId: string, attemptAt: string): Promise<boolean> {
+    const current = (await this.listNotionScanWatermarks()).find((item) =>
+      item.workspaceId === workspaceId && item.dataSourceId === dataSourceId);
+    return current?.lastAttemptAt === attemptAt;
+  }
+
+  /** A superseded request must not publish either success or error over the
+   * newer attempt. Callers use false as a stale-response conflict. */
+  async updateCurrentNotionScanAttempt(
+    workspaceId: string,
+    dataSourceId: string,
+    attemptAt: string,
+    patch: Partial<Omit<NotionScanWatermark, "workspaceId" | "dataSourceId" | "lastAttemptAt">>,
+  ): Promise<boolean> {
+    return this.transaction(async () => {
+      const current = (await this.listNotionScanWatermarks()).find((item) =>
+        item.workspaceId === workspaceId && item.dataSourceId === dataSourceId);
+      if (!current || current.lastAttemptAt !== attemptAt) return false;
+      await this.putNotionScanWatermark({ ...current, ...patch, lastAttemptAt: attemptAt });
+      return true;
+    });
+  }
+
   async listNotionReadNodes(workspaceId?: string): Promise<NotionReadNode[]> {
     return workspaceId
       ? this.many<NotionReadNode>("SELECT payload FROM notion_read_nodes WHERE workspace_id=? ORDER BY data_source_id,remote_page_id", workspaceId)

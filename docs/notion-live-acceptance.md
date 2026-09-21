@@ -4,7 +4,7 @@
 
 ## 当前候选与证据边界
 
-2026-09-21 查询 GitHub 时，PR #1～#14 均为 Open，尚未合并。Notion 主候选按 #3 → #6 → #7 → #8 → #9 → #10 → #11 堆叠；#9 还包含 #5 的同步底座，#14 基于 #11。#12/#13 是分别跟踪 G3/G4 的并行候选。它们不是 `main`、已部署服务或个人数据的当前能力。改变基线、整理堆叠分支或合并后，必须按新 SHA 重新验证。
+2026-09-21 查询 GitHub 时，PR #1～#15 均为 Open，尚未合并。Notion 主候选按 #3 → #6 → #7 → #8 → #9 → #10 → #11 堆叠；#9 还包含 #5 的同步底座，#14 基于 #11，#15 基于 #14。#12/#13 是分别跟踪 G3/G4 的并行候选。它们不是 `main`、已部署服务或个人数据的当前能力。改变基线、整理堆叠分支或合并后，必须按新 SHA 重新验证。
 
 | 范围 | 当前入口 | 已有证据 | 仍缺少的验收 |
 | --- | --- | --- | --- |
@@ -13,7 +13,7 @@
 | 授权与结构 T2/T3 | [PR #6](https://github.com/ZZZZihan/NewDay/pull/6)、[PR #7](https://github.com/ZZZZihan/NewDay/pull/7) | 本地 Worker/API 与假网关测试 | Worker 部署、真实授权/轮换、私有根和四表关系读回 |
 | 读取、写回 T4～T6 | [PR #8](https://github.com/ZZZZihan/NewDay/pull/8)、[PR #5](https://github.com/ZZZZihan/NewDay/pull/5)、[PR #9](https://github.com/ZZZZihan/NewDay/pull/9) | SQLite、假 Notion 网关/传输、HTTP 与浏览器测试 | 真实分页、限流、回收站、冲突和往返；适用的条件写入能力 |
 | 规则与实例 T7 | [PR #10](https://github.com/ZZZZihan/NewDay/pull/10)，`c9b5b2b7bdeac932847b164bf4e76f0fef304aac` | 此 SHA 的 `pnpm check`、`pnpm build`、Chrome/WebKit Notion E2E 10/10 通过；此前 `b1425c6` 的 Notion + 日程 E2E 36/36；月末、改期、停用、重启及 Tasks 中断重试的假网关测试 | 真实规则属性、发生键、实例创建/读回与跨日运行 |
-| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11)、[PR #14](https://github.com/ZZZZihan/NewDay/pull/14) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对、恢复隔离明细展示及离线验收矩阵；具体候选 SHA 和验证见 PR | A1～D1 真实执行、恢复演练与用户认可；隔离仍未核销 |
+| 暂停与验收手册 T8 | [PR #11](https://github.com/ZZZZihan/NewDay/pull/11)、[PR #14](https://github.com/ZZZZihan/NewDay/pull/14)、[PR #15](https://github.com/ZZZZihan/NewDay/pull/15) | 持久暂停入口、429/529 写前预读截止时间、单步结构核对、恢复隔离明细与远端只读核对、离线验收矩阵；具体候选 SHA 和验证见 PR | A1～D1 真实执行、恢复演练与用户认可；隔离仍未核销 |
 | G3 / G4 | [COL-23](https://linear.app/colife/issue/COL-23)、[COL-24](https://linear.app/colife/issue/COL-24)；[PR #12](https://github.com/ZZZZihan/NewDay/pull/12)、[PR #13](https://github.com/ZZZZihan/NewDay/pull/13) | G3 零真实调用预检和 G4 前瞻记录协议 | 冻结预算与真实模型评测；人工基线和连续七天原始记录 |
 
 `pnpm build` 中 Worker 的 `wrangler deploy --dry-run` 只验证打包，不是部署。COL-39 的真实 OAuth、Notion 读写和恢复均为**未执行**；缺失证据不能记为通过。

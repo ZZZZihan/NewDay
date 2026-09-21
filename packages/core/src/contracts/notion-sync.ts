@@ -226,6 +226,11 @@ export const notionRestoreQuarantineSchema = z.object({
   // A read-only observation, never permission to replay or release the fence.
   latestReview: notionRestoreReviewSchema.optional(),
 }).strict().superRefine((entry, context) => {
+  if (entry.mapping.remotePageId !== null && entry.latestReview?.remotePageId &&
+    ["matches_intent", "different", "trashed"].includes(entry.latestReview.outcome) &&
+    entry.latestReview.remotePageId !== entry.mapping.remotePageId) {
+    context.addIssue({ code: "custom", message: "Notion 恢复核对页面与原映射不一致" });
+  }
   if (!entry.latestReview?.remoteFields || !["matches_intent", "different"].includes(entry.latestReview.outcome)) return;
   const remote = entry.latestReview.remoteFields;
   const desired = entry.operation.desired;

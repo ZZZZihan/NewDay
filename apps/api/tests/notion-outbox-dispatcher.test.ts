@@ -544,12 +544,24 @@ test("restore audit records a remote match without replaying an old operation or
     const invalidReview = structuredClone(exported);
     invalidReview.notionSync.restoreQuarantine[0]!.latestReview!.remoteFields!.title = "不匹配的伪造值";
     assert.throws(() => parsePlannerBackup(JSON.stringify(invalidReview)), /核对结果与原意图不一致/);
+    const invalidPage = structuredClone(exported);
+    invalidPage.notionSync.restoreQuarantine[0]!.latestReview!.remotePageId = "another-page";
+    assert.throws(() => parsePlannerBackup(JSON.stringify(invalidPage)), /核对页面与原映射不一致/);
     const imported = new SQLitePlannerStore(":memory:");
     try {
       await restorePlannerBackup(imported, JSON.stringify(exported));
       assert.deepEqual((await imported.listNotionRestoreQuarantine())[0]?.latestReview,
         status.restoreQuarantine[0]?.latestReview);
       assert.equal((await imported.getNotionConnection("workspace-1"))?.status, "paused_after_restore");
+      const laterBackup = structuredClone(exported);
+      laterBackup.notionSync.restoreQuarantine[0]!.latestReview!.checkedAt = "2026-09-21T09:00:01.000+08:00";
+      laterBackup.exportedAt = "2026-09-21T01:00:02.000Z";
+      await restorePlannerBackup(imported, JSON.stringify(laterBackup));
+      assert.equal((await imported.listNotionRestoreQuarantine())[0]?.latestReview?.checkedAt,
+        "2026-09-21T09:00:01.000+08:00", "a newer imported observation must survive in the same database");
+      await restorePlannerBackup(imported, JSON.stringify(exported));
+      assert.equal((await imported.listNotionRestoreQuarantine())[0]?.latestReview?.checkedAt,
+        "2026-09-21T09:00:01.000+08:00", "an older imported observation must not replace it");
     } finally { imported.close(); }
   } finally { store.close(); }
 });
@@ -660,17 +672,46 @@ test("a slower restore read cannot overwrite a later observation from another di
     await store.pauseNotionForRestore();
     await store.replaceAllData({ tasks: [task()] });
     first.transport.findByClientKey = async () => { entered(); await released; return { complete: true, pages: [] }; };
-    const old = new NotionSyncService(store, new NotionOutboxDispatcher(store, first.transport, () => at));
-    const freshAt = "2026-09-21T00:00:01.000Z";
+    let readFinished = false;
+    let sampledBeforeRelease = false;
+    const old = new NotionSyncService(store, new NotionOutboxDispatcher(store, first.transport, () => {
+      sampledBeforeRelease = !readFinished;
+      return readFinished ? "2026-09-21T11:00:00.000+08:00" : "2026-09-21T09:00:00.000+08:00";
+    }));
+    const freshAt = "2026-09-21T02:00:00.000Z";
     const newer = new NotionSyncService(store, new NotionOutboxDispatcher(store, second.transport, () => freshAt));
     const slow = old.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
     await started;
+    assert.equal(sampledBeforeRelease, true, "the slow read must be timestamped before its result arrives");
     const fresh = await newer.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
     assert.equal(fresh.restoreQuarantine[0]?.latestReview?.checkedAt, freshAt);
+    readFinished = true;
     release();
     await assert.rejects(slow, /核对期间数据集或连接已变化/);
     assert.equal((await store.listNotionRestoreQuarantine())[0]?.latestReview?.checkedAt, freshAt);
   } finally { release(); store.close(); }
+});
+
+test("a newer restore observation can replace an earlier one across timezone offsets", async () => {
+  const store = await setup();
+  const fake = fakeTransport();
+  try {
+    await store.putNotionConnection({ ...connection(), dataSources: { tasks: {
+      databaseId: "tasks-db", dataSourceId: "tasks-source-1", propertyIds: {}, schemaFingerprint: "test",
+    } } });
+    const sourceEpoch = (await store.getPlanningVersion()).datasetEpoch;
+    await store.markNotionOutboxSending("operation-1", at);
+    await store.pauseNotionForRestore();
+    await store.replaceAllData({ tasks: [task()] });
+    const earlier = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport,
+      () => "2026-09-21T09:00:00.000+08:00"));
+    const newer = new NotionSyncService(store, new NotionOutboxDispatcher(store, fake.transport,
+      () => "2026-09-21T02:00:00.000Z"));
+    await earlier.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    const result = await newer.reconcileRestore("workspace-1", sourceEpoch, "operation-1");
+    assert.equal(result.restoreQuarantine[0]?.latestReview?.checkedAt, "2026-09-21T02:00:00.000Z");
+    assert.deepEqual(fake.calls, { create: 0, update: 0 });
+  } finally { store.close(); }
 });
 
 test("a restore during remote preflight prevents a new HTTP write", async () => {

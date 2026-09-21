@@ -667,10 +667,11 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         expected.operation.datasetEpoch, expected.operation.operationId);
       if (!current || current.quarantinedAt !== expected.quarantinedAt ||
         JSON.stringify(current.operation) !== JSON.stringify(expected.operation) ||
-        JSON.stringify(current.mapping) !== JSON.stringify(expected.mapping)) {
+        JSON.stringify(current.mapping) !== JSON.stringify(expected.mapping) ||
+        JSON.stringify(current.latestReview) !== JSON.stringify(expected.latestReview)) {
         throw new Error("Notion restore audit operation changed during read");
       }
-      if (current.latestReview && current.latestReview.checkedAt > review.checkedAt) {
+      if (current.latestReview && Date.parse(current.latestReview.checkedAt) > Date.parse(review.checkedAt)) {
         throw new Error("Notion restore audit newer observation already exists");
       }
       const updated = notionRestoreQuarantineSchema.parse({ ...current, latestReview: review });
@@ -864,6 +865,14 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       if (JSON.stringify(previous.operation) !== JSON.stringify(item.operation) ||
         JSON.stringify(previous.mapping) !== JSON.stringify(item.mapping)) {
         throw new Error("Notion restore quarantine identity collision");
+      }
+      // This table survives a backup replacement. Keep the latest observation
+      // from either side when the same quarantined send is imported again.
+      if (item.latestReview && (!previous.latestReview ||
+        Date.parse(item.latestReview.checkedAt) > Date.parse(previous.latestReview.checkedAt))) {
+        this.database.prepare(`UPDATE notion_restore_quarantine SET payload=?
+          WHERE source_epoch=? AND operation_id=?`).run(JSON.stringify({ ...previous, latestReview: item.latestReview }),
+            item.operation.datasetEpoch, item.operation.operationId);
       }
       return;
     }

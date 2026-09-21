@@ -89,6 +89,9 @@ export class NotionOutboxDispatcher {
     }
     const datasetEpoch = (await this.store.getPlanningVersion()).datasetEpoch;
     const { mapping, operation } = entry;
+    // Timestamp the observation before remote I/O; a slow older read must not
+    // appear newer simply because its response arrived last.
+    const checkedAt = this.now();
     let outcome: NotionRestoreReview["outcome"] = "identity_mismatch";
     let remotePageId: string | null = null;
     let remoteFields: NotionTaskFields | null = null;
@@ -127,7 +130,7 @@ export class NotionOutboxDispatcher {
         remoteFields = null;
       }
     }
-    const review: NotionRestoreReview = { checkedAt: this.now(), outcome, remotePageId, remoteFields };
+    const review: NotionRestoreReview = { checkedAt, outcome, remotePageId, remoteFields };
     await this.store.recordNotionRestoreReview(entry, datasetEpoch, connection, review);
     return review;
   }

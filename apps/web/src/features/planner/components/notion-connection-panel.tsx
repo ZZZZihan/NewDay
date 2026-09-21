@@ -5,7 +5,8 @@ type ConnectionState = ReturnType<typeof useNotionConnection>;
 
 export function NotionConnectionPanel({ connection }: { connection: ConnectionState }) {
   const { status, structures, reads, syncs, restoreStructureReviews, message, busy, refresh, start, disconnect,
-    retryRefresh, initializeStructure, verifyRestoredStructure, scan, drain, pause, reconcile, reconcileRestore, resume } = connection;
+    retryRefresh, initializeStructure, verifyRestoredStructure, reconnectStructure, scan, drain, pause, reconcile,
+    reconcileRestore, resume } = connection;
   return (
     <section className="schedule-panel notion-panel" aria-label="Notion 连接">
       <header className="schedule-heading life-heading">
@@ -41,6 +42,7 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
               <p>{structures[item.workspaceId].state === "ready" ? "私有根页面和四张关联表已确认"
                 : structures[item.workspaceId].state === "needs_review" ? reviewDescription(structures[item.workspaceId])
                   : structures[item.workspaceId].state === "paused_after_restore" ? "备份恢复后结构和授权需要重新核对"
+                    : structures[item.workspaceId].state === "disconnected" ? "已重新授权；原有九项结构须只读核对后才能恢复同步"
                     : `结构初始化：${structures[item.workspaceId].completedSteps.length}/9 步已确认`}</p>
             ) : <p>结构状态未读取；可刷新状态重试。</p>}
             {structures[item.workspaceId]?.state === "paused_after_restore" &&
@@ -110,8 +112,16 @@ export function NotionConnectionPanel({ connection }: { connection: ConnectionSt
             <small>工作区 ID：{item.workspaceId}</small>
           </div>
           <div className="notion-panel__connection-actions">
+            {item.status === "active" && structures[item.workspaceId]?.state === "disconnected" ? (
+              <button type="button" disabled={busy} onClick={() => {
+                if (window.confirm(`只读核对工作区 ${item.workspaceName || item.workspaceId} 原有九项结构并在完全一致时恢复同步，继续吗？`)) {
+                  void reconnectStructure(item.workspaceId);
+                }
+              }}>核对并重新连接</button>
+            ) : null}
             {item.status === "active" && structures[item.workspaceId]?.state !== "ready" &&
-              structures[item.workspaceId]?.state !== "paused_after_restore" ? (
+              structures[item.workspaceId]?.state !== "paused_after_restore" &&
+              structures[item.workspaceId]?.state !== "disconnected" ? (
                 <button type="button" disabled={busy || !structures[item.workspaceId]} onClick={() => {
                   const reviewOnly = structures[item.workspaceId]?.state === "needs_review";
                   if (window.confirm(reviewOnly

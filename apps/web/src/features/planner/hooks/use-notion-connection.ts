@@ -273,6 +273,22 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
     } finally { setBusy(false); }
   }
 
+  async function reconnectStructure(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    setMessage("正在只读核对原有九项 Notion 结构…");
+    try {
+      const result = await notionApi.reconnectStructure(workspaceId);
+      refreshRevision.current += 1;
+      setStructures((current) => ({ ...current, [workspaceId]: result.progress }));
+      setMessage(result.review.outcome === "matches"
+        ? "原有九项结构已逐项读回一致；此工作区已恢复同步连接。"
+        : "原有结构与当前 Notion 不完全一致；连接保持断开，请逐项检查后重试。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "无法核对重新授权后的 Notion 结构");
+    } finally { setBusy(false); await refresh(); }
+  }
+
   async function resume(workspaceId: string) {
     if (busy) return;
     setBusy(true);
@@ -286,5 +302,6 @@ export function useNotionConnection(onReturn: () => void, onScanComplete: () => 
   }
 
   return { status, structures, reads, syncs, restoreStructureReviews, message, busy, refresh, start, disconnect,
-    retryRefresh, initializeStructure, verifyRestoredStructure, scan, drain, pause, reconcile, reconcileRestore, resume };
+    retryRefresh, initializeStructure, verifyRestoredStructure, reconnectStructure, scan, drain, pause, reconcile,
+    reconcileRestore, resume };
 }

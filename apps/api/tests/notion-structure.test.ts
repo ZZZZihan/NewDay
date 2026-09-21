@@ -17,10 +17,15 @@ const notionOAuth = (path: string) => ({ workerOrigin: "https://oauth.example.te
 
 function seedVault(path: string) {
   const vault = new NotionCredentialVault(path, credentialKey);
-  vault.putPending("s".repeat(43), "test verifier", Date.now() + 60_000);
-  vault.storeClaimed("s".repeat(43), { access_token: "isolated-fake-access-token", refresh_token: "isolated-fake-refresh-token",
-    bot_id: "test-bot", workspace_id: workspaceId, workspace_name: "隔离测试空间" }, new Date().toISOString());
+  claimVault(vault, "s");
   vault.close();
+}
+
+function claimVault(vault: NotionCredentialVault, stateCharacter: string) {
+  const state = stateCharacter.repeat(43);
+  vault.putPending(state, "test verifier", Date.now() + 60_000);
+  return vault.storeClaimed(state, { access_token: "isolated-fake-access-token", refresh_token: "isolated-fake-refresh-token",
+    bot_id: "test-bot", workspace_id: workspaceId, workspace_name: "隔离测试空间" }, new Date().toISOString());
 }
 
 class FakeStructureGateway implements NotionStructureGateway {
@@ -438,6 +443,52 @@ test("disconnect waits for an in-flight create and blocks later initialization",
     assert.equal((await app.inject({ method: "POST", url: path, payload: {} })).statusCode, 409);
     assert.equal((await app.inject(`/api/notion/connections/${workspaceId}/structure`)).json().state, "disconnected");
     assert.deepEqual(fake.creates, { root: 1, database: 0, relation: 0 });
+  } finally {
+    await app.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("reauthorized workspace reconnects only after exact read-only verification of all recorded structure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "newday-notion-reconnect-"));
+  const vaultPath = join(directory, "vault.sqlite");
+  seedVault(vaultPath);
+  const fake = new FakeStructureGateway();
+  const app = createApp({ databasePath: ":memory:", notionOAuth: notionOAuth(vaultPath), notionStructureGateway: fake });
+  const base = `/api/notion/connections/${workspaceId}`;
+  const reauthorize = (stateCharacter: string) => {
+    const vault = new NotionCredentialVault(vaultPath, credentialKey);
+    try { assert.ok(claimVault(vault, stateCharacter)); }
+    finally { vault.close(); }
+  };
+  try {
+    for (let index = 0; index < 9; index += 1) {
+      const response = await app.inject({ method: "POST", url: `${base}/structure/advance`, payload: {} });
+      assert.equal(response.statusCode, 200, response.body);
+    }
+    const created = structuredClone(fake.creates);
+    assert.equal((await app.inject({ method: "POST", url: `${base}/disconnect`, payload: {} })).statusCode, 200);
+    reauthorize("t");
+
+    const reconnected = await app.inject({ method: "POST", url: `${base}/structure/reconnect`, payload: {} });
+    assert.equal(reconnected.statusCode, 200, reconnected.body);
+    assert.equal(reconnected.json().review.outcome, "matches");
+    assert.ok(reconnected.json().review.checks.every((check: { result: string }) => check.result === "matches"));
+    assert.equal(reconnected.json().progress.state, "ready");
+    assert.equal((await app.inject(`${base}/sync`)).json().connectionStatus, "active");
+    assert.deepEqual(fake.creates, created, "reconnect must not create or patch remote structure");
+
+    assert.equal((await app.inject({ method: "POST", url: `${base}/disconnect`, payload: {} })).statusCode, 200);
+    reauthorize("u");
+    const taskProperties = fake.properties.get("ds-3")!;
+    const originalRelation = taskProperties.Rule;
+    taskProperties.Rule = { ...originalRelation, relationTarget: "different-source" };
+    const rejected = await app.inject({ method: "POST", url: `${base}/structure/reconnect`, payload: {} });
+    assert.equal(rejected.statusCode, 200, rejected.body);
+    assert.equal(rejected.json().review.outcome, "needs_review");
+    assert.equal(rejected.json().progress.state, "disconnected");
+    assert.equal((await app.inject(`${base}/sync`)).json().connectionStatus, "disconnected");
+    assert.deepEqual(fake.creates, created);
   } finally {
     await app.close();
     await rm(directory, { recursive: true, force: true });

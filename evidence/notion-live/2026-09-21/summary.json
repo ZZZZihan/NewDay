@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 1,
-  "recordedAt": "2026-09-21T06:08:09Z",
+  "schemaVersion": 2,
+  "recordedAt": "2026-09-21T11:25:00Z",
   "candidate": {
-    "baseCommit": "4ae0a5bb2abe565dbf1d7b045d9d51bbca838dbd",
+    "baseCommit": "d2e2de937efcb0404913da0dc09fb34a7b576eff",
     "branch": "codex/col-33-oauth-worker-hardening",
-    "state": "acceptance fixes not yet committed at evidence capture"
+    "state": "reconnect implementation and live acceptance evidence awaiting final quality gates and candidate commit"
   },
   "scope": {
     "workspaceAlias": "notion-20260921-live-01",
@@ -18,19 +18,27 @@
   },
   "results": {
     "A1": {
-      "status": "partial",
+      "status": "passed",
       "verified": [
         "cancelled authorization left zero connections",
-        "successful OAuth claim stored one encrypted credential",
-        "API restart preserved the connection",
+        "successful OAuth claim persisted across API restart",
         "refresh rotated ciphertext and cleared refresh_pending",
-        "vault mode is 0600",
-        "business backups contain no credential markers"
+        "disconnect rejected the stale callback with HTTP 409",
+        "fresh browser authorization restored one encrypted credential",
+        "initial reconnect stayed disconnected when the isolated root was not shared",
+        "after sharing only the isolated root and descendants, all nine recorded structures matched and reconnect became ready",
+        "reconnect performed zero remote mutation methods",
+        "credential key was rotated after accidental terminal disclosure and the existing credential was re-encrypted and verified"
       ],
-      "open": [
-        "disconnect plus new browser authorization",
-        "live stale callback rejection after disconnect"
-      ]
+      "structureChecks": 9,
+      "outboxBefore": {
+        "confirmed": 118
+      },
+      "outboxAfter": {
+        "confirmed": 118
+      },
+      "restoreQuarantineBefore": 0,
+      "restoreQuarantineAfter": 0
     },
     "A2": {
       "status": "passed",
@@ -38,8 +46,15 @@
       "structureState": "ready"
     },
     "A3": {
-      "status": "not_executed",
-      "reason": "no real upstream response-loss proxy was used"
+      "status": "passed",
+      "verified": [
+        "root, table and relation requests each reached the real upstream and received 2xx before the downstream connection was dropped",
+        "three ambiguous structure steps entered needs_review and recovered through read-only reconciliation",
+        "final structure state was ready with nine confirmed steps and no duplicate remote creation or adoption"
+      ],
+      "proxyRequests": 47,
+      "ambiguousSteps": 3,
+      "finalConfirmedSteps": 9
     },
     "R1": {
       "status": "passed",
@@ -51,15 +66,41 @@
       ]
     },
     "R2": {
-      "status": "partial",
-      "verified": [
-        "a real in_trash page archived only its verified local mapping"
+      "status": "passed",
+      "scenarios": [
+        {
+          "name": "permission",
+          "httpStatus": 500,
+          "watermarkError": "permission",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "not_found",
+          "httpStatus": 500,
+          "watermarkError": "schema",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "schema_missing_properties",
+          "httpStatus": 500,
+          "watermarkError": "schema",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 1
+        },
+        {
+          "name": "partial_pagination",
+          "httpStatus": 500,
+          "watermarkError": "network",
+          "businessUnchanged": true,
+          "proxyFaultRecords": 2
+        }
       ],
-      "open": [
-        "permission revocation",
-        "real proxy 404",
-        "partial pagination",
-        "schema fault"
+      "verified": [
+        "failed table success watermarks did not advance",
+        "business hashes, archived task counts and outbox counts did not change",
+        "connection remained active"
       ]
     },
     "W1": {
@@ -71,18 +112,54 @@
       ]
     },
     "W2": {
-      "status": "not_executed",
-      "reason": "no real upstream response-loss or 429/529 proxy was used"
+      "status": "passed",
+      "scenarios": [
+        {
+          "name": "create_response_loss",
+          "pageCreateRequests": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_network",
+          "pausedBeforeWrite": true,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_429",
+          "pausedBeforeWrite": true,
+          "earlyResumeStatus": 409,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        },
+        {
+          "name": "preflight_529",
+          "pausedBeforeWrite": true,
+          "earlyResumeStatus": 409,
+          "pageCreateRequestsAfterResume": 1,
+          "finalStatus": "confirmed",
+          "unresolved": 0
+        }
+      ],
+      "verified": [
+        "the lost create response was reconciled by a complete stable-key readback without a duplicate create",
+        "network and rate-limit faults occurred before any page write",
+        "every scenario ended active with no unresolved operation"
+      ]
     },
     "W3": {
-      "status": "partial",
+      "status": "passed",
       "verified": [
         "different-field merge",
-        "date range resolved atomically with Notion as winner"
+        "date range resolved atomically with Notion as winner",
+        "a real Notion title update was read back and applied by a full scan",
+        "the scan advanced plannerRevision and the old proposal apply returned HTTP 409 VERSION_CONFLICT",
+        "focus records were unchanged"
       ],
-      "open": [
-        "stale Agent proposal rejection after a remote task change"
-      ],
+      "proposalGenerator": "local deterministic contract output; excluded from model-quality claims",
       "conflictRecords": 2
     },
     "C1": {
@@ -138,12 +215,14 @@
   "finalObservedState": {
     "connectionStatus": "active",
     "confirmedInitializationSteps": 9,
-    "taskMappingsWithRemotePage": 108,
-    "uniqueRemotePages": 108,
-    "uniqueClientKeys": 108,
-    "outboxConfirmed": 118,
+    "taskMappingsWithRemotePage": 113,
+    "uniqueRemotePages": 113,
+    "uniqueClientKeys": 113,
+    "outboxConfirmed": 123,
     "outboxUnresolved": 0,
     "conflictRecords": 2,
+    "readWatermarks": 4,
+    "restoreQuarantine": 0,
     "credentialRows": 1,
     "credentialRefreshPending": false
   },
@@ -171,14 +250,27 @@
     "status": "no_go",
     "push": false,
     "merge": false,
+    "completedEngineeringAcceptance": [
+      "A1",
+      "A2",
+      "A3",
+      "R1",
+      "R2",
+      "W1",
+      "W2",
+      "W3",
+      "C1",
+      "C2",
+      "C3",
+      "D1"
+    ],
     "openAcceptance": [
-      "A1 disconnect and browser reauthorization",
-      "A3 real response-loss injection",
-      "R2 real permission and read-failure injection",
-      "W2 real write-failure and rate-limit injection",
-      "W3 stale Agent proposal rejection",
-      "G3 frozen real-model evaluation",
+      "final candidate pnpm check, pnpm build and pnpm test:e2e",
+      "independent candidate review",
+      "one authorized H-N01 guarded real-model pilot on the exact clean candidate",
+      "full G3 40 x 3 heldout trials with human review and cost accounting",
       "G4 prospective seven-day use record"
-    ]
+    ],
+    "claimBoundary": "The H-N01 pilot, if run, is one synthetic guarded trial and cannot establish G3. Notion acceptance cannot establish G3 or G4."
   }
 }

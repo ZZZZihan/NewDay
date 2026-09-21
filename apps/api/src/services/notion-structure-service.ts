@@ -4,7 +4,7 @@ import type { NotionConnection, NotionInitializationStep, NotionInitializationSt
 
 import { ApiError } from "../http/api-error.js";
 import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
-import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
+import type { NotionCredential, NotionCredentialVault } from "../storage/notion-credential-vault.js";
 import type { NotionStructureGateway, StructureProperty } from "./notion-structure-gateway.js";
 
 type TableName = "areas" | "projects" | "tasks" | "rules";
@@ -66,6 +66,19 @@ export type NotionRestoreStructureReview = {
       "permission" | "rate_limited" | "unreadable" | "not_checked" }>;
 };
 
+export type NotionReconnectStructureResult = {
+  review: NotionRestoreStructureReview;
+  progress: NotionStructureProgress;
+};
+
+type StructureReviewSnapshot = {
+  review: NotionRestoreStructureReview;
+  epoch: string;
+  connection: NotionConnection;
+  steps: NotionInitializationStep[];
+  credential: NotionCredential;
+};
+
 /** One mutation per request keeps each browser/API request bounded. After an
  * ambiguous create, subsequent requests only read remote state. */
 export class NotionStructureService {
@@ -109,11 +122,46 @@ export class NotionStructureService {
   /** Compare the restored identities with current remote objects. This path
    * never confirms steps, changes the connection, or releases the restore fence. */
   async verifyRestoredStructure(workspaceId: string): Promise<NotionRestoreStructureReview> {
+    return this.withWorkspaceLock(workspaceId, async () =>
+      (await this.reviewRecordedStructure(workspaceId, "paused_after_restore")).review);
+  }
+
+  /** Reauthorization restores only the credential. Re-enable an existing
+   * mapping after all nine recorded identities have been read back exactly.
+   * This path performs no create or patch request. */
+  async reconnect(workspaceId: string): Promise<NotionReconnectStructureResult> {
     return this.withWorkspaceLock(workspaceId, async () => {
+      const snapshot = await this.reviewRecordedStructure(workspaceId, "disconnected");
+      const { review } = snapshot;
+      if (review.outcome === "matches") {
+        await this.store.transaction(async () => {
+          const connection = await this.store.getNotionConnection(workspaceId);
+          const steps = await this.store.listNotionInitializationSteps(workspaceId);
+          const credential = this.vault.getCredential(workspaceId);
+          if (!connection || connection.status !== "disconnected" || !credential ||
+            (await this.store.getPlanningVersion()).datasetEpoch !== snapshot.epoch ||
+            JSON.stringify(connection) !== JSON.stringify(snapshot.connection) ||
+            JSON.stringify(steps) !== JSON.stringify(snapshot.steps) ||
+            credential.workspace_id !== snapshot.credential.workspace_id ||
+            credential.bot_id !== snapshot.credential.bot_id ||
+            credential.access_token !== snapshot.credential.access_token) {
+            throw new ApiError(409, "重新连接前结构、数据或授权已变化；请刷新后重新核对");
+          }
+          await this.store.putNotionConnection({ ...connection, status: "active", pauseReason: undefined,
+            retryAfterAt: undefined, updatedAt: this.timestamp() });
+        });
+      }
+      return { review, progress: await this.progress(workspaceId) };
+    });
+  }
+
+  private async reviewRecordedStructure(workspaceId: string,
+    requiredStatus: "paused_after_restore" | "disconnected"): Promise<StructureReviewSnapshot> {
       const epoch = (await this.store.getPlanningVersion()).datasetEpoch;
       const connection = await this.store.getNotionConnection(workspaceId);
-      if (!connection || connection.status !== "paused_after_restore") {
-        throw new ApiError(409, "当前工作区不处于备份恢复隔离状态");
+      if (!connection || connection.status !== requiredStatus) {
+        throw new ApiError(409, requiredStatus === "paused_after_restore"
+          ? "当前工作区不处于备份恢复隔离状态" : "当前工作区无需重新连接");
       }
       const steps = await this.store.listNotionInitializationSteps(workspaceId);
       const credential = this.vault.getCredential(workspaceId);
@@ -210,9 +258,11 @@ export class NotionStructureService {
         currentCredential.bot_id !== credential.bot_id || currentCredential.access_token !== credential.access_token) {
         throw new ApiError(409, "核对期间数据或授权发生变化；请重新读取状态后核对");
       }
-      return { workspaceId, checkedAt: this.timestamp(),
-        outcome: checks.every((item) => item.result === "matches") ? "matches" : "needs_review", checks };
-    });
+      return {
+        review: { workspaceId, checkedAt: this.timestamp(),
+          outcome: checks.every((item) => item.result === "matches") ? "matches" : "needs_review", checks },
+        epoch, connection, steps, credential,
+      };
   }
 
   private async advanceLocked(workspaceId: string,

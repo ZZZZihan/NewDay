@@ -19,7 +19,7 @@
 4. 启动代理：
 
    ```sh
-   pnpm notion:acceptance:proxy -- \
+   pnpm notion:acceptance:proxy \
      --rules /private/path/rules.json \
      --evidence /private/path/evidence.jsonl \
      --port 3012

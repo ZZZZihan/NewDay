@@ -1,6 +1,6 @@
 # Notion OAuth 候选：配置、恢复与验证
 
-此文档对应 COL-33 的隔离候选。当前实现只处理授权、凭据和连接状态；**尚未创建 Notion 四表，也不拉取或写回任务**。本地软件测试不代表真实工作区验收。仅在指定的隔离 Notion 工作区确认范围后启用真实授权。
+此文档对应 COL-33 的 OAuth 与本机凭据边界。结构、读取、写回和重复规则由后续模块负责；OAuth 成功只证明凭据已领取，不证明已有结构仍可安全使用。仅在指定的隔离 Notion 工作区确认范围后启用真实授权。
 
 ## 边界与配置
 
@@ -21,7 +21,8 @@ Cloudflare Worker 负责 Notion 公共 OAuth 的回调、令牌交换与轮换�
 - 本机凭据库用 AES-256-GCM 保存令牌和待领取 verifier，库文件权限为 `0600`。`GET /api/notion/status` 只返回工作区摘要与 `active`、`refresh_pending` 或 `reauthorization_required` 状态。密钥、access token、refresh token 不进入 HTTP 响应、业务备份或 Agent 备份。
 - 刷新使用保存在库中的固定 attempt ID。请求超时可能发生在 Notion 已轮换之后；此时状态是 `refresh_pending`，旧令牌停止供后续任务调用。页面的“重试确认”用原 attempt ID 读取 Worker 暂存的轮换结果。Worker 明确无法提供结果、缓存过期或令牌身份不匹配时进入 `reauthorization_required`，需重新授权。
 - “断开”删除指定工作区的本机凭据并阻止旧授权回调重连，不声称撤销 Notion 设置中的连接授权。若要在 Notion 一侧撤销，也需由用户在 Notion 中移除该连接。断开后重新发起授权可连接同一工作区；后续表映射和同步必须另行核对。
+- 已有结构记录的工作区重新授权后仍保持业务连接 `disconnected`。使用 `POST /api/notion/connections/:workspaceId/structure/reconnect` 只读核对根页面、四张表和四个 relation；九项全部匹配且核对期间记录与授权未变化时才恢复 `active`。该入口不创建或修改远端对象，权限不足或不一致时继续断开。
 
 ## 当前验收状态
 
-离线 API 测试覆盖授权领取、取消、重放、备份隔离、加密落盘、断开、跨重启刷新结果复取及失败转重授权；Worker 运行时测试覆盖 state、verifier、票据、ACK、取消和同尝试刷新缓存。真实 Public connection、Cloudflare Worker 部署、Notion 工作区令牌轮换与撤销仍未验证。T2 保持 In Progress / Draft，直到真实隔离工作区验收。
+离线 API 测试覆盖授权领取、取消、重放、备份隔离、加密落盘、断开、跨重启刷新结果复取及失败转重授权；Worker 运行时测试覆盖 state、verifier、票据、ACK、取消和同尝试刷新缓存。2026-09-21 已在独立测试工作区完成真实 Public connection、Worker 回调、领取、刷新、API 重启持久化、断开、旧回调 409、新浏览器授权与 9/9 结构只读恢复。该结果只覆盖记录中的隔离候选和 Worker 版本，不代表个人工作区或后续版本自动通过。

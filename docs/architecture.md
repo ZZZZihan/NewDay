@@ -151,7 +151,7 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 
 ### Notion OAuth 候选 API
 
-`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。当前阶段不初始化 Notion 表，也不执行任务同步。配置、恢复和真实验收前提见 [Notion OAuth 运维说明](./notion-oauth-operations.md)。
+`apps/notion-oauth-worker` 独立承担 Public OAuth 回调和令牌轮换；本机 API 使用独立服务密钥调用 Worker，凭据存入单独的加密 SQLite 库。COL-34 候选增加用户明确启动的私有根页面、四张表和关系字段初始化；结构请求由本机 API 使用令牌发给 Notion，任务同步仍未启用。配置与故障处理见 [Notion OAuth 运维说明](./notion-oauth-operations.md) 和 [结构初始化说明](./notion-structure-operations.md)。
 
 | 方法与路径 | 输入 | 成功响应 |
 | --- | --- | --- |
@@ -161,6 +161,8 @@ Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，
 | `POST /api/notion/oauth/cancel` | `{ state }` | `{ ok: true }` |
 | `POST /api/notion/connections/:workspaceId/refresh` | `{}` | `{ connection }`；未知结果保留同一次尝试 |
 | `POST /api/notion/connections/:workspaceId/disconnect` | `{}` | `{ ok: true, removed }`；删除本机凭据 |
+| `GET /api/notion/connections/:workspaceId/structure` | 无 | 当前初始化步骤、读回 ID 与待核对类别，不含令牌 |
+| `POST /api/notion/connections/:workspaceId/structure/advance` | `{}` | 最多执行一个结构步骤，先记尝试、后发远端请求并读回；未知结果仅对账 |
 
 Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要求 API 服务密钥，Notion 回调仅通过随机 state 找到授权会话。浏览器回调 URL fragment 中只有一次性 ticket；页面清除 fragment 后交给本机 API。`refresh_pending` 阻止旧令牌继续供同步使用。Notion 凭据不进入规划和 Agent JSON 备份。
 
@@ -174,7 +176,7 @@ Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要
 
 执行去重账本与可清除的展示历史分开。一次成功应用在同一事务内保存重点集合、版本、采纳事件、反馈和回执。删除 Agent 历史会删除上下文、快照、运行、提案、反馈、事件和导入归档，同时清除回执详情；最小账本中的 operation ID、请求摘要、proposal ID、数据集和执行终态仍保留，防止旧请求重新执行。清理后的结果查询返回 `details_deleted`，不再提供恢复资格或虚构原详情。任务和显式偏好不受清理影响。
 
-用户备份使用可移植的 JSON。当前 T5 候选新导出为版本 6，导入兼容 1～6；v1～v5 视作纯本地数据，不按标题或 ID 推断 Notion 映射。旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。v6 保存连接结构 ID、任务映射、逐字段基准、outbox、冲突、水位和恢复隔离记录，不含 OAuth 令牌或 client secret；导入后连接暂停，未完成发送进入隔离，须完成远端核对后才可恢复发送。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
+用户备份使用可移植的 JSON。当前 T5/T3 组合候选新导出为版本 6，导入兼容 1～6；v1～v5 视作纯本地数据，不按标题或 ID 推断 Notion 映射。旧版本的生活管理集合默认为空，日期字段、逻辑重复系列标识和规则段边界会按旧格式补齐。v6 保存连接结构 ID、初始化尝试与读回记录、任务映射、逐字段基准、outbox、冲突、水位和恢复隔离记录，不含 OAuth 令牌或 client secret；导入后连接暂停，未完成发送进入隔离，须完成远端核对后才可恢复发送。前端替换导入前先下载当前服务端快照，然后调用后端恢复。保留下载文件后再清理旧数据。
 
 T5 候选新增的 `NotionOutboxDispatcher` 只接收注入的传输接口，尚未接入应用启动、定时器、HTTP 路由或真实 Notion 凭据。假传输测试覆盖成功但响应丢失后的稳定键查询、搜索不完整或重复时拒绝创建、未知结果只读对账、同字段冲突记录、不同字段合并经业务命令推进任务版本、仅发送本次改变的字段，以及恢复前预检与在途发送的隔离。预读期间若本地提交较新意图，尚未发 HTTP 的旧尝试会被标为已取代，不把它当作未知远端写入而暂停整个工作区。恢复先持久暂停新发送，最多等待 5 秒让已知请求完成；超时的发送保留在隔离记录，晚到结果不得写入新数据集。发送记录带有本机进程和存储实例身份：另一活进程打开同一 SQLite 不会误回收其在途操作；发送 Store 关闭时先持久标记未知并暂停，即使其进程仍运行。进程结束或旧记录没有身份时也转为未知并暂停。领取事务内再次检查进程身份，缩小检查后退出的窗口；若发送方恰在最后一次检查后退出，仍需下一次领取或重启才收敛。该判定仅覆盖同一主机，进程号重用仍可能让旧操作保持阻塞，须由后续人工核对或租约机制处理。早期 v6 候选导出的冲突记录若缺少 `winner`，导入时按既有 Notion 优先规则补齐。真实服务尚需实现 provider 适配、完整发送租约、失败分类与退避、恢复隔离记录的人工/自动核销，并在真实隔离工作区验证条件写入能力。无日期联动任务仍依赖 T4 的任务模型扩展；本候选不构成可启用的产品同步。
 

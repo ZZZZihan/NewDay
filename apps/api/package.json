@@ -15,13 +15,14 @@
   },
   "dependencies": {
     "@newday/core": "workspace:*",
+    "@notionhq/client": "5.23.0",
     "fastify": "^5",
     "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^24",
-    "typescript": "^5",
+    "tsup": "^8.5.0",
     "tsx": "^4.20.0",
-    "tsup": "^8.5.0"
+    "typescript": "^5"
   }
 }

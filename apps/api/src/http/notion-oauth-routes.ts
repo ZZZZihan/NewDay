@@ -3,13 +3,15 @@ import { z } from "zod";
 
 import { ApiError } from "./api-error.js";
 import type { NotionOAuthService } from "../services/notion-oauth-service.js";
+import type { NotionStructureService } from "../services/notion-structure-service.js";
 
 const opaqueToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const claimSchema = z.strictObject({ state: opaqueToken, ticket: opaqueToken });
 const cancelSchema = z.strictObject({ state: opaqueToken });
 const disconnectParams = z.strictObject({ workspaceId: z.string().min(1).max(128) });
 
-export function registerNotionOAuthRoutes(app: FastifyInstance, oauth: NotionOAuthService | null): void {
+export function registerNotionOAuthRoutes(app: FastifyInstance, oauth: NotionOAuthService | null,
+  structure: NotionStructureService | null): void {
   app.get("/api/notion/status", () => ({ configured: oauth !== null, connections: oauth?.listConnections() ?? [] }));
 
   app.post("/api/notion/oauth/start", async (request) => {
@@ -28,10 +30,22 @@ export function registerNotionOAuthRoutes(app: FastifyInstance, oauth: NotionOAu
     return { ok: true };
   });
 
-  app.post("/api/notion/connections/:workspaceId/disconnect", (request) => {
+  app.post("/api/notion/connections/:workspaceId/disconnect", async (request) => {
     z.strictObject({}).parse(request.body);
     const { workspaceId } = disconnectParams.parse(request.params);
-    return { ok: true, removed: required(oauth).disconnect(workspaceId) };
+    const removed = structure ? await structure.disconnect(workspaceId) : required(oauth).disconnect(workspaceId);
+    return { ok: true, removed };
+  });
+
+  app.get("/api/notion/connections/:workspaceId/structure", async (request) => {
+    const { workspaceId } = disconnectParams.parse(request.params);
+    return requiredStructure(structure).progress(workspaceId);
+  });
+
+  app.post("/api/notion/connections/:workspaceId/structure/advance", async (request) => {
+    z.strictObject({}).parse(request.body);
+    const { workspaceId } = disconnectParams.parse(request.params);
+    return requiredStructure(structure).advance(workspaceId);
   });
 
   app.post("/api/notion/connections/:workspaceId/refresh", async (request) => {
@@ -39,6 +53,11 @@ export function registerNotionOAuthRoutes(app: FastifyInstance, oauth: NotionOAu
     const { workspaceId } = disconnectParams.parse(request.params);
     return { connection: await required(oauth).refresh(workspaceId) };
   });
+}
+
+function requiredStructure(structure: NotionStructureService | null): NotionStructureService {
+  if (!structure) throw new ApiError(503, "Notion 结构初始化尚未配置");
+  return structure;
 }
 
 function required(oauth: NotionOAuthService | null): NotionOAuthService {

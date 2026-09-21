@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { notionApi, type NotionStatus } from "../api/notion-api";
+import { notionApi, type NotionStatus, type NotionStructureProgress } from "../api/notion-api";
 
 const oauthFragment = /^#notion-oauth=(ready|cancelled|error):([A-Za-z0-9_-]{43})(?::([A-Za-z0-9_-]{43}))?$/;
 
 export function useNotionConnection(onReturn: () => void) {
   const [status, setStatus] = useState<NotionStatus | null>(null);
+  const [structures, setStructures] = useState<Record<string, NotionStructureProgress>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
-    try { setStatus(await notionApi.status()); }
+    try {
+      const next = await notionApi.status();
+      setStatus(next);
+      const entries = await Promise.all(next.connections.map(async (item) => {
+        try { return [item.workspaceId, await notionApi.structure(item.workspaceId)] as const; }
+        catch { return null; }
+      }));
+      setStructures(Object.fromEntries(entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null)));
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 Notion 连接状态"); }
   }, []);
 
@@ -77,5 +86,32 @@ export function useNotionConnection(onReturn: () => void) {
     } finally { setBusy(false); }
   }
 
-  return { status, message, busy, refresh, start, disconnect, retryRefresh };
+  async function initializeStructure(workspaceId: string) {
+    if (busy) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      // Each API call records at most one remote structural mutation before
+      // returning its readback. Keep the UI responsive across all nine steps.
+      for (let index = 0; index < 9; index += 1) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, 400));
+        const result = await notionApi.advanceStructure(workspaceId);
+        setStructures((current) => ({ ...current, [workspaceId]: result }));
+        if (result.state === "ready") {
+          setMessage("Notion 私有根页面、四张表和关联字段已读回确认；任务同步尚未启用。");
+          return;
+        }
+        if (result.state === "needs_review") {
+          setMessage("Notion 创建结果需要核对；系统不会自动再次创建。检查该工作区后可点击重新核对。");
+          return;
+        }
+      }
+      setMessage("结构初始化已记录进度，可继续完成剩余步骤。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Notion 结构初始化结果待确认，请读取状态后继续核对");
+      await refresh();
+    } finally { setBusy(false); }
+  }
+
+  return { status, structures, message, busy, refresh, start, disconnect, retryRefresh, initializeStructure };
 }

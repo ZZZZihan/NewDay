@@ -10,6 +10,7 @@ import type { FocusRecord, RecurrenceSeries, Task } from "@newday/core/domain/pl
 import type { InboxItem, LifeFolder, LifeResource, ResourceTaskLink } from "@newday/core/domain/life-model";
 import {
   notionConnectionSchema,
+  notionInitializationStepSchema,
   notionOutboxOperationSchema,
   notionTaskFieldsSchema,
   notionTaskMappingSchema,
@@ -20,6 +21,8 @@ import {
   emptyNotionSyncArchive,
   notionClientKey,
   type NotionConnection,
+  type NotionInitializationStep,
+  type NotionInitializationStepName,
   type NotionConflictRecord,
   type NotionOutboxOperation,
   type NotionTaskFields,
@@ -254,6 +257,34 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       this.database.prepare(`INSERT INTO notion_connections(workspace_id,status,payload) VALUES(?,?,?)
         ON CONFLICT(workspace_id) DO UPDATE SET status=excluded.status,payload=excluded.payload`)
         .run(connection.workspaceId, connection.status, JSON.stringify(connection));
+    });
+  }
+
+  async getNotionInitializationStep(workspaceId: string, step: NotionInitializationStepName): Promise<NotionInitializationStep | undefined> {
+    return this.one<NotionInitializationStep>(
+      "SELECT payload FROM notion_initialization_steps WHERE workspace_id=? AND step=?", workspaceId, step);
+  }
+
+  async listNotionInitializationSteps(workspaceId?: string): Promise<NotionInitializationStep[]> {
+    return workspaceId
+      ? this.many<NotionInitializationStep>("SELECT payload FROM notion_initialization_steps WHERE workspace_id=? ORDER BY rowid", workspaceId)
+      : this.many<NotionInitializationStep>("SELECT payload FROM notion_initialization_steps ORDER BY workspace_id,rowid");
+  }
+
+  async putNotionInitializationStep(value: NotionInitializationStep): Promise<void> {
+    const step = notionInitializationStepSchema.parse(value);
+    await this.transaction(async () => {
+      const connection = await this.getNotionConnection(step.workspaceId);
+      if (!connection) throw new Error("Notion initialization workspace does not exist");
+      const previous = await this.getNotionInitializationStep(step.workspaceId, step.step);
+      if (previous && (previous.expectedTitle !== step.expectedTitle || previous.parentId !== step.parentId ||
+        previous.schemaFingerprint !== step.schemaFingerprint || previous.attemptedAt !== step.attemptedAt ||
+        (previous.status === "confirmed" && (step.status !== "confirmed" || step.remoteId !== previous.remoteId)))) {
+        throw new Error("Notion initialization attempt identity cannot change");
+      }
+      this.database.prepare(`INSERT INTO notion_initialization_steps(workspace_id,step,status,payload) VALUES(?,?,?,?)
+        ON CONFLICT(workspace_id,step) DO UPDATE SET status=excluded.status,payload=excluded.payload`)
+        .run(step.workspaceId, step.step, step.status, JSON.stringify(step));
     });
   }
 
@@ -513,6 +544,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return {
       version: 1,
       connections: await this.listNotionConnections(),
+      initializationSteps: await this.listNotionInitializationSteps(),
       taskMappings: await this.listNotionTaskMappings(),
       outbox: await this.listNotionOutboxOperations(),
       conflicts: await this.listNotionConflicts(),
@@ -611,6 +643,16 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     const sync = notionSyncArchiveSchema.parse(data.notionSync ?? emptyNotionSyncArchive());
     await this.transaction(async () => {
       const quarantinedAt = new Date().toISOString();
+      // A replacement backup may contain no Notion records even though this
+      // installation has already attempted remote creation. Keep that local
+      // identity fenced until a person reconciles the existing remote objects.
+      const priorSteps = await this.listNotionInitializationSteps();
+      const importedWorkspaces = new Set(sync.connections.map((connection) => connection.workspaceId));
+      const orphanedStructures = (await this.listNotionConnections()).filter((connection) =>
+        !importedWorkspaces.has(connection.workspaceId) && (connection.rootPageId !== null ||
+          Object.keys(connection.dataSources).length > 0 ||
+          priorSteps.some((step) => step.workspaceId === connection.workspaceId) ||
+          connection.status === "paused_after_restore" || connection.status === "paused_unknown"));
       for (const operation of this.many<NotionOutboxOperation>(
         "SELECT payload FROM notion_outbox WHERE status IN ('sending','unknown','quarantined')")) {
         const mapping = await this.getNotionTaskMapping(operation.localTaskId);
@@ -618,7 +660,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
         this.putNotionRestoreQuarantine({ operation, mapping, quarantinedAt });
       }
       await this.rotateDatasetEpoch();
-      this.database.exec("DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_connections;");
+      this.database.exec("DELETE FROM notion_scan_watermarks; DELETE FROM notion_conflicts; DELETE FROM notion_outbox; DELETE FROM notion_task_mappings; DELETE FROM notion_initialization_steps; DELETE FROM notion_connections;");
       this.database.exec("DELETE FROM life_resource_tasks; DELETE FROM life_inbox; DELETE FROM life_resources; DELETE FROM life_folders WHERE parent_id IS NOT NULL; DELETE FROM life_folders WHERE parent_id IS NULL; DELETE FROM focus_records; DELETE FROM tasks; DELETE FROM recurrence_series;");
       for (const series of data.recurrenceSeries ?? []) await this.putRecurrenceSeries(series);
       for (const task of data.tasks) await this.putTask(task);
@@ -631,6 +673,13 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
       for (const link of data.resourceTaskLinks ?? []) await this.putResourceTaskLink(link);
       for (const connection of sync.connections) {
         await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
+      }
+      for (const step of sync.initializationSteps ?? []) await this.putNotionInitializationStep(step);
+      for (const connection of orphanedStructures) {
+        await this.putNotionConnection({ ...connection, status: "paused_after_restore", updatedAt: quarantinedAt });
+        for (const step of priorSteps.filter((item) => item.workspaceId === connection.workspaceId)) {
+          await this.putNotionInitializationStep(step);
+        }
       }
       for (const mapping of sync.taskMappings) await this.putNotionTaskMapping(mapping);
       for (const operation of sync.outbox) {
@@ -739,7 +788,7 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
 
   private initializeSchema() {
     const version = Number(this.database.prepare("PRAGMA user_version").get()?.user_version);
-    if (version > 4) throw new Error("This database was created by a newer version of NewDay");
+    if (version > 5) throw new Error("This database was created by a newer version of NewDay");
     if (version < 3) {
       this.database.exec("BEGIN IMMEDIATE");
       try {
@@ -827,6 +876,22 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
           ) STRICT;
           CREATE INDEX notion_restore_quarantine_by_mapping ON notion_restore_quarantine(workspace_id,local_task_id);
           PRAGMA user_version=4;
+          COMMIT;
+        `);
+      } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+    }
+    if (version < 5) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        this.database.exec(`
+          CREATE TABLE IF NOT EXISTS notion_initialization_steps (
+            workspace_id TEXT NOT NULL REFERENCES notion_connections(workspace_id) ON DELETE RESTRICT,
+            step TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('attempted','needs_review','confirmed')),
+            payload TEXT NOT NULL CHECK(json_valid(payload)),
+            PRIMARY KEY(workspace_id,step)
+          ) STRICT;
+          PRAGMA user_version=5;
           COMMIT;
         `);
       } catch (error) { this.database.exec("ROLLBACK"); throw error; }

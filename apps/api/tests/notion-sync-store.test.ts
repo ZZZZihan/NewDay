@@ -311,7 +311,7 @@ test("a queued intent already satisfied by read-back needs no duplicate send", a
   } finally { store.close(); }
 });
 
-test("v5 replacement clears old mappings and never infers new ones", async () => {
+test("v5 replacement clears mappings but fences a prior remote structure", async () => {
   const store = new SQLitePlannerStore(":memory:");
   try {
     await store.putTask(task());
@@ -322,7 +322,10 @@ test("v5 replacement clears old mappings and never infers new ones", async () =>
     assert.deepEqual(await store.getTask("task-1"), task());
     assert.notEqual((await store.getPlanningVersion()).datasetEpoch, before.datasetEpoch);
     assert.equal(await store.getNotionTaskMapping("task-1"), undefined);
-    assert.deepEqual(await store.listNotionConnections(), []);
+    const [guard] = await store.listNotionConnections();
+    assert.equal(guard.workspaceId, "workspace-1");
+    assert.equal(guard.rootPageId, "root-1");
+    assert.equal(guard.status, "paused_after_restore");
   } finally { store.close(); }
 });
 
@@ -481,6 +484,7 @@ test("a version 3 database gains sync tables without changing existing planner d
         DROP TABLE notion_conflicts;
         DROP TABLE notion_outbox;
         DROP TABLE notion_task_mappings;
+        DROP TABLE notion_initialization_steps;
         DROP TABLE notion_connections;
         PRAGMA user_version=3;
         COMMIT;
@@ -498,7 +502,7 @@ test("a version 3 database gains sync tables without changing existing planner d
     } finally { migrated.close(); }
 
     const reopened = new DatabaseSync(path);
-    try { assert.equal(reopened.prepare("PRAGMA user_version").get()?.user_version, 4); }
+    try { assert.equal(reopened.prepare("PRAGMA user_version").get()?.user_version, 5); }
     finally { reopened.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

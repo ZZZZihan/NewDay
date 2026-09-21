@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "syntheticOnly": true,
+  "notionVersion": "2026-03-11",
+  "sdkVersion": "5.23.0",
+  "cases": [
+    {
+      "id": "inclusive-range",
+      "kind": "date",
+      "remote": { "start": "2026-09-20", "end": "2026-09-22" },
+      "expected": { "startDate": "2026-09-20", "endDate": "2026-09-22", "visibleOn": ["2026-09-20", "2026-09-21", "2026-09-22"] }
+    },
+    {
+      "id": "single-day-null-end",
+      "kind": "date",
+      "remote": { "start": "2026-09-20", "end": null },
+      "expected": { "startDate": "2026-09-20", "endDate": "2026-09-20" }
+    },
+    {
+      "id": "remove-date-keeps-identity",
+      "kind": "date",
+      "localTaskId": "synthetic-task-1",
+      "remotePageId": "11111111-1111-4111-8111-111111111111",
+      "remote": null,
+      "expected": { "localTaskId": "synthetic-task-1", "startDate": null, "endDate": null, "visibleInToday": false, "keepResourceLinks": true }
+    },
+    {
+      "id": "reject-timed-date",
+      "kind": "date",
+      "remote": { "start": "2026-09-20T09:00:00+08:00", "end": null },
+      "expected": { "decision": "pause_row", "reason": "date_has_time", "localMutation": false }
+    },
+    {
+      "id": "merge-different-fields",
+      "kind": "conflict",
+      "baseline": { "title": "A", "date": ["2026-09-20", "2026-09-20"], "completed": false },
+      "local": { "title": "A", "date": ["2026-09-21", "2026-09-21"], "completed": false },
+      "remote": { "title": "B", "date": ["2026-09-20", "2026-09-20"], "completed": false },
+      "expected": { "title": "B", "date": ["2026-09-21", "2026-09-21"], "completed": false, "conflict": false }
+    },
+    {
+      "id": "notion-wins-same-field",
+      "kind": "conflict",
+      "baseline": { "title": "A", "date": ["2026-09-20", "2026-09-21"], "completed": false },
+      "local": { "title": "A", "date": ["2026-09-21", "2026-09-22"], "completed": false },
+      "remote": { "title": "A", "date": ["2026-09-19", "2026-09-23"], "completed": false },
+      "expected": { "title": "A", "date": ["2026-09-19", "2026-09-23"], "completed": false, "conflict": true }
+    },
+    {
+      "id": "response-lost-create",
+      "kind": "outbox",
+      "clientKey": "synthetic-install:synthetic-task-2",
+      "createResponse": "lost",
+      "queryMatches": ["22222222-2222-4222-8222-222222222222"],
+      "expected": { "decision": "bind_existing", "remotePageId": "22222222-2222-4222-8222-222222222222", "newCreateCalls": 0 }
+    },
+    {
+      "id": "ambiguous-create",
+      "kind": "outbox",
+      "clientKey": "synthetic-install:synthetic-task-3",
+      "createResponse": "lost",
+      "queryMatches": ["33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "trash-is-evidence",
+      "kind": "deletion",
+      "remote": { "id": "55555555-5555-4555-8555-555555555555", "in_trash": true },
+      "expected": { "decision": "archive_one_linked_task", "preserveHistory": true }
+    },
+    {
+      "id": "missing-is-not-deletion",
+      "kind": "deletion",
+      "remote": { "status": 404, "code": "object_not_found" },
+      "expected": { "decision": "needs_reconciliation", "archiveCount": 0 }
+    },
+    {
+      "id": "active-query-omits-trashed-row",
+      "kind": "deletion",
+      "activeQueryContainsMappedPage": false,
+      "knownRemotePageId": "77777777-7777-4777-8777-777777777777",
+      "expected": { "decision": "recheck_known_page", "archiveCount": 0 }
+    },
+    {
+      "id": "query-limit-with-no-cursor",
+      "kind": "scan",
+      "response": { "has_more": false, "next_cursor": null, "request_status": { "type": "incomplete", "incomplete_reason": "query_result_limit_reached" } },
+      "expected": { "decision": "split_by_created_time_or_pause", "advanceWatermark": false, "inferDeletion": false }
+    },
+    {
+      "id": "truncated-relation",
+      "kind": "relation",
+      "property": { "type": "relation", "has_more": true, "visibleIds": ["88888888-8888-4888-8888-888888888888"] },
+      "expected": { "decision": "fetch_complete_property_or_pause", "selectFirstAsUnique": false, "localMutation": false }
+    },
+    {
+      "id": "lost-root-create-found-once",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": ["99999999-9999-4999-8999-999999999999"],
+      "expected": { "decision": "bind_existing_root", "newCreateCalls": 0 }
+    },
+    {
+      "id": "lost-root-create-search-empty",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": [],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "lost-root-create-search-ambiguous",
+      "kind": "initialization",
+      "marker": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      "createResponse": "lost",
+      "priorCreateCalls": 1,
+      "searchPaginationComplete": true,
+      "exactWorkspaceRootMatches": ["99999999-9999-4999-8999-999999999999", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "table-create-crash-before-local-id",
+      "kind": "initialization",
+      "step": "Projects",
+      "attemptPersistedBeforePost": true,
+      "priorCreateCalls": 1,
+      "processRestarted": true,
+      "localDatabaseId": null,
+      "rootChildScanComplete": true,
+      "matchingDatabaseIds": ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+      "schemaAndRelationTargetsMatch": true,
+      "expected": { "decision": "bind_existing_table", "newCreateCalls": 0, "readBackDataSourceAndPropertyIds": true }
+    },
+    {
+      "id": "table-create-crash-no-match",
+      "kind": "initialization",
+      "step": "Projects",
+      "attemptPersistedBeforePost": true,
+      "priorCreateCalls": 1,
+      "processRestarted": true,
+      "localDatabaseId": null,
+      "rootChildScanComplete": true,
+      "matchingDatabaseIds": [],
+      "expected": { "decision": "needs_reconciliation", "newCreateCalls": 0 }
+    },
+    {
+      "id": "partial-scan-does-not-advance",
+      "kind": "scan",
+      "pagesRead": 2,
+      "thirdPage": { "status": 503, "code": "service_unavailable" },
+      "expected": { "decision": "retry_or_pause", "advanceWatermark": false, "inferDeletion": false }
+    },
+    {
+      "id": "restore-v5-remains-local",
+      "kind": "backup",
+      "backupVersion": 5,
+      "taskCount": 2,
+      "expected": { "linkedTaskCount": 0, "outboxCount": 0, "inferRemoteMappings": false }
+    },
+    {
+      "id": "restore-v6-quarantines-outbox",
+      "kind": "backup",
+      "backupVersion": 6,
+      "sourceDatasetEpoch": "synthetic-old-epoch",
+      "outbox": [{ "operationId": "synthetic-op-1", "status": "pending" }],
+      "expected": { "decision": "paused_after_restore", "quarantinedOperationIds": ["synthetic-op-1"], "sendCallsBeforeReconciliation": 0 }
+    },
+    {
+      "id": "restore-waits-for-in-flight-write",
+      "kind": "backup",
+      "currentDatasetEpoch": "synthetic-current-epoch",
+      "inFlight": [{ "operationId": "synthetic-op-2", "status": "sending", "remoteResult": "pending" }],
+      "restoreRequested": true,
+      "expected": { "decision": "block_new_sends_and_wait", "commitReplacementBeforeRemoteReconciliation": false, "newSendCalls": 0 }
+    },
+    {
+      "id": "restore-quarantines-unknown-late-write",
+      "kind": "backup",
+      "currentDatasetEpoch": "synthetic-current-epoch",
+      "inFlight": [{ "operationId": "synthetic-op-3", "status": "sending", "remoteResult": "unknown" }],
+      "restoreRequested": true,
+      "expected": { "decision": "paused_after_restore", "quarantinedOperationIds": ["synthetic-op-3"], "sendSameMappingBeforeResolution": false, "manualResolutionIfLateEffectCannotBeExcluded": true }
+    },
+    {
+      "id": "restore-v6-rejects-duplicate-mapping",
+      "kind": "backup",
+      "backupVersion": 6,
+      "duplicateRemotePageId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "expected": { "decision": "reject_atomically", "localMutation": false }
+    },
+    {
+      "id": "sync-invalidates-old-agent-proposal",
+      "kind": "agent_version",
+      "proposalPlannerRevision": 12,
+      "revisionAfterRemoteTaskChange": 13,
+      "expected": { "decision": "version_conflict", "focusChanged": false }
+    },
+    {
+      "id": "rate-limit-keeps-operation",
+      "kind": "outbox",
+      "remote": { "status": 529, "code": "service_overload", "retryAfterSeconds": 17 },
+      "expected": { "decision": "bounded_retry", "minimumDelaySeconds": 17, "retainOperation": true }
+    },
+    {
+      "id": "oversized-title-pauses-row",
+      "kind": "validation",
+      "remoteTitleLength": 201,
+      "expected": { "decision": "pause_row", "reason": "title_too_long", "localMutation": false }
+    },
+    {
+      "id": "monthly-clamps-to-february",
+      "kind": "recurrence",
+      "rule": { "id": "66666666-6666-4666-8666-666666666666", "pattern": "monthly", "monthDay": 31 },
+      "nominalDate": "2027-02-28",
+      "rescheduledDate": "2027-03-01",
+      "expected": { "occurrenceKey": "notion:66666666-6666-4666-8666-666666666666:2027-02-28", "identityChangesOnReschedule": false }
+    }
+  ]
+}

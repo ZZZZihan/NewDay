@@ -21,7 +21,8 @@ export class AgentExecutionService {
       const today = await this.today();
       if (snapshot.date !== today.date || snapshot.timeZone !== today.timeZone) throw new AgentApiError("DATE_EXPIRED", 409, "日期或时区已变化，请重新生成今日建议");
       const beforeVersion = await this.store.getPlanningVersion();
-      if (!sameVersion(beforeVersion, request.expectedVersion) || !sameVersion(beforeVersion, snapshot.version)) throw new AgentApiError("VERSION_CONFLICT", 409, "任务清单已变化，请重新生成建议");
+      if (!sameVersion(beforeVersion, request.expectedVersion) || !sameVersion(beforeVersion, snapshot.version) ||
+        (snapshot.agentGeneration ?? 0) !== await this.store.getAgentGeneration()) throw new AgentApiError("VERSION_CONFLICT", 409, "任务清单或规划历史已变化，请重新生成建议");
       const context = await this.store.getAgentRecord<DailyContext>(AGENT_NAMESPACES.context, snapshot.context.id);
       if (!context || context.revision !== snapshot.context.revision || context.date !== today.date || context.timeZone !== today.timeZone || today.preferences.revision !== snapshot.preferences.revision) throw new AgentApiError("VERSION_CONFLICT", 409, "当天输入或偏好已变化，请重新生成建议");
       await this.validateFinalSelection(snapshot, request.taskIds);
@@ -80,7 +81,7 @@ export class AgentExecutionService {
 
   private async replay(record: ExecutionLedgerRecord, digest: string): Promise<ApplyProposalResponse> {
     if (record.requestDigest !== digest) throw new AgentApiError("IDEMPOTENCY_CONFLICT", 409, "这个操作标识已用于不同请求，请查询原操作结果", false, record.operationId);
-    if (record.receipt) return record.receipt;
+    if (record.receipt) return { ...record.receipt, canRevert: await this.canRevert(record.receipt) };
     return { status: "details_deleted", operationId: record.operationId, proposalId: record.proposalId, datasetEpoch: record.datasetEpoch, terminalStatus: record.terminalStatus, detailsDeleted: true };
   }
 
@@ -108,6 +109,7 @@ export class AgentExecutionService {
 
   private async canRevert(receipt: ExecutionReceipt): Promise<boolean> {
     if (receipt.action !== "apply" || receipt.status !== "applied") return false;
+    if ((receipt.agentGeneration ?? 0) !== await this.store.getAgentGeneration()) return false;
     const preferences = await this.store.getAgentRecord<AgentPreferences>(AGENT_NAMESPACES.preferences, "current");
     if (!preferences?.timeZone || preferences.timeZone !== receipt.timeZone || dateInTimeZone(this.clock(), preferences.timeZone) !== receipt.date) return false;
     if (!sameVersion(await this.store.getPlanningVersion(), receipt.afterVersion)) return false;
@@ -128,7 +130,7 @@ export class AgentExecutionService {
     for (const record of records) if (!finalIds.includes(record.taskId)) await this.store.deleteFocusRecord(record.id);
     for (const taskId of addedTaskIds) await this.store.putFocusRecord({ id: `focus:${input.date}:${taskId}`, date: input.date, taskId, focusedAt: input.executedAt });
     const changed = addedTaskIds.length > 0 || removedTaskIds.length > 0;
-    return executionReceiptSchema.parse({ operationId: input.operationId, proposalId: input.proposalId, action: input.action, status: changed ? "applied" : "no_change",
+    return executionReceiptSchema.parse({ operationId: input.operationId, proposalId: input.proposalId, agentGeneration: await this.store.getAgentGeneration(), action: input.action, status: changed ? "applied" : "no_change",
       beforeVersion: input.beforeVersion, afterVersion: await this.store.getPlanningVersion(), date: input.date, timeZone: input.timeZone,
       beforeFocusTaskIds: beforeIds, finalFocusTaskIds: finalIds, addedTaskIds, removedTaskIds, retainedTaskIds: finalIds.filter((id) => beforeIds.includes(id)),
       executedAt: input.executedAt, canRevert: input.action === "apply" && changed, ...(input.revertsOperationId ? { revertsOperationId: input.revertsOperationId } : {}) });

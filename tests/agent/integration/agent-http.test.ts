@@ -269,6 +269,7 @@ test("agent backup import keeps failed runs and events as readonly source histor
   assert.deepEqual(after.tasks, before.tasks);
   assert.deepEqual(after.focus, before.focus);
   assert.deepEqual(after.version, before.version, "Agent history import preserves task and Notion identity");
+  assert.ok(importedResult && typeof importedResult === "object" && "datasetEpoch" in importedResult && "agentGeneration" in importedResult);
   assert.equal(importedResult.datasetEpoch, before.version.datasetEpoch);
   assert.equal(importedResult.agentGeneration, 1);
   const history = planningHistoryResponseSchema.parse(await target.json("GET", `/api/agent/history?date=${testDate}`));

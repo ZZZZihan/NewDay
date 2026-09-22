@@ -6,14 +6,18 @@ import {
 } from "@newday/core/contracts/agent-planning";
 import type { Task } from "@newday/core/domain/planner-model";
 import type { AgentApi } from "../api/agent-api";
+import type { TaskCaptureApi } from "../api/task-capture-api";
 import type { SessionStore } from "../hooks/agent-session";
+import type { CaptureSessionStore } from "../hooks/task-capture-session";
 import { useAgentPlanner } from "../hooks/use-agent-planner";
+import { TaskCapture } from "./task-capture";
 import styles from "./agent-planner.module.css";
 
 export type AgentPlannerProps = {
   selectedDate: string; today: string; disabled?: boolean; disabledReason?: string;
   onApplied: () => void | Promise<void>; onPreferencesChanged?: () => void;
   api?: AgentApi; sessionStore?: SessionStore;
+  captureApi?: TaskCaptureApi; captureStore?: CaptureSessionStore;
   tasks?: Task[];
 };
 
@@ -21,7 +25,7 @@ export function AgentPlanner(props: AgentPlannerProps) {
   return <AgentPlannerView key={`${props.selectedDate}:${props.today}`} {...props} />;
 }
 
-function AgentPlannerView({ selectedDate, today, disabled = false, disabledReason, onApplied, onPreferencesChanged, api, sessionStore, tasks = [] }: AgentPlannerProps) {
+function AgentPlannerView({ selectedDate, today, disabled = false, disabledReason, onApplied, onPreferencesChanged, api, sessionStore, captureApi, captureStore, tasks = [] }: AgentPlannerProps) {
   const { state, controller } = useAgentPlanner(selectedDate, { onApplied, onPreferencesChanged }, api, sessionStore, !disabledReason);
   const [expanded, setExpanded] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -47,6 +51,8 @@ function AgentPlannerView({ selectedDate, today, disabled = false, disabledReaso
 
   function submit(event: FormEvent) { event.preventDefault(); setExpanded(true); void controller.start(); }
   return (
+    <>
+    {!api || captureApi ? <TaskCapture timeZone={state.preferences?.timeZone ?? null} preferencesLoading={state.loading} disabled={disabled} disabledReason={disabledReason} onApplied={onApplied} onConfigureTimeZone={() => setExpanded(true)} api={captureApi} sessionStore={captureStore} /> : null}
     <section className={styles.panel} aria-label="今日规划助手" data-testid="agent-planner">
       <div className={styles.header}>
         <div><p className={styles.kicker}>✦ &nbsp; PLANNING ASSISTANT</p><h2>规划助手</h2><p className={styles.muted}>结合你的目标与限制，从已有任务中建议 1–3 件重点。</p></div>
@@ -133,6 +139,7 @@ function AgentPlannerView({ selectedDate, today, disabled = false, disabledReaso
         {state.history?.entries.length ? state.history.entries.map((entry) => <HistoryEntry key={entry.id} entry={entry} today={knownToday} busy={busy || pending} onFeedback={(reason) => entry.proposal ? void controller.feedback(entry.proposal.proposalId, "reviewed", reason, entry.receipt ?? undefined) : undefined} onRevert={(receipt) => void controller.revert(receipt)} />) : <p className={styles.muted}>这一天还没有已记录的规划决策。此前结果未知。</p>}
       </details>
     </section>
+    </>
   );
 }
 

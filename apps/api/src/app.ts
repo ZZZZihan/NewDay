@@ -9,6 +9,10 @@ import { LifeService } from "./services/life-service.js";
 import { SQLitePlannerStore } from "./storage/sqlite-planner-store.js";
 import { AgentApiError } from "./http/agent-error.js";
 import type { PlanningModel } from "./agent/planning-model.js";
+import type { TaskCaptureModel } from "./agent/task-capture-model.js";
+import { createTaskCaptureModel } from "./agent/create-task-capture-model.js";
+import { TaskCaptureService } from "./services/task-capture-service.js";
+import { registerTaskCaptureRoutes } from "./http/task-capture-routes.js";
 import { createPlanningModel } from "./create-planning-model.js";
 import { AgentRunService } from "./services/agent-run-service.js";
 import { AgentExecutionService } from "./services/agent-execution-service.js";
@@ -42,6 +46,7 @@ export type AppOptions = {
   bodyLimit?: number;
   clock?: () => number;
   planningModel?: PlanningModel | null;
+  captureModel?: TaskCaptureModel | null;
   agentTimeoutMs?: number;
   notionOAuth?: ApiConfig["notionOAuth"];
   notionFetcher?: typeof fetch;
@@ -81,6 +86,8 @@ export function createApp(options: AppOptions = {}) {
   const model = options.planningModel === null ? undefined : options.planningModel ?? createPlanningModel(config.agent);
   const runs = new AgentRunService(store, context, model, { clock: options.clock, timeoutMs: options.agentTimeoutMs ?? config.agent.timeoutMs });
   const execution = new AgentExecutionService(store, options.clock);
+  const captureModel = options.captureModel === null ? undefined : options.captureModel ?? createTaskCaptureModel(config.agent);
+  const captures = new TaskCaptureService(store, captureModel, { clock: options.clock, timeoutMs: options.agentTimeoutMs ?? config.agent.timeoutMs });
   const allowedOrigins = new Set(options.webOrigins ?? config.webOrigins);
 
   app.addHook("onRequest", async (request) => {
@@ -115,14 +122,16 @@ export function createApp(options: AppOptions = {}) {
 
   app.addHook("onReady", async () => {
     await runs.initialize();
+    await captures.initialize();
     await notionStructure?.fenceCredentialBindings();
     notionRead?.startPolling();
     notionSync?.startPolling();
   });
-  app.addHook("onClose", async () => { notionSync?.close(); notionRead?.close(); await runs.close(); notionVault?.close(); store.close(); });
+  app.addHook("onClose", async () => { notionSync?.close(); notionRead?.close(); await runs.close(); await captures.close(); notionVault?.close(); store.close(); });
   registerPlannerRoutes(app, planner);
   registerLifeRoutes(app, life);
   registerAgentRunRoutes(app, runs);
+  registerTaskCaptureRoutes(app, captures);
   registerAgentExecutionRoutes(app, execution);
   registerAgentContextRoutes(app, context);
   registerAgentPreferencesRoutes(app, preferences);

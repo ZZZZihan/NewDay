@@ -10,6 +10,7 @@ import { localDateSchema } from "@newday/core/domain/planner-model";
 import { AgentApiError } from "../http/agent-error.js";
 import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
 import { invalidateReadyProposals, PlannerPreferencesService } from "./planner-preferences-service.js";
+import { clearTaskCaptureHistory } from "./task-capture-service.js";
 
 type ImportedHistory = AgentBackup["importedHistories"][number];
 type HistoryData = Pick<AgentBackup, "snapshots" | "proposals" | "receipts" | "feedback" | "events">;
@@ -96,6 +97,7 @@ export class PlannerHistoryService {
       ]) await this.store.deleteAgentRecords(namespace);
       await this.store.deletePlannerEvents();
       await this.store.clearExecutionDetails();
+      await clearTaskCaptureHistory(this.store);
       return { ok: true as const };
     });
   }

@@ -19,6 +19,7 @@ export type OpenAICompatibleModelOptions = {
   allowHttpOrigin?: string;
   reasoningEffort?: "none" | "low" | "medium" | "high";
 };
+export type StructuredModelMessage = { role: "system" | "user"; content: string };
 
 function parseProviderUrl(source: string, label: string): URL {
   const authority = /^https?:\/\/([^/]+)/i.exec(source)?.[1];
@@ -105,18 +106,27 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
   }
 
   async generate(snapshot: PlanningSnapshot, answers: PlanningAnswers, signal: AbortSignal, repair?: ModelRepair): Promise<ModelGeneration> {
+    return this.generateStructured(
+      planningMessages(snapshot, answers, repair, { includeOutputSchema: this.requestProfile === "deepseek-json" }),
+      planningProviderJsonSchema, "newday_planning_v1", signal,
+    );
+  }
+
+  /** Reuse the same bounded, sanitized transport for another fixed output
+   * contract. Callers own prompts and schemas; no user input selects either. */
+  async generateStructured(messages: readonly StructuredModelMessage[], schema: unknown, name: string, signal: AbortSignal): Promise<ModelGeneration> {
     let response: Response;
     try {
       const common = {
         model: this.modelId,
-        messages: planningMessages(snapshot, answers, repair, { includeOutputSchema: this.requestProfile === "deepseek-json" }),
+        messages,
         ...(this.reasoningEffort === undefined ? {} : { reasoning_effort: this.reasoningEffort }),
       };
       const body = this.requestProfile === "deepseek-json"
         ? { ...common, response_format: { type: "json_object" }, max_tokens: this.maxCompletionTokens }
         : {
             ...common,
-            response_format: { type: "json_schema", json_schema: { name: "newday_planning_v1", strict: true, schema: planningProviderJsonSchema } },
+            response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
             max_completion_tokens: this.maxCompletionTokens, n: 1, store: false,
           };
       response = await this.fetch(this.endpoint, {

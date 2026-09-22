@@ -91,10 +91,21 @@ export class NotionReadService {
     let projects: ProjectRow[] = [];
     for (const table of tables) {
       const sourceId = connection.dataSources[table]!.dataSourceId;
-      const attemptAt = await this.store.beginNotionScanAttempt(workspaceId, sourceId, this.timestamp());
-      // Sample after this scan's earlier tables have committed so their own
-      // rule/task materialization cannot invalidate the Tasks response.
-      const taskVersion = table === "tasks" ? await this.store.getPlanningVersion() : null;
+      const { attemptAt, taskVersion } = table === "tasks"
+        ? await this.store.transaction(async () => {
+          // Establish the Tasks read premise under one SQLite write lock. A
+          // local edit may have been queued while an earlier table was in
+          // flight; checking outside this transaction would let its confirmed
+          // outbox disappear before the Tasks version is sampled.
+          const pendingWrite = (await this.store.listNotionOutboxOperations()).some((operation) =>
+            operation.workspaceId === workspaceId && ["pending", "sending", "unknown", "quarantined"].includes(operation.status));
+          if (pendingWrite) throw new ApiError(409, "Notion 待发送或未知操作需先核对，不能直接覆盖本地任务");
+          const attemptAt = await this.store.beginNotionScanAttempt(workspaceId, sourceId, this.timestamp());
+          // Sample after this scan's earlier tables have committed so their
+          // own rule/task materialization cannot invalidate the Tasks response.
+          return { attemptAt, taskVersion: await this.store.getPlanningVersion() };
+        })
+        : { attemptAt: await this.store.beginNotionScanAttempt(workspaceId, sourceId, this.timestamp()), taskVersion: null };
       try {
         const rows = await this.gateway.scan(token, connection, table);
         const expectedKind = { areas: "area", projects: "project", rules: "rule", tasks: "task" }[table];

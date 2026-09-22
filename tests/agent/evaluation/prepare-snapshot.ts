@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   AGENT_NAMESPACES, dateInTimeZone, planningSnapshotSchema,
@@ -45,6 +46,17 @@ export type PreparedEvaluationScenario = {
   adaptations: string[];
 };
 
+/** Only the disposable evaluation store exposes a fixture-scoped epoch. The
+ * production service still derives context and fact references from its store
+ * version, while production stores keep their normal random identities. */
+class EvaluationSnapshotStore extends MemoryAgentStore {
+  constructor(private readonly fixtureEpoch: string) { super(); }
+
+  override async getPlanningVersion() {
+    return { ...await super.getPlanningVersion(), datasetEpoch: this.fixtureEpoch };
+  }
+}
+
 /** Build the exact snapshot shape through the production context service.
  * The frozen corpus is a specification, not an API request. Unsupported
  * source facts are reported as gaps instead of being silently discarded. */
@@ -55,10 +67,18 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
     throw new Error(`${scenario.id}: sampledAt is outside its stated local date`);
   const taskIds = new Set(input.tasks.map(({ id }) => id));
   const clock = () => Date.parse(input.sampledAt);
-  const store = new MemoryAgentStore();
+  // A later clarification command reconstructs this same synthetic input in a
+  // fresh process. Bind its identities to input only, never expected answers,
+  // runtime dates, or a live business store. Keep all production revisions.
+  const fixtureIdentity = createHash("sha256")
+    .update(JSON.stringify({ format: "newday-evaluation-snapshot-identity-v1", id: scenario.id, input }))
+    .digest("hex");
+  const store = new EvaluationSnapshotStore(`fixture-dataset:${fixtureIdentity}`);
   const gaps: string[] = [];
   const manualSteps: string[] = [];
-  const adaptations: string[] = [];
+  const adaptations: string[] = [
+    "snapshot identity: deterministic fixture-scoped snapshot ID and dataset epoch derived from scenario ID and input; production revisions and fact construction preserved",
+  ];
   for (const task of input.tasks) {
     const futureFields = (["createdAt", "updatedAt", "completedAt"] as const).filter((field) => {
       const at = task[field];
@@ -172,7 +192,10 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
       adaptations.push(`priorHistory[${index}]: rejected on ${history.date} -> recorded user feedback at synthetic ${at}; time of day was not supplied`);
     }
 
-    const snapshot = planningSnapshotSchema.parse(await contexts.createSnapshot());
+    const snapshot = planningSnapshotSchema.parse({
+      ...await contexts.createSnapshot(),
+      id: `fixture-snapshot:${fixtureIdentity}`,
+    });
     for (const [index, history] of input.priorHistory.entries()) {
       if (history.kind === "preference_deleted" &&
         (snapshot.preferences.explicitPreferences.some(({ text }) => text === history.text) ||

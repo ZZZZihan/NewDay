@@ -62,6 +62,8 @@ export type PlanningFact = z.infer<typeof planningFactSchema>;
 export const snapshotTaskSchema = z.strictObject({ task: taskSchema, executable: z.boolean(), blocked: z.boolean(), factRefs: z.array(id) });
 export const planningSnapshotSchema = z.strictObject({
   id, version: planningVersionSchema, date: localDateSchema, timeZone: timeZoneSchema, sampledAt: instantSchema,
+  // Existing v1 archives omit this field and belong to the initial generation.
+  agentGeneration: z.number().int().nonnegative().optional(),
   context: dailyContextSchema, preferences: agentPreferencesSchema,
   candidates: z.array(snapshotTaskSchema).max(100), currentFocusTaskIds: z.array(id).max(3),
   facts: z.array(planningFactSchema).max(1000),
@@ -118,6 +120,7 @@ export const applyProposalRequestSchema = z.strictObject({
 export type ApplyProposalRequest = z.infer<typeof applyProposalRequestSchema>;
 export const executionReceiptSchema = z.strictObject({
   operationId: id, proposalId: id, action: z.enum(["apply", "revert"]),
+  agentGeneration: z.number().int().nonnegative().optional(),
   status: z.enum(["applied", "no_change"]), beforeVersion: planningVersionSchema, afterVersion: planningVersionSchema,
   date: localDateSchema, timeZone: timeZoneSchema, beforeFocusTaskIds: z.array(id).max(3), finalFocusTaskIds: z.array(id).max(3),
   addedTaskIds: z.array(id).max(3), removedTaskIds: z.array(id).max(3), retainedTaskIds: z.array(id).max(3),

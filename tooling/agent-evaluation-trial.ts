@@ -66,6 +66,22 @@ const { values } = parseArgs({
   strict: true,
 });
 
+const persistedReportSchema = z.object({
+  format: z.literal("newday-agent-evaluation-trial"),
+  version: z.literal(1),
+  trialId: z.string(),
+  freezeSha256: z.string(),
+  snapshotSha256: z.string(),
+  status: z.literal("operator_action_required"),
+  firstRoundOutput: z.unknown(),
+  calls: z.array(z.object({
+    sequence: z.number().int().min(1).max(3),
+    endedAt: z.string().nullable(),
+    outcome: z.enum(["reserved", "generation_returned", "validated", "generation_error", "validation_error", "model_drift"]),
+  }).passthrough()),
+  phases: z.array(z.object({ kind: z.enum(["initial", "clarification_resume"]), status: z.string() }).passthrough()).min(1),
+}).passthrough();
+
 let releaseLock: (() => Promise<void>) | undefined;
 let secret = "";
 let activeLedger: EvaluationLedger | undefined;
@@ -314,22 +330,6 @@ function verifyLedgerMatchesFreeze(ledger: EvaluationLedger, freeze: EvaluationF
   const expectedCurrency = freeze.scope.costControl.mode !== "unknown" ? freeze.scope.costControl.currency : null;
   if (ledger.currency !== expectedCurrency) throw new EvaluationGuardError("LEDGER_COST_MISMATCH", "ledger cost control differs from the freeze");
 }
-
-const persistedReportSchema = z.object({
-  format: z.literal("newday-agent-evaluation-trial"),
-  version: z.literal(1),
-  trialId: z.string(),
-  freezeSha256: z.string(),
-  snapshotSha256: z.string(),
-  status: z.literal("operator_action_required"),
-  firstRoundOutput: z.unknown(),
-  calls: z.array(z.object({
-    sequence: z.number().int().min(1).max(3),
-    endedAt: z.string().nullable(),
-    outcome: z.enum(["reserved", "generation_returned", "validated", "generation_error", "validation_error", "model_drift"]),
-  }).passthrough()),
-  phases: z.array(z.object({ kind: z.enum(["initial", "clarification_resume"]), status: z.string() }).passthrough()).min(1),
-}).passthrough();
 
 async function readResumableReport(
   path: string,

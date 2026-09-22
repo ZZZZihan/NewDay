@@ -1,23 +1,13 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { Geist, Noto_Serif_SC } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+
+import "@fontsource-variable/noto-serif-sc/wght.css";
 
 import { THEME_BOOTSTRAP_SCRIPT } from "@/features/theme/theme-preference";
 
 import "@/styles/globals.css";
 import "@/styles/workspace.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const notoSerif = Noto_Serif_SC({
-  variable: "--font-noto-serif-sc",
-  weight: ["500", "600"],
-  display: "swap",
-  preload: false,
-});
 
 export const metadata: Metadata = {
   title: "NewDay · 今天要做的事",
@@ -30,7 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       lang="zh-CN"
       data-theme="light"
       suppressHydrationWarning
-      className={`${geistSans.variable} ${notoSerif.variable} h-full antialiased`}
+      className={`${GeistSans.variable} h-full antialiased`}
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />

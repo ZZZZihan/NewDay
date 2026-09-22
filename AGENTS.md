@@ -18,6 +18,15 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Read `docs/architecture.md` for dependencies and API ownership. Run `pnpm check`, `pnpm build`, and the relevant `pnpm test:e2e` scenarios for changes spanning the HTTP interface or persistence. Preserve the existing working tree when moving code.
 
+## Worktree reconciliation gate
+
+- Before starting any program development, inventory every existing repository worktree with `git worktree list --porcelain`. For each relevant worktree, inspect its branch and HEAD, staged, unstaged, and untracked changes, ahead/behind state, and associated Linear issue or pull request; checking only the current directory is insufficient.
+- Treat older dirty worktrees and unintegrated branches as a prerequisite, not background clutter. Identify the owner and task scope of every outstanding change, compare it with current `origin/main`, preserve its evidence and recovery path, and reconcile it into the smallest reviewable candidate.
+- Complete the applicable validation and integrate or merge approved earlier work into its intended base before beginning any subsequent program development. If a failed gate, missing authority, unresolved conflict, or required user decision prevents reconciliation or merge, stop and report the exact blocker instead of silently continuing around it.
+- Do not manufacture a clean status with `git add .`, mixed-scope commits, anonymous stashes, force resets, checkout overwrites, `git clean`, deletion, or any operation that can hide or destroy existing work. Separate unrelated scopes into dedicated branches or worktrees and stage with an explicit allowlist.
+- Once a coherent in-scope change passes its applicable local acceptance, create a scoped candidate commit promptly unless the user explicitly prohibits committing. Keep commit, push, pull request, independent review, merge, deployment, and real-world acceptance as separate recorded states.
+- End each task with no unexplained dirty state: changes must be committed to the intended scoped branch, integrated or merged when authorized and accepted, or retained through an explicit user-approved recovery plan. Do not begin the next program-development task while an older relevant worktree remains unclassified or unresolved.
+
 ## Project management: Linear + Git
 
 - Use the Linear **NewDay** project in team **CoLife (COL)** for requirements, work status, acceptance criteria, and blockers. Project ID: `3456fad5-6548-4edb-8cb4-d5448e7df87c`; URL: https://linear.app/colife/project/newday-aa09602a66c8.

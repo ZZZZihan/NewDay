@@ -17,6 +17,7 @@ export interface AgentRunRepository {
   putAgentRecord<T>(namespace: string, id: string, value: T): Promise<void>;
   listAgentRecords<T>(namespace: string): Promise<T[]>;
   getPlanningVersion(): Promise<PlanningVersion>;
+  getAgentGeneration(): Promise<number>;
 }
 export interface PlanningSnapshotSource { createSnapshot(): Promise<PlanningSnapshot> }
 export type AgentRunServiceOptions = { clock?: () => number; timeoutMs?: number };
@@ -312,7 +313,8 @@ export class AgentRunService {
     const saved = await this.repository.getAgentRecord<PlanningSnapshot>(AGENT_NAMESPACES.snapshot, snapshot.id);
     const version = await this.repository.getPlanningVersion();
     if (!saved || !context || context.revision !== snapshot.context.revision || !preferences ||
-      preferences.revision !== snapshot.preferences.revision || preferences.timeZone !== snapshot.timeZone || version.datasetEpoch !== snapshot.version.datasetEpoch)
+      preferences.revision !== snapshot.preferences.revision || preferences.timeZone !== snapshot.timeZone || version.datasetEpoch !== snapshot.version.datasetEpoch ||
+      (snapshot.agentGeneration ?? 0) !== await this.repository.getAgentGeneration())
       throw new AgentApiError("VERSION_CONFLICT", 409, "规划输入已变化，请重新生成建议");
   }
 

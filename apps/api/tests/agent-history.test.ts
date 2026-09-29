@@ -196,7 +196,8 @@ test("agent backup imports read-only history without tasks or execution IDs and 
   const taskBackup = await createPlannerBackup(targetStore, now);
   const currentPreferences = await target.preferences.getPreferences();
   await target.history.importBackup(JSON.stringify(exported), false);
-  assert.notEqual((await targetStore.getPlanningVersion()).datasetEpoch, currentVersion.datasetEpoch);
+  assert.deepEqual(await targetStore.getPlanningVersion(), currentVersion);
+  assert.equal(await targetStore.getAgentGeneration(), 1);
   assert.deepEqual(await createPlannerBackup(targetStore, now), taskBackup);
   assert.equal(taskBackup.version, 6);
   assert.equal("agent" in taskBackup, false);

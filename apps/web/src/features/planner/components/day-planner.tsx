@@ -162,10 +162,10 @@ export function DayPlanner() {
                   <ChevronLeft size={19} />
                 </Button>
                 <div className="date-picker-control">
-                  <Button className="date-picker-button" type="button" variant="ghost" aria-hidden="true">
+                  <span className="date-picker-button" aria-hidden="true">
                     <CalendarDays size={16} aria-hidden="true" />
                     <span>{formatDayShort(selectedDate)}{selectedIsToday ? " · 今天" : ""}</span>
-                  </Button>
+                  </span>
                   <input
                     className="date-picker-input"
                     aria-label="选择日期"

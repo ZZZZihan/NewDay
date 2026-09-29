@@ -139,7 +139,7 @@ Agent 界面在确认前预览新增、保留、移除的重点，收到成功�
 | `POST /api/agent/feedback` | `{ feedbackId, proposalId, operationId?, decision, reason? }` | `PlanningFeedback`；同 ID 不同请求返回冲突 |
 | `DELETE /api/agent/history` | `{}` | `{ ok: true }`；保留任务、偏好与最小执行账本 |
 | `GET /api/agent/backup` | 无 | 独立的 `newday-agent` v1 备份 |
-| `POST /api/agent/backup` | `{ source, importPreferences }` | `{ ok: true, importId, datasetEpoch }`；只读导入、任务保持原样 |
+| `POST /api/agent/backup` | `{ source, importPreferences }` | `{ ok: true, importId, datasetEpoch, agentGeneration }`；只读导入、任务与 Notion 数据集保持原样，仅推进 Agent generation |
 
 普通采纳要求非空的 1–3 项最终集合；无动作不会清空重点。采纳和恢复在提交成功后才返回成功回执。常见拒绝包括 `VERSION_CONFLICT`、`IDEMPOTENCY_CONFLICT`、`DATE_EXPIRED`、`PROPOSAL_NOT_EXECUTABLE` 和 `RESTORE_CONFLICT`。模型不可用、修复后格式仍不合法、超时或限流会使运行失败，不能触发任务写入。采纳或恢复中的 `RESULT_UNKNOWN` 表示结果尚未确认，须查询原 operation；不能等同于未执行。
 
@@ -147,7 +147,7 @@ Agent 界面在确认前预览新增、保留、移除的重点，收到成功�
 
 撤销只保留后端最新一项可撤销操作，令牌有效期为 10 秒且只能使用一次。下一条产生撤销回执的命令会替换旧回执，另一个标签页的命令也可能使它失效；备份恢复和首次迁移会清除回执。回执绑定发起操作的页面标识，刷新页面或重启后端后不能继续使用。普通任务数据保存在 SQLite，撤销快照只保存在进程内存中。
 
-Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，跨刷新或 API 重启后仍可查询，但执行时必须仍为同一天、同一时区、同一 epoch，规划版本和当前重点集合未变化，原重点任务仍可执行。恢复只替换重点集合，自身也有独立的幂等 operation 和事件；不恢复或覆盖任务正文、完成状态、日期或重复规则。
+Agent 的“恢复采纳前的重点”另用 SQLite 中的 execution receipt，跨刷新或 API 重启后仍可查询，但执行时必须仍为同一天、同一时区、同一 epoch、同一 Agent generation，规划版本和当前重点集合未变化，原重点任务仍可执行。恢复只替换重点集合，自身也有独立的幂等 operation 和事件；不恢复或覆盖任务正文、完成状态、日期或重复规则。重复请求仍返回已记录的执行终态，但 `canRevert` 按当前资格重新计算。
 
 ### Notion 连接与同步候选 API
 
@@ -181,7 +181,7 @@ Worker 的 `/oauth/start`、`/oauth/claim`、`/oauth/ack`、`/oauth/refresh` 要
 
 默认数据库是仓库下的 `data/newday.sqlite`。API 创建缺失目录，并以 SQLite WAL 模式存储任务、重复规则段、重点记录、收集箱、两级文件夹、资料、资料任务关联、元数据、Agent records、规划事件和执行账本；数据库文件不提交到 Git。SQLite schema v7 增加 Notion 规则映射。SQLite Store 实现 `PlannerArchiveStore`，批量命令及替换导入使用事务，失败时回滚。服务层串行执行人工业务操作，Store 串行管理同一连接上的最外层事务；嵌套调用使用 savepoint。内存撤销回执的发布、失效和消费延迟到最外层 COMMIT 后，savepoint 成功不会提前发布成功状态。
 
-`PlanningVersion` 由 `datasetEpoch` 与 `plannerRevision` 组成。最外事务中第一次真实任务、重复规则或重点变更使 revision 增加一次，后续同事务变更不重复增加；只读、no-op、运行记录、上下文、偏好与反馈不增加任务 revision。任务替换导入、首次浏览器迁移和独立 Agent 导入成功后产生新 epoch；失败时保留原状态。上下文和偏好各有独立 revision，采纳同时核对任务版本、上下文版本、偏好版本和当天时区。
+`PlanningVersion` 由 `datasetEpoch` 与 `plannerRevision` 组成。最外事务中第一次真实任务、重复规则或重点变更使 revision 增加一次，后续同事务变更不重复增加；只读、no-op、运行记录、上下文、偏好与反馈不增加任务 revision。任务替换导入和首次浏览器迁移成功后产生新 epoch；失败时保留原状态。独立 Agent 导入仅递增持久 `agentGeneration`，不改变共享任务 epoch/revision、Notion outbox 或扫描水位。上下文和偏好各有独立 revision，采纳同时核对任务版本、Agent generation、上下文版本、偏好版本和当天时区。新快照和回执携带可选 `agentGeneration`；旧版 v1 记录缺省值为 0，只在首次 Agent 导入前可满足 generation 校验。generation 不会被清理历史或任务备份恢复重置。
 
 快照在同一事务中先物化重复实例，再读取当前版本、全部今日可执行候选和明确阻塞、已有重点、上下文与必要历史。未提供的精力、硬截止和阻塞信息保持未知，未来任务不进入今日候选。当前预算最多 100 个当日未完成候选，完整快照最多 120,000 个 JSON 字符；超出时返回 `CONTEXT_TOO_LARGE`，不静默截断。允许参考历史时，最多提供 30 条当前数据集已记录结果及最近 10 条用户反馈，原因保留为用户原文，不自动转成偏好。
 
@@ -193,7 +193,7 @@ T5 的 `NotionOutboxDispatcher` 已由 COL-37 接入本机 API、定时队列、
 
 旧版任务备份 v4 只包含任务、规则和重点，v5 增加生活管理数据，v6 增加无凭据的同步元数据。Agent 使用独立 `newday-agent` v1 格式，声明范围 `agent-history-and-explicit-preferences`，包含上下文、偏好、快照、运行、提案、回执、反馈、事件和来源历史归档，不含 provider 密钥。`importedHistories[].archive` 保留导入的原始记录，包含没有形成提案的失败运行和原始事件，允许再次导出。
 
-独立 Agent 导入在一个事务内保存来源数据集的只读历史、按明确选择导入偏好、失效原提案并切换 epoch。它不重建可执行 operation ID，不把同名任务 ID 自动关联当前数据集，不激活导入上下文，也不修改任务或规则。未选导入偏好时保留当前偏好；选中时创建当前偏好的新 revision。旧数据集回执只能查询历史，恢复资格失效。Agent 备份与清理目前由 API 提供，工作台导入/导出菜单使用任务与生活管理备份 v6。
+独立 Agent 导入在一个事务内保存来源数据集的只读历史、按明确选择导入偏好、失效原提案并推进 Agent generation。它不重建可执行 operation ID，不把同名任务 ID 自动关联当前数据集，不激活导入上下文，也不修改任务或规则。未选导入偏好时保留当前偏好；选中时创建当前偏好的新 revision。新 generation 使用新的本机每日上下文，旧 generation 的反馈不进入后续快照；仍属于当前任务数据集的真实完成、重开等事件继续作为已记录结果。原本机历史和导入历史只读，旧回执保留去重和查询能力但不能恢复重点，晚到模型响应和旧澄清、采纳、反馈请求被 generation 校验拒绝。Notion pending 可以继续发送；已开始的读写正常结算，unknown 仍只能只读核对，暂停/恢复与 API 重启不改变这些边界。Agent 备份与清理目前由 API 提供，工作台导入/导出菜单使用任务与生活管理备份 v6。
 
 迁移入口使用原生 IndexedDB 只读事务读取旧 `newday` 库，不升级其 schema。空服务端可原子接收第一次迁移；相同内容重复提交返回 `already-imported`，已有任务或不兼容的迁移标记返回 `server-not-empty`。服务端迁移标记在普通备份恢复后仍保留，防止旧浏览器再次自动覆盖已经整理过的数据。
 

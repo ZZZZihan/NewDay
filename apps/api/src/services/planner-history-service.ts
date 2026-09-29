@@ -24,12 +24,14 @@ export class PlannerHistoryService {
     localDateSchema.parse(date);
     return this.store.transaction(async () => {
       const version = await this.store.getPlanningVersion();
-      const entries = buildHistoryEntries(await this.readHistoryData(), version.datasetEpoch).filter((entry) => entry.date === date);
+      const generation = await this.store.getAgentGeneration();
+      const entries = buildHistoryEntries(await this.readHistoryData(), version.datasetEpoch, generation).filter((entry) => entry.date === date);
       const preferences = await this.preferences.getPreferences();
       for (const entry of entries) {
         if (entry.receipt) entry.receipt = {
           ...entry.receipt,
           canRevert: entry.receipt.canRevert && entry.receipt.action === "apply" && entry.receipt.status === "applied" &&
+            (entry.receipt.agentGeneration ?? 0) === generation &&
             entry.receipt.afterVersion.datasetEpoch === version.datasetEpoch && entry.receipt.afterVersion.plannerRevision === version.plannerRevision &&
             preferences.timeZone === entry.receipt.timeZone && dateInTimeZone(this.clock(), entry.receipt.timeZone) === entry.receipt.date,
         };
@@ -62,8 +64,9 @@ export class PlannerHistoryService {
       if (!proposal) throw new AgentApiError("NOT_FOUND", 404, "找不到这条建议");
       const snapshot = await this.store.getAgentRecord<PlanningSnapshot>(AGENT_NAMESPACES.snapshot, proposal.snapshotId);
       const version = await this.store.getPlanningVersion();
-      if (!snapshot || snapshot.version.datasetEpoch !== version.datasetEpoch)
-        throw new AgentApiError("VERSION_CONFLICT", 409, "这条建议属于旧数据集，只能查看历史");
+      if (!snapshot || snapshot.version.datasetEpoch !== version.datasetEpoch ||
+        (snapshot.agentGeneration ?? 0) !== await this.store.getAgentGeneration())
+        throw new AgentApiError("VERSION_CONFLICT", 409, "这条建议所依据的规划历史已失效，只能查看历史");
       const receipt = parsed.operationId ? (await this.store.listExecutionReceipts()).find((value) => value.operationId === parsed.operationId) : undefined;
       if (parsed.operationId && (!receipt || receipt.proposalId !== proposal.proposalId))
         throw new AgentApiError("INVALID_INPUT", 400, "反馈引用的执行回执与建议不匹配");
@@ -143,8 +146,9 @@ export class PlannerHistoryService {
         await this.store.putAgentRecord(AGENT_NAMESPACES.preferences, "current", next);
       }
       await invalidateReadyProposals(this.store);
-      const version = await this.store.rotateDatasetEpoch();
-      return { ok: true as const, importId, datasetEpoch: version.datasetEpoch };
+      const agentGeneration = await this.store.advanceAgentGeneration();
+      const version = await this.store.getPlanningVersion();
+      return { ok: true as const, importId, datasetEpoch: version.datasetEpoch, agentGeneration };
     });
   }
 
@@ -179,7 +183,7 @@ export function recordedOutcome(event: PlannerEvent): PlanningHistoryEntry["outc
   return undefined;
 }
 
-function buildHistoryEntries(data: HistoryData, currentEpoch: string): PlanningHistoryEntry[] {
+function buildHistoryEntries(data: HistoryData, currentEpoch: string, currentGeneration?: number): PlanningHistoryEntry[] {
   const snapshots = new Map(data.snapshots.map((snapshot) => [snapshot.id, snapshot]));
   const entries: PlanningHistoryEntry[] = [];
   for (const proposal of data.proposals) {
@@ -202,7 +206,8 @@ function buildHistoryEntries(data: HistoryData, currentEpoch: string): PlanningH
       });
       entries.push({
         id: historyId(proposal.proposalId, receipt?.operationId ?? ""), date: snapshot.date,
-        datasetEpoch: snapshot.version.datasetEpoch, readOnly: snapshot.version.datasetEpoch !== currentEpoch,
+        datasetEpoch: snapshot.version.datasetEpoch, readOnly: snapshot.version.datasetEpoch !== currentEpoch ||
+          (currentGeneration !== undefined && (snapshot.agentGeneration ?? 0) !== currentGeneration),
         proposal, receipt, snapshot,
         feedback: data.feedback.filter((feedback) => feedback.proposalId === proposal.proposalId && feedback.datasetEpoch === snapshot.version.datasetEpoch && (!feedback.operationId || feedback.operationId === receipt?.operationId)),
         outcomes,

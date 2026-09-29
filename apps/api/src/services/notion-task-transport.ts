@@ -2,6 +2,7 @@ import { Client, type CreatePageParameters, type PageObjectResponse, type Update
 import { notionTaskFieldsSchema, type NotionConnection, type NotionTaskFields, type NotionTaskMapping } from "@newday/core/contracts/notion-sync";
 
 import type { NotionCredentialVault } from "../storage/notion-credential-vault.js";
+import type { SQLitePlannerStore } from "../storage/sqlite-planner-store.js";
 import { NotionWritePreflightFailure, type NotionTaskPage, type NotionTaskTransport } from "./notion-outbox-dispatcher.js";
 import { NotionReadFailure, assertRuleSourceReadable, parseRow } from "./notion-read-gateway.js";
 
@@ -15,7 +16,8 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
   private readonly makeClient: ClientFactory;
 
   constructor(private readonly vault: NotionCredentialVault,
-    factoryOrOptions: ClientFactory | { baseUrl?: string } = {}) {
+    factoryOrOptions: ClientFactory | { baseUrl?: string } = {},
+    private readonly ruleStore?: Pick<SQLitePlannerStore, "listNotionRuleMappings">) {
     this.makeClient = typeof factoryOrOptions === "function" ? factoryOrOptions : (token) =>
       new Client({ auth: token, notionVersion: "2026-03-11", retry: false, timeoutMs: 15_000,
         ...(factoryOrOptions.baseUrl ? { baseUrl: factoryOrOptions.baseUrl } : {}) });
@@ -164,9 +166,23 @@ export class NotionSdkTaskTransport implements NotionTaskTransport {
       throw new NotionReadFailure("schema", "Notion task page has a different parent");
     }
     const row = await parseRow(client, raw, "tasks", connection.dataSources.tasks!.propertyIds);
-    if (row.kind !== "task" || row.ruleIds.length !== (mapping.rulePageId ? 1 : 0) ||
-      row.ruleIds[0] !== mapping.rulePageId ||
-      (row.occurrenceKey ?? undefined) !== mapping.occurrenceKey) {
+    if (row.kind !== "task" || (row.occurrenceKey ?? undefined) !== mapping.occurrenceKey) {
+      throw new NotionReadFailure("schema", "Notion task rule identity differs from its mapping");
+    }
+    const matchingRelation = row.ruleIds.length === (mapping.rulePageId ? 1 : 0) &&
+      row.ruleIds[0] === mapping.rulePageId;
+    // The read service preserves an already verified instance when Notion
+    // hides its relation to a trashed rule. Apply that same narrow exception
+    // to write preflight/readback; never infer identity for a new page.
+    const hiddenArchivedRelation = !matchingRelation && row.ruleIds.length === 0 &&
+      mapping.status === "active" && mapping.baseline !== null && mapping.remotePageId === row.id &&
+      mapping.rulePageId && mapping.occurrenceKey &&
+      (row.clientKey === null || row.clientKey === mapping.clientKey) &&
+      (await this.ruleStore?.listNotionRuleMappings(connection.workspaceId))?.some((rule) =>
+        rule.workspaceId === connection.workspaceId &&
+        rule.dataSourceId === connection.dataSources.rules?.dataSourceId &&
+        rule.remotePageId === mapping.rulePageId && rule.status === "archived");
+    if (!matchingRelation && !hiddenArchivedRelation) {
       throw new NotionReadFailure("schema", "Notion task rule identity differs from its mapping");
     }
     return { workspaceId: connection.workspaceId, dataSourceId: mapping.dataSourceId,

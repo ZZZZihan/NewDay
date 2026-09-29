@@ -164,6 +164,23 @@ export class SQLitePlannerStore implements PlannerArchiveStore {
     return { datasetEpoch: String(epoch!.value), plannerRevision: Number(revision!.value) };
   }
 
+  /** Agent-only imports invalidate Agent execution without replacing tasks or
+   * their Notion sync identity. Absent metadata denotes the original generation
+   * for existing databases; history cleanup and task restore never reset it. */
+  async getAgentGeneration(): Promise<number> {
+    const row = this.database.prepare("SELECT value FROM metadata WHERE key = 'agent_generation'").get();
+    return row ? Number(row.value) : 0;
+  }
+
+  async advanceAgentGeneration(): Promise<number> {
+    return this.transaction(async () => {
+      const generation = await this.getAgentGeneration() + 1;
+      this.database.prepare("INSERT INTO metadata(key,value) VALUES('agent_generation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .run(String(generation));
+      return generation;
+    });
+  }
+
   async rotateDatasetEpoch(): Promise<PlanningVersion> {
     return this.transaction(async () => {
       this.database.prepare("UPDATE metadata SET value = ? WHERE key = 'dataset_epoch'").run(randomUUID());

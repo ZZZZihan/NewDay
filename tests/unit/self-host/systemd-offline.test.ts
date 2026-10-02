@@ -4,6 +4,7 @@ import { assertSystemdOffline, isConfirmedOffline } from "../../../deploy/self-h
 const state = (changes: Record<string, string> = {}) => Object.entries({
   LoadState: "loaded", ActiveState: "inactive", SubState: "dead", MainPID: "0", ControlPID: "0", Job: "", ...changes,
 }).map(([key, value]) => `${key}=${value}`).join("\n") + "\n";
+const remainingWorkStates: Record<string, string>[] = [{ Job: "42" }, { MainPID: "42" }, { ControlPID: "42" }, { SubState: "start" }, { LoadState: "error" }];
 
 describe("offline restore systemd boundary", () => {
   it("accepts confirmed inactive, failed and absent units with no job or process", () => {
@@ -18,7 +19,7 @@ describe("offline restore systemd boundary", () => {
     expect(isConfirmedOffline(state({ ActiveState }))).toBe(false);
   });
 
-  it.each([{ Job: "42" }, { MainPID: "42" }, { ControlPID: "42" }, { SubState: "start" }, { LoadState: "error" }])("rejects remaining work or invalid state %j", (changes) => {
+  it.each(remainingWorkStates)("rejects remaining work or invalid state %j", (changes) => {
     expect(isConfirmedOffline(state(changes))).toBe(false);
   });
 

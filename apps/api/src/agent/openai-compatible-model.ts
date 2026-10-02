@@ -18,8 +18,34 @@ export type OpenAICompatibleModelOptions = {
   requestProfile?: "openai-structured" | "deepseek-json";
   allowHttpOrigin?: string;
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  /** Private evaluation evidence only. Awaited before sending and before parsing. */
+  audit?: (event: PlanningProviderAuditEvent) => Promise<void>;
 };
 export type StructuredModelMessage = { role: "system" | "user"; content: string };
+
+export type ProviderTokenUsage = { [key: string]: number | ProviderTokenUsage };
+export type PlanningProviderAuditEvent =
+  | { kind: "request"; body: string; redacted: boolean }
+  | {
+      kind: "response";
+      statusCode: number;
+      bodyState: "complete" | "truncated" | "interrupted" | "omitted_http_error";
+      rawBody: string | null;
+      receivedBytes: number | null;
+      providerModelId: string | null;
+      systemFingerprint: string | null;
+      usage: ProviderTokenUsage | null;
+      redacted: boolean;
+    };
+
+/** Evidence failures must never turn into a repairable provider error. */
+export class PlanningProviderAuditError extends Error {
+  readonly code = "PROVIDER_AUDIT_FAILURE";
+  constructor() {
+    super("Private provider audit evidence could not be persisted");
+    this.name = "PlanningProviderAuditError";
+  }
+}
 
 function parseProviderUrl(source: string, label: string): URL {
   const authority = /^https?:\/\/([^/]+)/i.exec(source)?.[1];
@@ -36,31 +62,80 @@ function parseProviderUrl(source: string, label: string): URL {
   return parsed;
 }
 
-async function readBoundedResponse(response: Response, signal: AbortSignal) {
-  if (!response.body) return "";
+async function readBoundedResponse(
+  response: Response,
+  signal: AbortSignal,
+  audit?: (source: string, bytes: number, state: "complete" | "truncated" | "interrupted") => Promise<void>,
+) {
+  if (!response.body) {
+    await audit?.("", 0, "complete");
+    return "";
+  }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
   let source = "";
+  let bodyState: "complete" | "truncated" | "interrupted" = "interrupted";
   const cancel = () => { void reader.cancel().catch(() => undefined); };
   signal.addEventListener("abort", cancel, { once: true });
   try {
     signal.throwIfAborted();
     for (;;) {
       const { done, value } = await reader.read();
+      if (audit && signal.aborted && value) {
+        // The transport may deliver a final chunk in the same turn as abort.
+        // Keep the bytes already received even though generation must fail.
+        const remaining = Math.max(0, 200_000 - bytes);
+        bytes += value.byteLength;
+        source += decoder.decode(value.subarray(0, remaining), { stream: true });
+        if (bytes > 200_000) bodyState = "truncated";
+      }
       signal.throwIfAborted();
       if (done) break;
       bytes += value.byteLength;
       if (bytes > 200_000) {
+        // Retain the bounded prefix for evaluation, while preserving the
+        // production response limit and explicitly marking incomplete evidence.
+        if (audit) source += decoder.decode(value.subarray(0, Math.max(0, 200_000 - (bytes - value.byteLength))), { stream: true });
+        bodyState = "truncated";
         await reader.cancel();
         throw new Error("Oversized model response");
       }
       source += decoder.decode(value, { stream: true });
     }
-    return source + decoder.decode();
+    source += decoder.decode();
+    bodyState = "complete";
+    return source;
   } finally {
     signal.removeEventListener("abort", cancel);
     reader.releaseLock();
+    await audit?.(source, bytes, bodyState);
+  }
+}
+
+function numericUsage(value: unknown): ProviderTokenUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries: Array<[string, number | ProviderTokenUsage]> = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "number" && Number.isFinite(entry) && entry >= 0) entries.push([key, entry]);
+    else {
+      const nested = numericUsage(entry);
+      if (nested && Object.keys(nested).length) entries.push([key, nested]);
+    }
+  }
+  return Object.fromEntries(entries);
+}
+
+function responseMetadata(source: string) {
+  try {
+    const body = JSON.parse(source) as Record<string, unknown> | null;
+    return {
+      providerModelId: typeof body?.model === "string" ? body.model : null,
+      systemFingerprint: typeof body?.system_fingerprint === "string" ? body.system_fingerprint : null,
+      usage: numericUsage(body?.usage),
+    };
+  } catch {
+    return { providerModelId: null, systemFingerprint: null, usage: null };
   }
 }
 
@@ -129,12 +204,18 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
             response_format: { type: "json_schema", json_schema: { name, strict: true, schema } },
             max_completion_tokens: this.maxCompletionTokens, n: 1, store: false,
           };
+      const source = JSON.stringify(body);
+      if (this.options.audit) {
+        await this.emitAudit({ kind: "request", body: source, redacted: false });
+        signal.throwIfAborted();
+      }
       response = await this.fetch(this.endpoint, {
         method: "POST", signal, redirect: "error",
         headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: source,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof PlanningProviderAuditError) throw error;
       signal.throwIfAborted();
       throw new AgentApiError("MODEL_UNAVAILABLE", 503, "模型服务暂时无法连接", true);
     }
@@ -142,14 +223,24 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
       // Upstream bodies can contain credentials or raw user context. Do not
       // include them in errors, logs, or persisted run metadata.
       await response.body?.cancel();
+      await this.emitAudit({
+        kind: "response", statusCode: response.status, bodyState: "omitted_http_error", rawBody: null,
+        receivedBytes: null, providerModelId: null, systemFingerprint: null, usage: null, redacted: false,
+      });
       if (response.status === 429) throw new AgentApiError("MODEL_RATE_LIMITED", 429, "模型服务请求过于频繁，请稍后重试", true);
       throw new AgentApiError("MODEL_UNAVAILABLE", 503, "模型服务暂时不可用，请检查服务配置", response.status >= 500);
     }
     let body: z.infer<typeof completionSchema>;
     try {
-      const source = await readBoundedResponse(response, signal);
+      const source = await readBoundedResponse(response, signal, this.options.audit ? async (rawBody, receivedBytes, bodyState) => {
+        await this.emitAudit({
+          kind: "response", statusCode: response.status, bodyState, rawBody, receivedBytes,
+          ...responseMetadata(rawBody), redacted: false,
+        });
+      } : undefined);
       body = completionSchema.parse(JSON.parse(source));
-    } catch {
+    } catch (error) {
+      if (error instanceof PlanningProviderAuditError) throw error;
       signal.throwIfAborted();
       throw new AgentApiError("MODEL_INVALID_OUTPUT", 502, "模型返回了无法解析的响应");
     }
@@ -163,5 +254,44 @@ export class OpenAICompatiblePlanningModel implements PlanningModel {
     catch { throw new AgentApiError("MODEL_INVALID_OUTPUT", 502, "模型返回了不符合格式的建议"); }
     const usage: ModelUsage = body.usage ? { kind: "known", inputTokens: body.usage.prompt_tokens, outputTokens: body.usage.completion_tokens } : { kind: "unknown" };
     return { output, modelId: body.model, usage };
+  }
+
+  private async emitAudit(event: PlanningProviderAuditEvent) {
+    if (!this.options.audit) return;
+    let redacted = false;
+    const secret = this.options.apiKey;
+    const sanitize = (value: string) => {
+      let safe = value;
+      // A completion contains JSON inside message.content; keys with quotes or
+      // backslashes can therefore be escaped more than once in the raw body.
+      for (let encoded = secret; encoded.length <= value.length;) {
+        safe = safe.replaceAll(encoded, "[REDACTED]");
+        const next = JSON.stringify(encoded).slice(1, -1);
+        if (next === encoded) break;
+        encoded = next;
+      }
+      safe = safe.replace(/Bearer\s+[^\s"\\<>]+/gi, "Bearer [REDACTED]");
+      // Preserve untouched raw formatting, but inspect each JSON string at all
+      // envelope levels so Unicode escapes cannot hide an echoed credential.
+      safe = safe.replace(/"(?:\\.|[^"\\])*"/g, (token) => {
+        let decoded: string;
+        try { decoded = JSON.parse(token) as string; }
+        catch { return token; }
+        const sanitized = sanitize(decoded);
+        return sanitized === decoded ? token : JSON.stringify(sanitized);
+      });
+      if (safe !== value) redacted = true;
+      return safe;
+    };
+    const sanitized = JSON.parse(JSON.stringify(event), (_key, value) => typeof value === "string" ? sanitize(value) : value) as PlanningProviderAuditEvent;
+    // Provider-controlled usage keys are also untrusted strings.
+    if (sanitized.kind === "response" && sanitized.usage) {
+      const sanitizeKeys = (usage: ProviderTokenUsage): ProviderTokenUsage => Object.fromEntries(Object.entries(usage)
+        .map(([key, value]) => [sanitize(key), typeof value === "number" ? value : sanitizeKeys(value)]));
+      sanitized.usage = sanitizeKeys(sanitized.usage);
+    }
+    sanitized.redacted = redacted;
+    try { await this.options.audit(sanitized); }
+    catch { throw new PlanningProviderAuditError(); }
   }
 }

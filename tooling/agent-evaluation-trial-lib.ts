@@ -9,6 +9,7 @@ import {
 } from "@newday/core/contracts/agent-planning";
 import { z } from "zod";
 import { AgentApiError } from "../apps/api/src/http/agent-error.js";
+import { PlanningProviderAuditError, type PlanningProviderAuditEvent } from "../apps/api/src/agent/openai-compatible-model.js";
 import type {
   PlanningAnswers, PlanningModel,
 } from "../apps/api/src/agent/planning-model.js";
@@ -33,6 +34,63 @@ const providerOrigin = z.string().refine((value) => {
   } catch { return false; }
 }, "expected an HTTP(S) origin without a path");
 
+const MICROS_PER_UNIT = 1_000_000;
+const safeNonnegativeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+// Convert the decimal representation, not a floating-point multiplication, into
+// a rational number. Rates may use exponent notation or fractions of a micro.
+function decimalFraction(value: number) {
+  const [coefficient, exponentSource = "0"] = value.toString().toLowerCase().split("e");
+  const [whole, fraction = ""] = coefficient.split(".");
+  const exponent = Number(exponentSource) - fraction.length;
+  const digits = BigInt(whole + fraction);
+  return exponent >= 0
+    ? { numerator: digits * 10n ** BigInt(exponent), denominator: 1n }
+    : { numerator: digits, denominator: 10n ** BigInt(-exponent) };
+}
+
+function exactMoneyMicros(value: number): number | null {
+  if (!Number.isFinite(value) || value < 0) return null;
+  const fraction = decimalFraction(value);
+  const numerator = fraction.numerator * BigInt(MICROS_PER_UNIT);
+  if (numerator % fraction.denominator !== 0n) return null;
+  const micros = numerator / fraction.denominator;
+  return micros <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(micros) : null;
+}
+
+const frozenMoneySchema = z.number().finite().positive().refine(
+  (value) => exactMoneyMicros(value) !== null,
+  "amount must be a safe integer number of millionths of the currency unit",
+);
+const meteredCostControlSchema = z.strictObject({
+  mode: z.literal("metered_upper_bound"),
+  currency: z.literal("CNY"),
+  maxTotal: frozenMoneySchema,
+  maxPerOutboundCall: frozenMoneySchema,
+  inputPerMillion: z.number().finite().nonnegative(),
+  outputPerMillion: z.number().finite().nonnegative(),
+  inputTokenUpperBound: safeNonnegativeInteger.refine((value) => value > 0),
+  pricingSource: z.url(),
+  checkedAt: instant,
+}).refine((value) => value.maxPerOutboundCall <= value.maxTotal, {
+  message: "maxPerOutboundCall cannot exceed maxTotal",
+});
+type MeteredCostControl = z.infer<typeof meteredCostControlSchema>;
+
+function meteredUsageCostMicros(control: MeteredCostControl, inputTokens: number, outputTokens: number) {
+  if (![control.inputPerMillion, control.outputPerMillion].every((rate) => Number.isFinite(rate) && rate >= 0) ||
+      ![inputTokens, outputTokens].every((count) => Number.isSafeInteger(count) && count >= 0)) return null;
+  // A rate per million tokens times token count is already in micro-currency.
+  const input = decimalFraction(control.inputPerMillion);
+  const output = decimalFraction(control.outputPerMillion);
+  const numerator = BigInt(inputTokens) * input.numerator * output.denominator +
+    BigInt(outputTokens) * output.numerator * input.denominator;
+  const denominator = input.denominator * output.denominator;
+  const micros = (numerator + denominator - 1n) / denominator;
+  if (micros > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+  return Number(micros);
+}
+
 export const requiredStopConditions = [
   "outbound_call_cap_reached",
   "cost_control_reached",
@@ -44,6 +102,7 @@ export const requiredStopConditions = [
 ] as const;
 
 const costControlSchema = z.discriminatedUnion("mode", [
+  meteredCostControlSchema,
   z.strictObject({
     mode: z.literal("known_upper_bound"),
     currency: z.string().trim().min(3).max(3),
@@ -60,7 +119,7 @@ const costControlSchema = z.discriminatedUnion("mode", [
 
 export const evaluationFreezeSchema = z.strictObject({
   format: z.literal("newday-agent-evaluation-freeze"),
-  version: z.literal(2),
+  version: z.union([z.literal(2), z.literal(3)]),
   approval: z.strictObject({
     approved: z.literal(true),
     approvedAt: instant,
@@ -106,6 +165,19 @@ export const evaluationFreezeSchema = z.strictObject({
   }),
   evidenceDirectory: absolutePath,
 }).superRefine((value, context) => {
+  if (value.scope.costControl.mode === "metered_upper_bound") {
+    if (value.version !== 3) {
+      context.addIssue({ code: "custom", path: ["version"], message: "metered_upper_bound requires freeze version 3" });
+    }
+    const control = value.scope.costControl;
+    const required = meteredUsageCostMicros(control, control.inputTokenUpperBound, value.provider.maxOutputTokens);
+    if (required === null || required > (exactMoneyMicros(control.maxPerOutboundCall) ?? -1)) {
+      context.addIssue({
+        code: "custom", path: ["scope", "costControl", "maxPerOutboundCall"],
+        message: "per-call reservation must cover the frozen input and output token bounds at the frozen rates",
+      });
+    }
+  }
   if (new Set(value.scope.scenarioIds).size !== value.scope.scenarioIds.length) {
     context.addIssue({ code: "custom", path: ["scope", "scenarioIds"], message: "scenarioIds must be unique" });
   }
@@ -352,8 +424,10 @@ export type TrialCallRecord = {
   providerModelId: string | null;
   usage: ModelUsage | null;
   rawOutput?: unknown;
+  providerAudit?: PlanningProviderAuditEvent[];
   validationError?: TrialErrorRecord;
   generationError?: TrialErrorRecord;
+  hostError?: TrialErrorRecord;
 };
 
 export type ModelPhaseResult =
@@ -423,9 +497,10 @@ export async function runModelPhase(options: {
         const output = validatePlanningOutput(generation.output, options.snapshot, options.clarificationRound);
         call.outcome = "validated";
         finishCall(call, now);
-        await options.afterCall(call);
+        await persistCallEvidence(call, options.afterCall);
         return { status: "validated", output, calls };
       } catch (error) {
+        if (error instanceof PlanningProviderAuditError || error instanceof EvaluationGuardError) throw error;
         call.outcome = "validation_error";
         call.validationError = errorRecord(error, options.secrets);
         if (isRepairable(error) && !repair && options.callsAlreadyUsed + calls.length < 3) {
@@ -439,6 +514,14 @@ export async function runModelPhase(options: {
         }
       }
     } catch (error) {
+      // Audit persistence and budget guards are batch failures, never model
+      // formatting failures that can consume another request as a repair.
+      if (error instanceof PlanningProviderAuditError || error instanceof EvaluationGuardError) {
+        if (call.outcome === "reserved") call.outcome = "generation_error";
+        call.hostError = errorRecord(error, options.secrets);
+        finishCall(call, now);
+        throw error;
+      }
       call.outcome = "generation_error";
       call.generationError = errorRecord(error, options.secrets);
       if (isRepairable(error) && !repair && options.callsAlreadyUsed + calls.length < 3) {
@@ -450,7 +533,7 @@ export async function runModelPhase(options: {
       clearTimeout(timer);
     }
     finishCall(call, now);
-    await options.afterCall(call);
+    await persistCallEvidence(call, options.afterCall);
     repair = retry;
   }
 }
@@ -464,8 +547,16 @@ async function finishPhase(
   options: Pick<Parameters<typeof runModelPhase>[0], "afterCall" | "secrets">,
 ): Promise<ModelPhaseResult> {
   finishCall(call, now);
-  await options.afterCall(call);
+  await persistCallEvidence(call, options.afterCall);
   return { status, error: errorRecord(error, options.secrets), calls };
+}
+
+async function persistCallEvidence(call: TrialCallRecord, afterCall: (call: TrialCallRecord) => Promise<void>) {
+  try { await afterCall(call); }
+  catch (error) {
+    if (error instanceof EvaluationGuardError || error instanceof PlanningProviderAuditError) throw error;
+    throw new PlanningProviderAuditError();
+  }
 }
 
 function finishCall(call: TrialCallRecord, now: () => number) {
@@ -486,6 +577,7 @@ export function errorRecord(error: unknown, secrets: string[] = []): TrialErrorR
     return { name: error.name, message, code: error.code, statusCode: error.statusCode, retryable: error.retryable };
   }
   if (error instanceof EvaluationGuardError) return { name: error.name, message, code: error.code };
+  if (error instanceof PlanningProviderAuditError) return { name: error.name, message, code: error.code };
   return { name: error instanceof Error ? error.name : "Error", message };
 }
 
@@ -538,7 +630,7 @@ const ledgerTrialSchema = z.strictObject({
   updatedAt: instant,
 });
 
-export const evaluationLedgerSchema = z.strictObject({
+const legacyLedgerSchema = z.strictObject({
   format: z.literal("newday-agent-evaluation-ledger"),
   version: z.literal(1),
   freezeSha256: sha256Schema,
@@ -552,29 +644,94 @@ export const evaluationLedgerSchema = z.strictObject({
   stopReason: z.string().nullable(),
   trials: z.record(z.string(), ledgerTrialSchema),
 });
+const knownMeteredUsageSchema = z.strictObject({
+  kind: z.literal("known"),
+  inputTokens: safeNonnegativeInteger,
+  outputTokens: safeNonnegativeInteger,
+});
+const costReservationSchema = z.strictObject({
+  sequence: z.number().int().min(1).max(3),
+  reservation: safeNonnegativeInteger.refine((value) => value > 0),
+  status: z.enum(["reserved", "settled", "usage_unknown", "usage_out_of_bounds"]),
+  reservedUpperBoundMicros: safeNonnegativeInteger,
+  costUpperBoundMicros: safeNonnegativeInteger,
+  reservedAt: instant,
+  settledAt: instant.nullable(),
+  usage: knownMeteredUsageSchema.nullable(),
+});
+const meteredLedgerSchema = legacyLedgerSchema.extend({
+  version: z.literal(2),
+  currency: z.literal("CNY"),
+  reservedCostUpperBound: z.number().finite().nonnegative(),
+  reservedCostUpperBoundMicros: safeNonnegativeInteger,
+  trials: z.record(z.string(), ledgerTrialSchema.extend({
+    costReservations: z.record(z.string(), costReservationSchema),
+  })),
+}).superRefine((value, context) => {
+  let totalMicros = 0n;
+  let totalReservations = 0;
+  let hasUnresolvedUsage = false;
+  const reservationIds = new Set<number>();
+  for (const [id, trial] of Object.entries(value.trials)) {
+    const entries = Object.entries(trial.costReservations);
+    if (entries.length !== trial.callsReserved) {
+      context.addIssue({ code: "custom", path: ["trials", id, "costReservations"], message: "every call must have exactly one cost reservation" });
+    }
+    for (const [sequence, entry] of entries) {
+      if (String(entry.sequence) !== sequence || entry.sequence > trial.callsReserved || reservationIds.has(entry.reservation)) {
+        context.addIssue({ code: "custom", path: ["trials", id, "costReservations", sequence], message: "cost reservation identity is inconsistent" });
+      }
+      reservationIds.add(entry.reservation);
+      if (entry.costUpperBoundMicros > entry.reservedUpperBoundMicros ||
+          (entry.status !== "settled" && entry.costUpperBoundMicros !== entry.reservedUpperBoundMicros) ||
+          (entry.status === "reserved" ? entry.settledAt !== null : entry.settledAt === null) ||
+          (["settled", "usage_out_of_bounds"].includes(entry.status) ? entry.usage === null : entry.usage !== null)) {
+        context.addIssue({ code: "custom", path: ["trials", id, "costReservations", sequence], message: "cost reservation settlement is inconsistent" });
+      }
+      hasUnresolvedUsage ||= entry.status === "usage_unknown" || entry.status === "usage_out_of_bounds";
+      totalMicros += BigInt(entry.costUpperBoundMicros);
+      totalReservations += 1;
+    }
+  }
+  if (totalMicros !== BigInt(value.reservedCostUpperBoundMicros) ||
+      exactMoneyMicros(value.reservedCostUpperBound) !== value.reservedCostUpperBoundMicros ||
+      totalReservations !== value.reservedOutboundCalls ||
+      [...reservationIds].some((id) => id > value.reservedOutboundCalls)) {
+    context.addIssue({ code: "custom", path: ["reservedCostUpperBoundMicros"], message: "cost totals and reservation counts must match the per-call ledger" });
+  }
+  if (hasUnresolvedUsage && (value.batchStatus !== "stopped" || value.stopReason === null)) {
+    context.addIssue({ code: "custom", path: ["batchStatus"], message: "unknown or out-of-bound usage requires a stopped batch" });
+  }
+});
+export const evaluationLedgerSchema = z.discriminatedUnion("version", [legacyLedgerSchema, meteredLedgerSchema]);
 export type EvaluationLedger = z.infer<typeof evaluationLedgerSchema>;
+type MeteredEvaluationLedger = z.infer<typeof meteredLedgerSchema>;
 
 export function createLedger(freeze: EvaluationFreeze, freezeSha256: string, at = new Date().toISOString()): EvaluationLedger {
-  return {
-    format: "newday-agent-evaluation-ledger",
-    version: 1,
+  const common = {
+    format: "newday-agent-evaluation-ledger" as const,
     freezeSha256,
     createdAt: at,
     updatedAt: at,
     maxOutboundCallsTotal: freeze.scope.maxOutboundCallsTotal,
     reservedOutboundCalls: 0,
-    reservedCostUpperBound: freeze.scope.costControl.mode === "known_upper_bound" ? 0 : null,
-    currency: freeze.scope.costControl.mode === "known_upper_bound" ? freeze.scope.costControl.currency : null,
-    batchStatus: "active",
+    reservedCostUpperBound: freeze.scope.costControl.mode !== "unknown" ? 0 : null,
+    currency: freeze.scope.costControl.mode !== "unknown" ? freeze.scope.costControl.currency : null,
+    batchStatus: "active" as const,
     stopReason: null,
     trials: {},
   };
+  return freeze.scope.costControl.mode === "metered_upper_bound"
+    ? { ...common, version: 2, currency: "CNY", reservedCostUpperBound: 0, reservedCostUpperBoundMicros: 0 }
+    : { ...common, version: 1 };
 }
 
 export function beginTrial(ledger: EvaluationLedger, id: string, reportFile: string, at = new Date().toISOString()) {
   if (ledger.batchStatus !== "active") throw new EvaluationGuardError("BATCH_STOPPED", `evaluation batch is stopped: ${ledger.stopReason ?? "unknown reason"}`);
   if (ledger.trials[id]) throw new EvaluationGuardError("DUPLICATE_TRIAL", "trial ID already exists; completed and failed trials cannot be overwritten or rerun");
-  ledger.trials[id] = { status: "running", reportFile, reportSha256: null, callsReserved: 0, updatedAt: at };
+  const trial = { status: "running" as const, reportFile, reportSha256: null, callsReserved: 0, updatedAt: at };
+  if (ledger.version === 2) ledger.trials[id] = { ...trial, costReservations: {} };
+  else ledger.trials[id] = trial;
   ledger.updatedAt = at;
 }
 
@@ -590,6 +747,10 @@ export function resumeTrial(ledger: EvaluationLedger, id: string, at = new Date(
 }
 
 export function reserveOutboundCall(ledger: EvaluationLedger, freeze: EvaluationFreeze, id: string, at = new Date().toISOString()) {
+  if (ledger.batchStatus !== "active") return { allowed: false as const, reason: ledger.stopReason ?? "batch_stopped" };
+  if (ledger.version === 2 && freeze.scope.costControl.mode !== "metered_upper_bound") {
+    throw new EvaluationGuardError("COST_LEDGER_MODE_MISMATCH", "metered ledger requires a metered freeze");
+  }
   const trial = ledger.trials[id];
   if (!trial || trial.status !== "running") throw new EvaluationGuardError("TRIAL_NOT_RUNNING", "cannot reserve a call for a non-running trial");
   if (trial.callsReserved >= 3) return stopLedger(ledger, "trial_call_cap_reached", at);
@@ -599,11 +760,94 @@ export function reserveOutboundCall(ledger: EvaluationLedger, freeze: Evaluation
     if (next > freeze.scope.costControl.maxTotal) return stopLedger(ledger, "cost_control_reached", at);
     ledger.reservedCostUpperBound = next;
   }
+  if (freeze.scope.costControl.mode === "metered_upper_bound") {
+    assertMeteredLedger(ledger);
+    const control = freeze.scope.costControl;
+    if (Object.values(ledger.trials).some((entry) => Object.values(entry.costReservations).some((call) => call.status === "reserved"))) {
+      return stopLedger(ledger, "unsettled_cost_reservation", at);
+    }
+    const reservationMicros = exactMoneyMicros(control.maxPerOutboundCall);
+    const maxMicros = exactMoneyMicros(control.maxTotal);
+    if (reservationMicros === null || maxMicros === null) throw new EvaluationGuardError("INVALID_COST_CONTROL", "frozen cost amounts must be exact safe micro-currency values");
+    const next = BigInt(ledger.reservedCostUpperBoundMicros) + BigInt(reservationMicros);
+    if (next > BigInt(maxMicros)) return stopLedger(ledger, "cost_control_reached", at);
+    const sequence = trial.callsReserved + 1;
+    ledger.trials[id].costReservations[String(sequence)] = {
+      sequence,
+      reservation: ledger.reservedOutboundCalls + 1,
+      status: "reserved",
+      reservedUpperBoundMicros: reservationMicros,
+      costUpperBoundMicros: reservationMicros,
+      reservedAt: at,
+      settledAt: null,
+      usage: null,
+    };
+    ledger.reservedCostUpperBoundMicros = Number(next);
+    ledger.reservedCostUpperBound = Number(next) / MICROS_PER_UNIT;
+  }
   ledger.reservedOutboundCalls += 1;
   trial.callsReserved += 1;
   trial.updatedAt = at;
   ledger.updatedAt = at;
-  return { allowed: true as const, reservation: ledger.reservedOutboundCalls };
+  return {
+    allowed: true as const,
+    reservation: ledger.reservedOutboundCalls,
+    sequence: trial.callsReserved,
+    ...(ledger.version === 2 ? { costReservationMicros: ledger.trials[id].costReservations[String(trial.callsReserved)].reservedUpperBoundMicros } : {}),
+  };
+}
+
+function assertMeteredLedger(ledger: EvaluationLedger): asserts ledger is MeteredEvaluationLedger {
+  if (ledger.version !== 2) throw new EvaluationGuardError("COST_LEDGER_MODE_MISMATCH", "metered freeze requires a ledger with per-call cost reservations");
+  meteredLedgerSchema.parse(ledger);
+}
+
+// The caller must persist the raw response before settlement, then persist this
+// ledger before any further outbound call. A missing/invalid usage report never
+// releases the pre-call reservation and always stops the batch.
+export function settleOutboundCall(
+  ledger: EvaluationLedger,
+  freeze: EvaluationFreeze,
+  id: string,
+  sequence: number,
+  usage: unknown,
+  at = new Date().toISOString(),
+) {
+  if (freeze.scope.costControl.mode !== "metered_upper_bound") {
+    return { settled: false as const, reason: "unmetered_cost_control" };
+  }
+  assertMeteredLedger(ledger);
+  const trial = ledger.trials[id];
+  const entry = trial?.costReservations[String(sequence)];
+  if (!entry) throw new EvaluationGuardError("COST_RESERVATION_NOT_FOUND", "cannot settle a call without a persisted cost reservation");
+  if (entry.status !== "reserved") throw new EvaluationGuardError("DUPLICATE_COST_SETTLEMENT", "a call reservation can only be settled once");
+  const parsed = knownMeteredUsageSchema.safeParse(usage);
+  entry.settledAt = at;
+  trial.updatedAt = at;
+  ledger.updatedAt = at;
+  if (!parsed.success) {
+    entry.status = "usage_unknown";
+    stopLedger(ledger, "usage_unknown", at);
+    return { settled: false as const, reason: "usage_unknown" };
+  }
+  entry.usage = parsed.data;
+  const control = freeze.scope.costControl;
+  if (parsed.data.inputTokens > control.inputTokenUpperBound || parsed.data.outputTokens > freeze.provider.maxOutputTokens) {
+    entry.status = "usage_out_of_bounds";
+    stopLedger(ledger, "usage_out_of_bounds", at);
+    return { settled: false as const, reason: "usage_out_of_bounds" };
+  }
+  const costMicros = meteredUsageCostMicros(control, parsed.data.inputTokens, parsed.data.outputTokens);
+  if (costMicros === null || costMicros > entry.reservedUpperBoundMicros) {
+    entry.status = "usage_out_of_bounds";
+    stopLedger(ledger, "usage_out_of_bounds", at);
+    return { settled: false as const, reason: "usage_out_of_bounds" };
+  }
+  entry.status = "settled";
+  entry.costUpperBoundMicros = costMicros;
+  ledger.reservedCostUpperBoundMicros -= entry.reservedUpperBoundMicros - costMicros;
+  ledger.reservedCostUpperBound = ledger.reservedCostUpperBoundMicros / MICROS_PER_UNIT;
+  return { settled: true as const, costUpperBound: costMicros / MICROS_PER_UNIT, costUpperBoundMicros: costMicros };
 }
 
 function stopLedger(ledger: EvaluationLedger, reason: string, at: string) {

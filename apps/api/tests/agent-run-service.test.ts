@@ -165,10 +165,10 @@ test("a second clarification round fails within two model calls", async (t) => {
   assert.equal(model.calls.length, 2);
 });
 
-type SnapshotInvalidation = "agent-import-without-preferences" | "context" | "preferences" | "midnight";
+type SnapshotInvalidation = "task-dataset-replacement" | "context" | "preferences" | "midnight";
 async function invalidateSnapshot(h: Awaited<ReturnType<typeof setup>>, change: SnapshotInvalidation) {
-  if (change === "agent-import-without-preferences") {
-    // Agent import(false) retains context/preferences but changes dataset epoch.
+  if (change === "task-dataset-replacement") {
+    // Task replacement rotates the shared epoch independently of Agent generation.
     await h.store.rotateDatasetEpoch();
   } else if (change === "context") {
     h.snapshot.context.revision++;
@@ -186,7 +186,7 @@ async function invalidateSnapshot(h: Awaited<ReturnType<typeof setup>>, change: 
   }
 }
 
-for (const change of ["agent-import-without-preferences", "context", "preferences", "midnight"] as const) {
+for (const change of ["task-dataset-replacement", "context", "preferences", "midnight"] as const) {
   for (const recovery of ["answer-then-create", "direct-create"] as const) {
     test(`stale clarification after ${change} is retired by ${recovery} without blocking a new run`, async (t) => {
       const model = new ScriptedPlanningModel([clarificationOutputFixture, readyOutputFixture]);

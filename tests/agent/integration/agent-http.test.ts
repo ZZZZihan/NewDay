@@ -264,11 +264,14 @@ test("agent backup import keeps failed runs and events as readonly source histor
   const target = await harness(context);
   await target.addTask("a", "当前数据集中的同名 ID");
   const before = await target.businessState();
-  await target.json("POST", "/api/agent/backup", { source: JSON.stringify(archive), importPreferences: false });
+  const importedResult = await target.json("POST", "/api/agent/backup", { source: JSON.stringify(archive), importPreferences: false });
   const after = await target.businessState();
   assert.deepEqual(after.tasks, before.tasks);
   assert.deepEqual(after.focus, before.focus);
-  assert.notEqual(after.version.datasetEpoch, before.version.datasetEpoch);
+  assert.deepEqual(after.version, before.version, "Agent history import preserves task and Notion identity");
+  assert.ok(importedResult && typeof importedResult === "object" && "datasetEpoch" in importedResult && "agentGeneration" in importedResult);
+  assert.equal(importedResult.datasetEpoch, before.version.datasetEpoch);
+  assert.equal(importedResult.agentGeneration, 1);
   const history = planningHistoryResponseSchema.parse(await target.json("GET", `/api/agent/history?date=${testDate}`));
   assert(history.entries.some((entry) => entry.readOnly && entry.datasetEpoch === archive.sourceDatasetEpoch && entry.receipt?.operationId === receipt.operationId));
   const oldOperation = operationResultSchema.parse(await target.json("GET", `/api/agent/operations/${receipt.operationId}`));

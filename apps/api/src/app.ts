@@ -70,7 +70,7 @@ export function createApp(options: AppOptions = {}) {
     : null;
   const notionSync = notionVault
     ? new NotionSyncService(store, new NotionOutboxDispatcher(store,
-      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault, { baseUrl: notionOptions?.apiBaseUrl }),
+      options.notionTaskTransport ?? new NotionSdkTaskTransport(notionVault, { baseUrl: notionOptions?.apiBaseUrl }, store),
       () => new Date((options.clock ?? Date.now)()).toISOString()))
     : null;
   const planner = new PlannerService(store, options.clock);

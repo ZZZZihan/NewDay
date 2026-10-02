@@ -11,6 +11,7 @@ import { createPlannerBackup, parsePlannerBackup } from "@newday/core/applicatio
 import { getDayPlan } from "@newday/core/application/day-plan";
 import { executePlannerCommands, type PlannerCommand } from "@newday/core/application/planner-command";
 import type { NotionConnection } from "@newday/core/contracts/notion-sync";
+import type { Task } from "@newday/core/domain/planner-model";
 
 import { NotionReadFailure, NotionSdkReadGateway, type AreaRow, type NotionReadGateway, type ProjectRow,
   type ReadRow, type ReadTable, type TaskRow } from "../src/services/notion-read-gateway.js";
@@ -89,6 +90,170 @@ function linkedTransport(initial: NotionTaskPage) {
     },
   };
   return { transport, calls, page: () => structuredClone(page) };
+}
+
+type EarlierReadTable = Exclude<ReadTable, "tasks">;
+type PreTaskRaceContext = {
+  store: SQLitePlannerStore;
+  planner: PlannerService;
+  taskId: string;
+  advance: () => string;
+  dispatchPending: () => Promise<string>;
+};
+type ConfirmedRaceState = {
+  task: Task;
+  focus: Awaited<ReturnType<SQLitePlannerStore["listFocusRecordsForTask"]>>;
+  events: Awaited<ReturnType<SQLitePlannerStore["listPlannerEvents"]>>;
+  mapping: NonNullable<Awaited<ReturnType<SQLitePlannerStore["getNotionTaskMapping"]>>>;
+};
+
+async function exerciseConfirmedWriteBeforeTasks(options: {
+  earlierTable: EarlierReadTable;
+  prepare?: (context: PreTaskRaceContext) => Promise<void>;
+  mutate: (context: PreTaskRaceContext) => Promise<void>;
+  verifyConfirmed: (state: ConfirmedRaceState) => void;
+}) {
+  const directory = await mkdtemp(join(tmpdir(), `newday-notion-${options.earlierTable}-pre-task-race-`));
+  const credentials = vault();
+  const store = new SQLitePlannerStore(join(directory, "planner.sqlite"));
+  const gateway = new FakeReadGateway();
+  let releaseEarlier: (() => void) | undefined;
+  let releaseTasks: (() => void) | undefined;
+  let scanSettled: Promise<{ status: "fulfilled" } | { status: "rejected"; error: unknown }> | undefined;
+  let now = Date.parse(at);
+  try {
+    await store.putNotionConnection(connection());
+    await store.putAgentRecord(AGENT_NAMESPACES.preferences, "current", { timeZone: "Asia/Shanghai" });
+    const read = new NotionReadService(store, credentials, gateway, () => now);
+    await read.scan(workspaceId);
+    const [initialMapping] = await store.listNotionTaskMappings();
+    assert.ok(initialMapping?.remotePageId && initialMapping.baseline);
+    const planner = new PlannerService(store, () => now);
+    const remote = linkedTransport({ workspaceId, dataSourceId: initialMapping.dataSourceId,
+      remotePageId: initialMapping.remotePageId, clientKey: null,
+      fields: initialMapping.baseline, inTrash: false });
+    const dispatcher = new NotionOutboxDispatcher(store, remote.transport, () => new Date(now).toISOString());
+    const advance = () => new Date(now += 1_000).toISOString();
+    const dispatchPending = async () => {
+      const pending = (await store.listNotionOutboxOperations()).filter((item) => item.status === "pending").at(-1);
+      assert.ok(pending);
+      assert.equal(await dispatcher.dispatch(pending.operationId), "confirmed");
+      assert.equal((await store.getNotionOutboxOperation(pending.operationId))?.status, "confirmed");
+      return pending.operationId;
+    };
+    const context: PreTaskRaceContext = {
+      store, planner, taskId: initialMapping.localTaskId, advance, dispatchPending,
+    };
+
+    await options.prepare?.(context);
+    const currentRemote = remote.page().fields;
+    gateway.rows.tasks = [{ ...task(currentRemote.date, currentRemote.title), completed: currentRemote.completed }];
+    const previousWatermark = (await read.status(workspaceId)).sources
+      .find((source) => source.table === "tasks")?.watermark;
+    assert.ok(previousWatermark?.lastSuccessAt && previousWatermark.completedThrough);
+
+    let markEarlierEntered!: () => void;
+    const earlierEntered = new Promise<void>((resolve) => { markEarlierEntered = resolve; });
+    const earlierReleased = new Promise<void>((resolve) => { releaseEarlier = resolve; });
+    let markTasksEntered!: () => void;
+    const tasksEntered = new Promise<void>((resolve) => { markTasksEntered = resolve; });
+    const tasksReleased = new Promise<void>((resolve) => { releaseTasks = resolve; });
+    const originalScan = gateway.scan.bind(gateway);
+    let holdEarlier = true;
+    let holdTasks = true;
+    let tasksStarted = false;
+    gateway.scan = async (token, currentConnection, table) => {
+      if (table === options.earlierTable && holdEarlier) {
+        holdEarlier = false;
+        markEarlierEntered();
+        await earlierReleased;
+        return originalScan(token, currentConnection, table);
+      }
+      if (table === "tasks" && holdTasks) {
+        holdTasks = false;
+        tasksStarted = true;
+        const oldRows = structuredClone(gateway.rows.tasks);
+        markTasksEntered();
+        await tasksReleased;
+        return oldRows;
+      }
+      return originalScan(token, currentConnection, table);
+    };
+
+    advance();
+    const inFlight = read.scan(workspaceId);
+    scanSettled = inFlight.then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    await earlierEntered;
+    const eventCountBeforeMutation = (await store.listPlannerEvents()).length;
+    await options.mutate(context);
+    assert.ok((await store.listNotionOutboxOperations()).some((item) => item.status === "pending"));
+
+    assert.ok(releaseEarlier);
+    releaseEarlier();
+    releaseEarlier = undefined;
+    const progress = await Promise.race([
+      tasksEntered.then(() => "tasks-started" as const),
+      scanSettled.then(() => "scan-settled" as const),
+    ]);
+    const operationId = await dispatchPending();
+    const expectedTask = await store.getTask(initialMapping.localTaskId);
+    const expectedMapping = await store.getNotionTaskMapping(initialMapping.localTaskId);
+    assert.ok(expectedTask && expectedMapping);
+    const expectedState: ConfirmedRaceState = {
+      task: expectedTask,
+      focus: await store.listFocusRecordsForTask(initialMapping.localTaskId),
+      events: await store.listPlannerEvents(),
+      mapping: expectedMapping,
+    };
+    assert.ok(expectedState.events.length > eventCountBeforeMutation,
+      "the local mutation must record its planner event before the stale read is released");
+    options.verifyConfirmed(expectedState);
+
+    if (progress === "tasks-started") {
+      assert.ok(releaseTasks);
+      releaseTasks();
+      releaseTasks = undefined;
+    }
+    const outcome = await scanSettled;
+    assert.equal(outcome.status, "rejected",
+      "the scan must reject at the Tasks preflight instead of accepting an old Tasks response");
+    if (outcome.status === "rejected") assert.match(String(outcome.error), /待发送或未知操作/);
+    assert.equal(tasksStarted, false, "a pending local write must prevent the Tasks request from being sent");
+    assert.deepEqual(await store.getTask(initialMapping.localTaskId), expectedState.task);
+    assert.deepEqual(await store.listFocusRecordsForTask(initialMapping.localTaskId), expectedState.focus);
+    assert.deepEqual(await store.listPlannerEvents(), expectedState.events);
+    assert.deepEqual(await store.getNotionTaskMapping(initialMapping.localTaskId), expectedState.mapping);
+    assert.equal((await store.getNotionOutboxOperation(operationId))?.status, "confirmed");
+    const rejectedWatermark = (await read.status(workspaceId)).sources
+      .find((source) => source.table === "tasks")?.watermark;
+    assert.equal(rejectedWatermark?.lastSuccessAt, previousWatermark.lastSuccessAt);
+    assert.equal(rejectedWatermark?.completedThrough, previousWatermark.completedThrough);
+
+    holdTasks = false;
+    const confirmedRemote = remote.page().fields;
+    gateway.rows.tasks = [{ ...task(confirmedRemote.date, confirmedRemote.title), completed: confirmedRemote.completed }];
+    advance();
+    await read.scan(workspaceId);
+    assert.deepEqual(await store.getTask(initialMapping.localTaskId), expectedState.task);
+    assert.deepEqual(await store.listFocusRecordsForTask(initialMapping.localTaskId), expectedState.focus);
+    assert.deepEqual(await store.listPlannerEvents(), expectedState.events);
+    assert.equal((await store.getNotionTaskMapping(initialMapping.localTaskId))?.baseline?.title,
+      expectedState.mapping.baseline?.title);
+    const recoveredWatermark = (await read.status(workspaceId)).sources
+      .find((source) => source.table === "tasks")?.watermark;
+    assert.notEqual(recoveredWatermark?.lastSuccessAt, previousWatermark.lastSuccessAt);
+    assert.equal(recoveredWatermark?.completedThrough, recoveredWatermark?.lastAttemptAt);
+  } finally {
+    releaseEarlier?.();
+    releaseTasks?.();
+    await scanSettled;
+    store.close();
+    credentials.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 test("full read keeps a stable mapping, refreshes ownership, and clears a date without fabricating today", async () => {
@@ -217,6 +382,85 @@ test("a scan begun before a local linked edit cannot overwrite that pending writ
     assert.equal((await read.status(workspaceId)).sources.find((source) => source.table === "tasks")?.watermark?.lastSuccessAt, previousSuccess);
   } finally { store.close(); credentials.close(); }
 });
+
+for (const earlierTable of ["areas", "projects", "rules"] as const) {
+  test(`a local title edit during the ${earlierTable} response prevents an old Tasks request after confirmation`, async () => {
+    await exerciseConfirmedWriteBeforeTasks({
+      earlierTable,
+      async mutate({ store, planner, taskId, advance }) {
+        await planner.commands([{ type: "updateTaskDetails", input: {
+          taskId, title: `本机在 ${earlierTable} 期间确认的标题`, now: advance(),
+        } }], `pre-task-${earlierTable}-title`, { expectedTask: (await store.getTask(taskId))! });
+      },
+      verifyConfirmed({ task: currentTask, mapping, events }) {
+        assert.equal(currentTask.title, `本机在 ${earlierTable} 期间确认的标题`);
+        assert.equal(mapping.baseline?.title, currentTask.title);
+        assert.ok(events.some((event) => event.taskId === currentTask.id && event.kind === "updated"));
+      },
+    });
+  });
+}
+
+const preTaskLifecycleScenarios = [
+  { earlierTable: "areas", scenario: "complete", eventKind: "completed" },
+  { earlierTable: "projects", scenario: "reopen", eventKind: "reopened" },
+  { earlierTable: "rules", scenario: "reschedule", eventKind: "rescheduled" },
+] as const;
+
+for (const { earlierTable, scenario, eventKind } of preTaskLifecycleScenarios) {
+  test(`a ${scenario} during the ${earlierTable} response survives confirmation and a rejected old Tasks read`, async () => {
+    let mutationAt = "";
+    await exerciseConfirmedWriteBeforeTasks({
+      earlierTable,
+      async prepare({ store, planner, taskId, advance, dispatchPending }) {
+        if (scenario === "reopen") {
+          await planner.commands([{ type: "completeTask", input: {
+            taskId, now: advance(), completedOn: "2026-09-21",
+          } }], "pre-task-reopen-setup");
+          await dispatchPending();
+          return;
+        }
+        await planner.commands([{ type: "setTodayFocus", input: {
+          taskId, date: "2026-09-21", now: advance(),
+        } }], `pre-task-${scenario}-focus`, { expectedTask: (await store.getTask(taskId))! });
+        assert.equal((await store.listFocusRecordsForTask(taskId)).length, 1);
+      },
+      async mutate({ store, planner, taskId, advance }) {
+        mutationAt = advance();
+        const command: PlannerCommand = scenario === "complete"
+          ? { type: "completeTask", input: { taskId, now: mutationAt, completedOn: "2026-09-21" } }
+          : scenario === "reopen"
+            ? { type: "reopenTask", input: { taskId, now: mutationAt } }
+            : { type: "rescheduleTask", input: {
+              taskId, startDate: "2026-09-24", endDate: "2026-09-25", now: mutationAt,
+            } };
+        await planner.commands([command], `pre-task-${scenario}-mutation`, {
+          expectedTask: (await store.getTask(taskId))!,
+        });
+      },
+      verifyConfirmed({ task: currentTask, focus, events, mapping }) {
+        assert.equal(focus.length, 0);
+        assert.ok(events.some((event) => event.taskId === currentTask.id && event.kind === eventKind));
+        if (scenario === "complete") {
+          assert.equal(currentTask.status, "completed");
+          assert.equal(currentTask.completedAt, mutationAt);
+          assert.equal(currentTask.completedOn, "2026-09-21");
+        } else if (scenario === "reopen") {
+          assert.equal(currentTask.status, "open");
+          assert.equal(currentTask.completedAt, null);
+          assert.equal(currentTask.completedOn, null);
+        } else {
+          assert.equal(currentTask.startDate, "2026-09-24");
+          assert.equal(currentTask.endDate, "2026-09-25");
+        }
+        assert.equal(mapping.baseline?.completed, currentTask.status === "completed");
+        assert.deepEqual(mapping.baseline?.date,
+          currentTask.startDate === null || currentTask.endDate === null
+            ? null : [currentTask.startDate, currentTask.endDate]);
+      },
+    });
+  });
+}
 
 test("a cloned stale task scan cannot overwrite a local edit after the real dispatcher confirms it", async () => {
   const directory = await mkdtemp(join(tmpdir(), "newday-notion-confirmed-read-race-"));

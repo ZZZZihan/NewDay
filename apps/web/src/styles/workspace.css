@@ -172,13 +172,13 @@
   color: var(--muted);
 }
 
-.date-picker-button.button {
+.date-picker-button {
   min-height: 2rem;
   padding: 0 0.1rem;
   font-size: 0.76rem;
 }
 
-.date-picker-button.button svg {
+.date-picker-button svg {
   width: 0.85rem;
 }
 

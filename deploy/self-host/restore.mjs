@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
 import { chmod, copyFile, mkdtemp, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { absolutePath, directory, regularFile, sha256, syncDirectory, syncFile, verifySnapshot } from "./sqlite-utils.mjs";
+import { assertSystemdOffline } from "./systemd-offline.mjs";
 
 function options(argv) {
   if (argv.length !== 5 || argv[0] !== "--database" || argv[2] !== "--backup" || argv[4] !== "--offline-confirmed") {
@@ -13,11 +13,7 @@ function options(argv) {
 
 function checkSystemd() {
   if (process.platform !== "linux") return;
-  for (const unit of ["newday-api.service", "newday-web.service", "newday-backup.service"]) {
-    const result = spawnSync("systemctl", ["is-active", "--quiet", unit], { stdio: "ignore" });
-    if (result.error) throw new Error(`Cannot check ${unit}: ${result.error.message}`);
-    if (result.status === 0) throw new Error(`${unit} is active; stop the app services and wait for backup work before restore`);
-  }
+  assertSystemdOffline();
 }
 
 async function existingRegularFile(path) {

@@ -1,0 +1,37 @@
+[Unit]
+Description=NewDay private API
+After=network.target
+RequiresMountsFor=/var/lib/newday
+
+[Service]
+Type=simple
+User=newday-api
+Group=newday-api
+WorkingDirectory=/opt/newday/current/apps/api
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/newday/api.env
+ExecStart=/usr/bin/node /opt/newday/current/apps/api/dist/server.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+StateDirectory=newday
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/newday
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

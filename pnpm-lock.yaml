@@ -19,7 +19,7 @@ importers:
         version: 4.3.3
       '@testing-library/jest-dom':
         specifier: ^7.0.1
-        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)))
+        version: 7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13)))
       '@testing-library/react':
         specifier: ^16.3.3
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -70,7 +70,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^4.1.11
-        version: 4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13))
+        version: 4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13))
       zod:
         specifier: ^4.5.4
         version: 4.5.4
@@ -123,6 +123,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@fontsource-variable/noto-serif-sc':
+        specifier: 5.3.0
+        version: 5.3.0
       '@heroui/react':
         specifier: ^3.2.4
         version: 3.2.4(@react-aria/i18n@3.13.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@react-aria/ssr@3.10.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@react-aria/utils@3.34.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@react-spectrum/provider@3.11.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-aria-components@1.20.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-aria@3.51.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(tailwindcss@4.3.3)
@@ -132,6 +135,9 @@ importers:
       date-fns:
         specifier: ^4.4.0
         version: 4.4.0
+      geist:
+        specifier: 1.7.2
+        version: 1.7.2(next@16.3.3(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))
       lucide-react:
         specifier: ^1.38.0
         version: 1.38.0(react@19.2.8)
@@ -930,6 +936,9 @@ packages:
 
   '@fastify/proxy-addr@5.1.0':
     resolution: {integrity: sha512-INS+6gh91cLUjB+PVHfu1UqcB76Sqtpyp7bnL+FYojhjygvOPA9ctiD/JDKsyD9Xgu4hUhCSJBPig/w7duNajw==}
+
+  '@fontsource-variable/noto-serif-sc@5.3.0':
+    resolution: {integrity: sha512-7LcN2NEf4HDjoSkGWc79WqDDyMK8JvSPdA/gsHjJpZ8l9A9mcK/GQTazp3klmkBwJooy0eqeNvlmaZFXPupHrA==}
 
   '@formatjs/ecma402-abstract@2.3.6':
     resolution: {integrity: sha512-HJnTFeRM2kVFVr5gr5kH1XP6K0JcJtE7Lzvtr3FS/so5f1kpsqqqxy5JF+FRaO6H2qmcMfAUIox7AJteieRtVw==}
@@ -2693,6 +2702,11 @@ packages:
   functions-have-names@1.2.3:
     resolution: {integrity: sha512-xckBUXyTIqT97tq2x2AMb+g163b5JFysYk0x4qxNFwbfQkmNZoiRHb6sPzI9/QV33WeuvVYBUIiD4NzNIyqaRQ==}
 
+  geist@1.7.2:
+    resolution: {integrity: sha512-Gu5lDFa3pLRyoBlBPf0QIFHVdWAnpco7fS1bJm41jyLPFoguBgiubseUN2oLXMgqZ7uxAxDoXcHMhCY/fOTTgg==}
+    peerDependencies:
+      next: '>=13.2.0'
+
   generator-function@2.0.1:
     resolution: {integrity: sha512-SFdFmIJi+ybC0vjlHN0ZGVGHc3lgE0DxPAT0djjVg+kjOnSqclqmj0KQ7ykTOLP6YxoqOvuAODGdcHJn+43q3g==}
     engines: {node: '>= 0.4'}
@@ -4330,7 +4344,8 @@ snapshots:
   '@cloudflare/workerd-windows-64@1.20260918.1':
     optional: true
 
-  '@cloudflare/workers-types@5.20260920.1': {}
+  '@cloudflare/workers-types@5.20260920.1':
+    optional: true
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -4690,6 +4705,8 @@ snapshots:
     dependencies:
       '@fastify/forwarded': 3.0.2
       ipaddr.js: 2.5.0
+
+  '@fontsource-variable/noto-serif-sc@5.3.0': {}
 
   '@formatjs/ecma402-abstract@2.3.6':
     dependencies:
@@ -5355,7 +5372,7 @@ snapshots:
       picocolors: 1.1.1
       pretty-format: 27.5.1
 
-  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)))':
+  '@testing-library/jest-dom@7.0.1(@testing-library/dom@10.4.1)(vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13)))':
     dependencies:
       '@adobe/css-tools': 4.5.0
       '@testing-library/dom': 10.4.1
@@ -5365,7 +5382,7 @@ snapshots:
       picocolors: 1.1.1
       redent: 3.0.0
     optionalDependencies:
-      vitest: 4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13))
+      vitest: 4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13))
 
   '@testing-library/react@16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
     dependencies:
@@ -5582,6 +5599,14 @@ snapshots:
       '@vitest/utils': 4.1.11
       chai: 6.2.2
       tinyrainbow: 3.1.1
+
+  '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13))':
+    dependencies:
+      '@vitest/spy': 4.1.11
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13)
 
   '@vitest/mocker@4.1.11(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13))':
     dependencies:
@@ -6486,6 +6511,10 @@ snapshots:
       is-document.all: 1.0.0
 
   functions-have-names@1.2.3: {}
+
+  geist@1.7.2(next@16.3.3(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)):
+    dependencies:
+      next: 16.3.3(@babel/core@7.29.7)(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
 
   generator-function@2.0.1: {}
 
@@ -7845,6 +7874,20 @@ snapshots:
     dependencies:
       react: 19.2.8
 
+  vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13):
+    dependencies:
+      lightningcss: 1.33.0
+      picomatch: 4.0.7
+      postcss: 8.5.26
+      rolldown: 1.2.6
+      tinyglobby: 0.2.17
+    optionalDependencies:
+      '@types/node': 24.13.3
+      esbuild: 0.27.7
+      fsevents: 2.3.3
+      jiti: 2.7.0
+      tsx: 4.23.13
+
   vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13):
     dependencies:
       lightningcss: 1.33.0
@@ -7858,6 +7901,34 @@ snapshots:
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.23.13
+
+  vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13)):
+    dependencies:
+      '@vitest/expect': 4.1.11
+      '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13))
+      '@vitest/pretty-format': 4.1.11
+      '@vitest/runner': 4.1.11
+      '@vitest/snapshot': 4.1.11
+      '@vitest/spy': 4.1.11
+      '@vitest/utils': 4.1.11
+      es-module-lexer: 2.3.2
+      expect-type: 1.4.0
+      magic-string: 0.30.21
+      obug: 2.1.4
+      pathe: 2.0.3
+      picomatch: 4.0.7
+      std-env: 4.2.0
+      tinybench: 2.9.0
+      tinyexec: 1.3.0
+      tinyglobby: 0.2.17
+      tinyrainbow: 3.1.1
+      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.13)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@types/node': 24.13.3
+      jsdom: 30.0.1
+    transitivePeerDependencies:
+      - msw
 
   vitest@4.1.11(@types/node@24.13.3)(jsdom@30.0.1)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)):
     dependencies:

@@ -75,6 +75,8 @@ pnpm dev:web --hostname 127.0.0.1 --port 3000
 
 ## 构建与启动
 
+单机 Linux 自托管的 systemd、nginx、私有 SQLite 与备份/恢复模板见 [自托管包](./deploy/self-host/README.md)。模板本身不会安装或部署服务。
+
 ```bash
 pnpm build
 pnpm start

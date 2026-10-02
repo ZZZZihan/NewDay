@@ -1,0 +1,36 @@
+[Unit]
+Description=NewDay private Next.js web service
+After=network.target newday-api.service
+Wants=newday-api.service
+
+[Service]
+Type=simple
+User=newday-web
+Group=newday-web
+WorkingDirectory=/opt/newday/current/apps/web
+Environment=NODE_ENV=production
+EnvironmentFile=/etc/newday/web.env
+ExecStart=/usr/bin/node /opt/newday/current/apps/web/node_modules/next/dist/bin/next start --hostname ${NEWDAY_WEB_HOST} --port ${NEWDAY_WEB_PORT}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillMode=control-group
+UMask=0077
+# Next may write its runtime image/cache data here; no other release path is writable.
+ReadWritePaths=/opt/newday/current/apps/web/.next/cache
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

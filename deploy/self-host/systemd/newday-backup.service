@@ -1,0 +1,27 @@
+[Unit]
+Description=Verified online backup of the NewDay SQLite database
+RequiresMountsFor=/var/lib/newday /var/backups/newday
+
+[Service]
+Type=oneshot
+User=newday-api
+Group=newday-api
+WorkingDirectory=/opt/newday/current
+ExecStart=/usr/bin/node /opt/newday/current/deploy/self-host/backup.mjs --database /var/lib/newday/newday.sqlite --output-dir /var/backups/newday
+TimeoutStartSec=5min
+UMask=0077
+# SQLite may need to update WAL shared-memory while taking an online snapshot.
+ReadWritePaths=/var/lib/newday /var/backups/newday
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native

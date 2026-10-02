@@ -24,6 +24,9 @@ describe("frozen corpus to production snapshot preflight", () => {
     expect(prepared.find(({ id }) => id === "H-P08")?.adaptations).toContain(
       "priorHistory[0]: rejected on 2026-09-07 -> recorded user feedback at synthetic 2026-09-07T08:00:00.000Z; time of day was not supplied",
     );
+    expect(prepared.find(({ id }) => id === "H-P08")?.snapshot.facts.filter(({ source }) => source === "history").map(({ text }) => text)).toEqual([
+      "2026-09-07T08:00:00.000Z 用户明确反馈：rejected。用户未填写原因，原因未知。",
+    ]);
     expect(prepared.find(({ id }) => id === "H-P07")?.adaptations).toContain(
       "priorHistory[0]: preference_deleted -> production add/delete setup at synthetic sampledAt 2026-09-08T08:00:00.000Z; deletion time was not supplied and removed text is excluded from the snapshot",
     );

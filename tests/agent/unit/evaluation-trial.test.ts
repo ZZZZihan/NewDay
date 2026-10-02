@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { ModelUsage, PlanningSnapshot } from "@newday/core/contracts/agent-planning";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelGeneration, PlanningModel } from "../../../apps/api/src/agent/planning-model";
-import { OpenAICompatiblePlanningModel } from "../../../apps/api/src/agent/openai-compatible-model";
+import { OpenAICompatiblePlanningModel, PlanningProviderAuditError } from "../../../apps/api/src/agent/openai-compatible-model";
 import { PLANNING_SYSTEM_PROMPT, planningProviderJsonSchema } from "../../../apps/api/src/agent/planning-prompt";
 import { snapshotFixture } from "../fixtures/contracts";
 import heldout from "../fixtures/heldout-v2.json";
@@ -137,6 +137,41 @@ async function run(model: PlanningModel, options: { callsAlreadyUsed?: number; s
 }
 
 describe("guarded real-provider evaluation trial", () => {
+  it.each([
+    new EvaluationGuardError("usage_unknown", "stop before another provider call"),
+    new Error("simulated evidence disk failure"),
+  ])("does not reclassify or repeat a failed post-call persistence/settlement: %s", async (failure) => {
+    const calls = vi.fn();
+    const afterCall = vi.fn(async () => { throw failure; });
+    const active: TrialCallRecord[] = [];
+    const outcome = runModelPhase({
+      model: scriptedModel([{ output: noAction, modelId: "frozen-model", usage }], calls),
+      expectedModelId: "frozen-model", snapshot: snapshotFixture as PlanningSnapshot,
+      answers: [], clarificationRound: 0, callsAlreadyUsed: 0, timeoutMs: 1000,
+      beforeCall: async (call) => { active.push(call); }, afterCall,
+    });
+    await expect(outcome).rejects.toBeInstanceOf(failure instanceof EvaluationGuardError ? EvaluationGuardError : PlanningProviderAuditError);
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(afterCall).toHaveBeenCalledTimes(1);
+    expect(active[0]).toMatchObject({ outcome: "validated", hostError: { code: failure instanceof EvaluationGuardError ? "usage_unknown" : "PROVIDER_AUDIT_FAILURE" } });
+    expect(active[0].endedAt).not.toBeNull();
+  });
+
+  it("retains a terminal call error and timing when provider auditing fails", async () => {
+    const active: TrialCallRecord[] = [];
+    const afterCall = vi.fn();
+    await expect(runModelPhase({
+      model: scriptedModel([new PlanningProviderAuditError()]),
+      expectedModelId: "frozen-model", snapshot: snapshotFixture as PlanningSnapshot,
+      answers: [], clarificationRound: 0, callsAlreadyUsed: 0, timeoutMs: 1000,
+      beforeCall: async (call) => { active.push(call); }, afterCall,
+    })).rejects.toBeInstanceOf(PlanningProviderAuditError);
+    expect(afterCall).not.toHaveBeenCalled();
+    expect(active[0]).toMatchObject({ outcome: "generation_error", hostError: { code: "PROVIDER_AUDIT_FAILURE" } });
+    expect(active[0].endedAt).not.toBeNull();
+    expect(active[0].elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("requires an approved, complete freeze and exact candidate state", () => {
     expect(evaluationFreezeSchema.safeParse(deepMerge(freeze() as unknown as Record<string, unknown>, {
       version: 1,

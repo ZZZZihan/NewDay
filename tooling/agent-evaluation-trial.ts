@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, openSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -27,6 +27,7 @@ import {
   resumeTrial,
   runModelPhase,
   secureJson,
+  settleOutboundCall,
   setTrialReportHash,
   sha256,
   stopEvaluation,
@@ -65,11 +66,31 @@ const { values } = parseArgs({
   strict: true,
 });
 
+const persistedReportSchema = z.object({
+  format: z.literal("newday-agent-evaluation-trial"),
+  version: z.literal(1),
+  trialId: z.string(),
+  freezeSha256: z.string(),
+  snapshotSha256: z.string(),
+  status: z.literal("operator_action_required"),
+  firstRoundOutput: z.unknown(),
+  calls: z.array(z.object({
+    sequence: z.number().int().min(1).max(3),
+    endedAt: z.string().nullable(),
+    outcome: z.enum(["reserved", "generation_returned", "validated", "generation_error", "validation_error", "model_drift"]),
+  }).passthrough()),
+  phases: z.array(z.object({ kind: z.enum(["initial", "clarification_resume"]), status: z.string() }).passthrough()).min(1),
+}).passthrough();
+
 let releaseLock: (() => Promise<void>) | undefined;
 let secret = "";
 let activeLedger: EvaluationLedger | undefined;
 let activeLedgerPath: string | undefined;
 let activeTrialId: string | undefined;
+let activeReport: TrialReport | undefined;
+let activeReportPath: string | undefined;
+let activeCall: TrialCallRecord | undefined;
+let activeFreeze: EvaluationFreeze | undefined;
 let retainEvidenceLock = false;
 try {
   const freezePath = required(values.freeze, "--freeze");
@@ -79,6 +100,7 @@ try {
   const reviewedLedger = required(values["reviewed-ledger-sha256"], "--reviewed-ledger-sha256");
   const repetition = Number(required(values.repetition, "--repetition"));
   const { freeze, freezeSha256 } = await readApprovedFreeze(freezePath, acknowledgedFreeze);
+  activeFreeze = freeze;
   if (resolve(evidenceArgument) !== resolve(freeze.evidenceDirectory)) {
     throw new EvaluationGuardError("EVIDENCE_PATH_MISMATCH", "--evidence must equal the absolute evidenceDirectory in the approved freeze");
   }
@@ -149,6 +171,8 @@ try {
     await linkReportHashAndWriteLedger(reportPath, ledgerState.path, ledger, id, [secret]);
   }
 
+  activeReport = report;
+  activeReportPath = reportPath;
   const forced = clarificationRound === 0 ? initialHostOutput(scenario.snapshot) : undefined;
   if (forced) {
     report.firstRoundOutput = forced;
@@ -162,6 +186,7 @@ try {
     };
     updateTrialStatus(ledger, id, "completed");
   } else {
+    let auditCall: TrialCallRecord | undefined;
     const model = new OpenAICompatiblePlanningModel({
       baseUrl: config.agent.baseUrl,
       apiKey: secret,
@@ -170,6 +195,22 @@ try {
       allowHttpOrigin: config.agent.allowHttpOrigin,
       reasoningEffort: config.agent.reasoningEffort,
       maxOutputTokens: config.agent.maxOutputTokens,
+      audit: async (event) => {
+        if (!auditCall) throw new EvaluationGuardError("UNRESERVED_PROVIDER_REQUEST", "provider audit has no reserved call");
+        // Persist a separate immutable event before adapter parsing. Synchronous
+        // writes also retain partial output if a timeout wins the model race.
+        const path = join(evidenceDirectory, "trials", `${id.replaceAll(":", "_")}.call-${auditCall.sequence}.${event.kind}.json`);
+        const source = secureJson({ trialId: id, sequence: auditCall.sequence, recordedAt: new Date().toISOString(), event }, [secret]);
+        const fd = openSync(path, "wx", 0o600);
+        try { writeFileSync(fd, source); fsyncSync(fd); }
+        finally { closeSync(fd); }
+        (auditCall.providerAudit ??= []).push(event);
+        if (event.kind === "response") auditCall.providerModelId = event.providerModelId;
+        if (event.kind === "response" && event.providerModelId && event.providerModelId !== freeze.provider.modelId) {
+          stopEvaluation(ledger, "provider_or_model_drift");
+          throw new EvaluationGuardError("PROVIDER_MODEL_DRIFT", "provider audit model differs from frozen model");
+        }
+      },
     });
     const phase = await runModelPhase({
       model,
@@ -184,20 +225,37 @@ try {
         const reserved = reserveOutboundCall(ledger, freeze, id);
         if (!reserved.allowed) {
           report.status = "stopped";
+          updateTrialStatus(ledger, id, "stopped");
           report.runnerError = { name: "EvaluationGuardError", code: reserved.reason, message: "approved evaluation limit reached before another provider request" };
           await writeLedger(ledgerState.path, ledger, [secret]);
           await persistReportAndLedger(reportPath, report, ledgerState.path, ledger, id, [secret]);
           throw new EvaluationGuardError(reserved.reason, "approved evaluation limit reached before another provider request");
         }
+        auditCall = call;
+        activeCall = call;
         upsertCall(report, call);
         report.updatedAt = new Date().toISOString();
         await writeLedger(ledgerState.path, ledger, [secret]);
         await persistReportAndLedger(reportPath, report, ledgerState.path, ledger, id, [secret]);
       },
       afterCall: async (call) => {
+        const rawUsage = call.providerAudit?.find((event) => event.kind === "response")?.usage;
+        if (!call.usage && rawUsage && typeof rawUsage.prompt_tokens === "number" && typeof rawUsage.completion_tokens === "number") {
+          call.usage = { kind: "known", inputTokens: rawUsage.prompt_tokens, outputTokens: rawUsage.completion_tokens };
+        }
         upsertCall(report, call);
         report.updatedAt = new Date().toISOString();
         await persistReportAndLedger(reportPath, report, ledgerState.path, ledger, id, [secret]);
+        if (freeze.scope.costControl.mode === "metered_upper_bound") {
+          const settled = settleOutboundCall(ledger, freeze, id, call.sequence, call.usage);
+          if (!settled.settled) {
+            report.status = "stopped";
+            report.runnerError = { name: "EvaluationGuardError", code: settled.reason, message: "usage cannot safely settle the reserved monetary upper bound" };
+            updateTrialStatus(ledger, id, "stopped");
+          }
+          await persistReportAndLedger(reportPath, report, ledgerState.path, ledger, id, [secret]);
+          if (!settled.settled) throw new EvaluationGuardError(settled.reason, "stop before any further provider request");
+        }
       },
     });
     applyPhaseResult({ report, ledger, id, scenario, phase, clarificationRound });
@@ -222,9 +280,18 @@ try {
 } catch (error) {
   if (releaseLock && shouldStopAfterUnexpectedFailure(error)) {
     if (activeLedger && activeLedgerPath && activeTrialId) {
-      stopEvaluation(activeLedger, "evidence_write_failure");
+      if (activeLedger.batchStatus !== "stopped") stopEvaluation(activeLedger, "evidence_write_failure");
       if (activeLedger.trials[activeTrialId]) updateTrialStatus(activeLedger, activeTrialId, "stopped");
-      try { await writeLedger(activeLedgerPath, activeLedger, [secret]); }
+      try {
+        if (activeReport && activeReportPath) {
+          if (activeCall) upsertCall(activeReport, activeCall);
+          activeReport.status = "stopped";
+          activeReport.updatedAt = new Date().toISOString();
+          activeReport.runnerError = errorRecord(error, [secret]);
+          if (activeFreeze) activeReport.cost = costRecord(activeFreeze, activeLedger, activeLedger.trials[activeTrialId].callsReserved);
+          await persistReportAndLedger(activeReportPath, activeReport, activeLedgerPath, activeLedger, activeTrialId, [secret]);
+        } else await writeLedger(activeLedgerPath, activeLedger, [secret]);
+      }
       catch { retainEvidenceLock = true; }
     } else {
       retainEvidenceLock = true;
@@ -260,25 +327,9 @@ function verifyLedgerMatchesFreeze(ledger: EvaluationLedger, freeze: EvaluationF
   if (ledger.freezeSha256 !== freezeSha256 || ledger.maxOutboundCallsTotal !== freeze.scope.maxOutboundCallsTotal) {
     throw new EvaluationGuardError("LEDGER_FREEZE_MISMATCH", "existing ledger belongs to another evaluation freeze");
   }
-  const expectedCurrency = freeze.scope.costControl.mode === "known_upper_bound" ? freeze.scope.costControl.currency : null;
+  const expectedCurrency = freeze.scope.costControl.mode !== "unknown" ? freeze.scope.costControl.currency : null;
   if (ledger.currency !== expectedCurrency) throw new EvaluationGuardError("LEDGER_COST_MISMATCH", "ledger cost control differs from the freeze");
 }
-
-const persistedReportSchema = z.object({
-  format: z.literal("newday-agent-evaluation-trial"),
-  version: z.literal(1),
-  trialId: z.string(),
-  freezeSha256: z.string(),
-  snapshotSha256: z.string(),
-  status: z.literal("operator_action_required"),
-  firstRoundOutput: z.unknown(),
-  calls: z.array(z.object({
-    sequence: z.number().int().min(1).max(3),
-    endedAt: z.string().nullable(),
-    outcome: z.enum(["reserved", "generation_returned", "validated", "generation_error", "validation_error", "model_drift"]),
-  }).passthrough()),
-  phases: z.array(z.object({ kind: z.enum(["initial", "clarification_resume"]), status: z.string() }).passthrough()).min(1),
-}).passthrough();
 
 async function readResumableReport(
   path: string,
@@ -540,7 +591,7 @@ function costRecord(freeze: EvaluationFreeze, ledger: EvaluationLedger, trialCal
     };
   }
   return {
-    mode: "known_upper_bound",
+    mode: freeze.scope.costControl.mode,
     currency: freeze.scope.costControl.currency,
     trialOutboundCalls: trialCalls,
     reservedBatchUpperBound: ledger.reservedCostUpperBound,

@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
-  AGENT_NAMESPACES, dateInTimeZone, planningSnapshotSchema,
+  AGENT_NAMESPACES, dateInTimeZone, planningProposalSchema, planningSnapshotSchema,
   timeZoneSchema, type ExplicitConstraint, type PlanningFeedback,
 } from "@newday/core/contracts/agent-planning";
 import { instantSchema, localDateSchema, taskSchema } from "@newday/core/domain/planner-model";
@@ -45,6 +46,17 @@ export type PreparedEvaluationScenario = {
   adaptations: string[];
 };
 
+/** Only the disposable evaluation store exposes a fixture-scoped epoch. The
+ * production service still derives context and fact references from its store
+ * version, while production stores keep their normal random identities. */
+class EvaluationSnapshotStore extends MemoryAgentStore {
+  constructor(private readonly fixtureEpoch: string) { super(); }
+
+  override async getPlanningVersion() {
+    return { ...await super.getPlanningVersion(), datasetEpoch: this.fixtureEpoch };
+  }
+}
+
 /** Build the exact snapshot shape through the production context service.
  * The frozen corpus is a specification, not an API request. Unsupported
  * source facts are reported as gaps instead of being silently discarded. */
@@ -55,10 +67,18 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
     throw new Error(`${scenario.id}: sampledAt is outside its stated local date`);
   const taskIds = new Set(input.tasks.map(({ id }) => id));
   const clock = () => Date.parse(input.sampledAt);
-  const store = new MemoryAgentStore();
+  // A later clarification command reconstructs this same synthetic input in a
+  // fresh process. Bind its identities to input only, never expected answers,
+  // runtime dates, or a live business store. Keep all production revisions.
+  const fixtureIdentity = createHash("sha256")
+    .update(JSON.stringify({ format: "newday-evaluation-snapshot-identity-v1", id: scenario.id, input }))
+    .digest("hex");
+  const store = new EvaluationSnapshotStore(`fixture-dataset:${fixtureIdentity}`);
   const gaps: string[] = [];
   const manualSteps: string[] = [];
-  const adaptations: string[] = [];
+  const adaptations: string[] = [
+    "snapshot identity: deterministic fixture-scoped snapshot ID and dataset epoch derived from scenario ID and input; production revisions and fact construction preserved",
+  ];
   for (const task of input.tasks) {
     const futureFields = (["createdAt", "updatedAt", "completedAt"] as const).filter((field) => {
       const at = task[field];
@@ -168,16 +188,56 @@ export async function prepareEvaluationScenario(value: unknown): Promise<Prepare
         decision: "rejected", source: "user", at, datasetEpoch: beforeContext.version.datasetEpoch,
         ...(history.reason === null ? {} : { reason: history.reason }),
       };
+      // Production includes feedback only when its proposal belongs to a
+      // snapshot in the current generation. The corpus supplies the feedback,
+      // not yesterday's tasks or model output. Use explicitly incomplete,
+      // schema-valid fixture placeholders for that reference chain; only the
+      // supplied decision/reason enters the evaluated snapshot's history facts.
+      const historySnapshot = planningSnapshotSchema.parse({
+        id: `fixture-history-snapshot:${scenario.id}:${index}`,
+        version: await store.getPlanningVersion(), agentGeneration: await store.getAgentGeneration(),
+        date: history.date, timeZone: input.timeZone, sampledAt: at,
+        context: {
+          id: `fixture-history-context:${scenario.id}:${index}`, revision: 0,
+          date: history.date, timeZone: input.timeZone, goals: [], energy: null,
+          capacity: null, constraints: [], source: "user", updatedAt: at,
+        },
+        preferences: {
+          revision: 0, timeZone: input.timeZone, learningEnabled: true,
+          explicitPreferences: [], updatedAt: at,
+        },
+        candidates: [], currentFocusTaskIds: [], facts: [], recentOutcomes: [],
+        scope: {
+          description: "评测引用占位：历史任务、上下文及建议内容未提供；仅保留语料明确给出的用户反馈。",
+          totalEligibleTasks: 0, includedTasks: 0, complete: false,
+        },
+      });
+      const historyProposal = planningProposalSchema.parse({
+        proposalId: feedback.proposalId, runId: `fixture-history-run:${scenario.id}:${index}`,
+        snapshotId: historySnapshot.id, createdAt: at, lifecycle: "rejected",
+        output: { kind: "no_action", reason: "评测引用占位；历史建议内容未知，不作为模型输入。", assumptions: [] },
+      });
+      await store.putAgentRecord(AGENT_NAMESPACES.snapshot, historySnapshot.id, historySnapshot);
+      await store.putAgentRecord(AGENT_NAMESPACES.proposal, historyProposal.proposalId, historyProposal);
       await store.putAgentRecord(AGENT_NAMESPACES.feedback, feedback.feedbackId, feedback);
       adaptations.push(`priorHistory[${index}]: rejected on ${history.date} -> recorded user feedback at synthetic ${at}; time of day was not supplied`);
     }
 
-    const snapshot = planningSnapshotSchema.parse(await contexts.createSnapshot());
+    const snapshot = planningSnapshotSchema.parse({
+      ...await contexts.createSnapshot(),
+      id: `fixture-snapshot:${fixtureIdentity}`,
+    });
     for (const [index, history] of input.priorHistory.entries()) {
       if (history.kind === "preference_deleted" &&
         (snapshot.preferences.explicitPreferences.some(({ text }) => text === history.text) ||
           snapshot.facts.some(({ text }) => text.includes(history.text))))
         gaps.push(`priorHistory[${index}]: deleted preference text remains visible in the production snapshot`);
+      if (history.kind === "rejected") {
+        const owner = `fixture-feedback:${scenario.id}:${index}`;
+        const decisionId = `history:${createHash("sha256").update(`${owner}:decision`).digest("hex").slice(0, 32)}`;
+        if (!snapshot.facts.some(({ id }) => id === decisionId))
+          gaps.push(`priorHistory[${index}]: rejected feedback is absent from the production snapshot`);
+      }
     }
     if (snapshot.currentFocusTaskIds.length !== input.currentFocusTaskIds.length ||
       input.currentFocusTaskIds.some((taskId) => !snapshot.currentFocusTaskIds.includes(taskId)))

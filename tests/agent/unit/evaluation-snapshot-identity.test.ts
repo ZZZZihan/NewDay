@@ -30,12 +30,15 @@ describe("evaluation snapshot identity across trial commands", () => {
       const { prepareEvaluationScenario } = await import(${JSON.stringify(helperUrl)});
       const prepared = await prepareEvaluationScenario(JSON.parse(readFileSync(0, "utf8")));
       process.stdout.write(JSON.stringify(prepared.snapshot));
-    `], { input: JSON.stringify(clarificationScenario), encoding: "utf8", timeout: 10_000 });
+    // A cold TypeScript/SQLite process on the target host can exceed Vitest's
+    // default 5s. Bound the child separately; this is an identity check, not a
+    // provider latency assertion.
+    `], { input: JSON.stringify(clarificationScenario), encoding: "utf8", timeout: 20_000 });
     expect(child.error).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
     expect(child.stdout).toBe(first);
     expect(sha256(child.stdout)).toBe(sha256(first));
-  });
+  }, 30_000);
 
   it("separates fixture identities by scenario and input, without sending expected answers", async () => {
     const original = (await prepareEvaluationScenario(clarificationScenario)).snapshot;

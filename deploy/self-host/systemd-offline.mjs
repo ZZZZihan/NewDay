@@ -17,7 +17,7 @@ export function isConfirmedOffline(stdout) {
     && ((fields.get("ActiveState") === "inactive" && fields.get("SubState") === "dead")
       || (fields.get("ActiveState") === "failed" && fields.get("SubState") === "failed"))
     && fields.get("MainPID") === "0" && fields.get("ControlPID") === "0"
-    && fields.get("Job") === "";
+    && ["", "0"].includes(fields.get("Job"));
 }
 
 function queryUnit(unit) {

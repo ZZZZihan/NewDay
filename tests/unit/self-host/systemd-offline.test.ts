@@ -10,6 +10,7 @@ describe("offline restore systemd boundary", () => {
     expect(isConfirmedOffline(state())).toBe(true);
     expect(isConfirmedOffline(state({ ActiveState: "failed", SubState: "failed" }))).toBe(true);
     expect(isConfirmedOffline(state({ LoadState: "not-found" }))).toBe(true);
+    expect(isConfirmedOffline(state({ Job: "0" }))).toBe(true);
     expect(() => assertSystemdOffline(() => ({ status: 0, stdout: state(), error: undefined }))).not.toThrow();
   });
 

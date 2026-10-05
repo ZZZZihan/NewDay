@@ -56,7 +56,7 @@ function releaseTreeSafe(root, cache) {
       scanned += 1;
       if (scanned > 500_000 || info.uid !== 0 || (!info.isSymbolicLink() && (info.mode & 0o022))) return false;
       if (info.isSymbolicLink()) {
-        const target = realpathSync(path);
+        const target = realpathSync.native(path);
         if (!target.startsWith(`${root}/`)) return false;
       } else if (info.isDirectory()) {
         for (const name of readdirSync(path)) stack.push(join(path, name));
@@ -68,7 +68,7 @@ function releaseTreeSafe(root, cache) {
 
 function readableReleaseFile(root, path) {
   try {
-    const target = realpathSync(path);
+    const target = realpathSync.native(path);
     if (!target.startsWith(`${root}/`)) return false;
     const info = statSync(target);
     if (!info.isFile() || info.uid !== 0 || !(info.mode & 0o004)) return false;
@@ -118,11 +118,11 @@ export function rootOwnedExecutable(path) {
 
 export function resolveLinuxSwc(root) {
   try {
-    const actualRoot = realpathSync(root);
+    const actualRoot = realpathSync.native(root);
     const nextPackage = join(actualRoot, "apps/web/node_modules/next/package.json");
-    const require = createRequire(realpathSync(nextPackage));
+    const require = createRequire(realpathSync.native(nextPackage));
     const path = require.resolve("@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node");
-    return realpathSync(path).startsWith(`${actualRoot}/`) ? path : null;
+    return realpathSync.native(path).startsWith(`${actualRoot}/`) ? path : null;
   } catch { return null; }
 }
 
@@ -131,7 +131,7 @@ function processUsesNode(pid) {
   try {
     const executable = `/proc/${pid}/exe`;
     const running = statSync(executable); const installed = statSync("/usr/bin/node");
-    return realpathSync(executable) === realpathSync("/usr/bin/node")
+    return realpathSync.native(executable) === realpathSync.native("/usr/bin/node")
       && running.dev === installed.dev && running.ino === installed.ino;
   }
   catch { return false; }
@@ -218,7 +218,7 @@ function commandPath(name) {
     const candidate = join(directory, name);
     try {
       const info = statSync(candidate);
-      if (info.isFile() && (info.mode & constants.S_IXUSR)) return realpathSync(candidate);
+      if (info.isFile() && (info.mode & constants.S_IXUSR)) return realpathSync.native(candidate);
     } catch { /* Try the next PATH entry. */ }
   }
   return null;
@@ -371,7 +371,7 @@ export function collectCarryzFacts() {
     "/etc/nginx/newday-tls/carryz.key", NGINX_CONFIG, ...UNIT_PATHS,
   ]) paths[path] = fileInfo(path);
   let releaseTarget = null;
-  try { releaseTarget = realpathSync("/opt/newday/current"); } catch { /* No release. */ }
+  try { releaseTarget = realpathSync.native("/opt/newday/current"); } catch { /* No release. */ }
   const swcPath = releaseTarget ? resolveLinuxSwc(releaseTarget) : null;
   const releasePaths = releaseTarget && releaseTarget.startsWith(RELEASE_PREFIX) ? {
     release: fileInfo(releaseTarget),

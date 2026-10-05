@@ -657,7 +657,16 @@ export function formatHumanReport(report) {
   return lines.join("\n");
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function invokedAsMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsMain()) {
   if (process.argv.length !== 2) {
     console.error("Usage: /usr/bin/node deploy/self-host/targets/carryz/preflight.mjs");
     process.exitCode = 2;

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 
 import {
   EXPECTED_BINDINGS,
@@ -21,6 +22,26 @@ const MIB = 1024 * 1024;
 const API_UID = 1001;
 const WEB_UID = 1002;
 const WWW_DATA_GID = 33;
+
+it("runs the CLI through release and file symlinks instead of silently importing it", () => {
+  const source = realpathSync.native(join(process.cwd(), "deploy/self-host/targets/carryz/preflight.mjs"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "newday-preflight-cli-")));
+  const fileLink = join(root, "preflight.mjs");
+  const directoryLink = join(root, "current");
+  try {
+    symlinkSync(source, fileLink);
+    symlinkSync(dirname(source), directoryLink);
+    for (const entry of [source, fileLink, join(directoryLink, "preflight.mjs")]) {
+      const result = spawnSync(process.execPath, [entry, "--unexpected"], { encoding: "utf8", timeout: 5_000 });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Usage: /usr/bin/node deploy/self-host/targets/carryz/preflight.mjs");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function file(uid: number, gid: number, mode: number, size = 0) {
   return { kind: "file", uid, gid, mode, size };

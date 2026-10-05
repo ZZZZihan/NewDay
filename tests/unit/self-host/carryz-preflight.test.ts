@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   EXPECTED_BINDINGS,
@@ -9,6 +12,7 @@ import {
   parseSsListeners,
   parseSystemdShow,
   routeManifestOk,
+  resolveLinuxSwc,
   staticNginxSyntax,
 } from "../../../deploy/self-host/targets/carryz/preflight.mjs";
 
@@ -88,6 +92,7 @@ function healthyFacts() {
       profile: true,
       effective: true,
       mainPids: { api: 101 as number | null, web: 102 as number | null },
+      nodeProcesses: { api: true, web: true },
       active: {
         "newday-api.service": true,
         "newday-web.service": true,
@@ -96,7 +101,7 @@ function healthyFacts() {
       },
     },
     nginx: { staticSyntax: true, profile: true },
-    runtime: { nodeVersion: "v24.8.0", pnpmFound: true, pnpmVersion: "10.29.1" as string | null },
+    runtime: { nodeVersion: "v24.8.0", nodeTrusted: true, pnpmFound: true, pnpmVersion: "10.29.1" as string | null },
     releaseTarget: release,
     releasePaths: {
       release: directory(0, 0, 0o755),
@@ -131,6 +136,41 @@ function check(report: ReturnType<typeof evaluateCarryzPreflight>, id: string) {
 }
 
 describe("CarryZ target-host preflight", () => {
+  it("resolves SWC in a pnpm layout and refuses a dependency outside the release", () => {
+    const temp = mkdtempSync(join(tmpdir(), "newday-swc-"));
+    try {
+      for (const escaped of [false, true]) {
+        const root = join(temp, escaped ? "escaped" : "valid");
+        const next = join(root, "node_modules/.pnpm/next/node_modules/next");
+        const swc = join(escaped ? temp : root, "node_modules/.pnpm/swc/node_modules/@next/swc-linux-x64-gnu");
+        mkdirSync(next, { recursive: true }); mkdirSync(swc, { recursive: true });
+        mkdirSync(join(root, "apps/web/node_modules"), { recursive: true });
+        mkdirSync(join(root, "node_modules/.pnpm/next/node_modules/@next"), { recursive: true });
+        writeFileSync(join(next, "package.json"), '{"name":"next"}');
+        const binary = join(swc, "next-swc.linux-x64-gnu.node");
+        writeFileSync(binary, "fixture");
+        symlinkSync(next, join(root, "apps/web/node_modules/next"));
+        symlinkSync(swc, join(root, "node_modules/.pnpm/next/node_modules/@next/swc-linux-x64-gnu"));
+        expect(resolveLinuxSwc(root)).toBe(escaped ? null : realpathSync(binary));
+      }
+    } finally { rmSync(temp, { recursive: true, force: true }); }
+  });
+
+  it("recognizes MainThread only at the systemd PID with a verified Node executable", () => {
+    const facts = healthyFacts();
+    const api = facts.sockets.find((item) => item.port === 3001)!;
+    api.processes = ["MainThread"]; api.owners = [{ name: "MainThread", pid: 101 }];
+    expect(check(evaluateCarryzPreflight(facts, ASSESSED_AT), "api_binding")?.status).toBe("pass");
+    api.owners[0].pid = 999;
+    expect(check(evaluateCarryzPreflight(facts, ASSESSED_AT), "api_binding")?.status).toBe("blocker");
+    api.owners[0].pid = 101; facts.units.nodeProcesses.api = false;
+    expect(check(evaluateCarryzPreflight(facts, ASSESSED_AT), "api_binding")?.status).toBe("blocker");
+  });
+
+  it("blocks an untrusted runtime despite its valid Node version", () => {
+    const facts = healthyFacts(); facts.runtime.nodeTrusted = false;
+    expect(check(evaluateCarryzPreflight(facts, ASSESSED_AT), "node_runtime")?.status).toBe("blocker");
+  });
   it("reduces mocked env content to selected settings and rejects duplicate binding keys", () => {
     const secret = "SENTINEL_ENV_SECRET_42";
     const selected = parseSelectedEnv([

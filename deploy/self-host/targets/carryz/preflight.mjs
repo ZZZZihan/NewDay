@@ -3,9 +3,10 @@
 // Run locally on CarryZ. Every probe reads files or runs an inspection command;
 // this program does not create files, invoke a shell, or manage services.
 import { spawnSync } from "node:child_process";
-import { constants, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { constants, lstatSync, readFileSync, readlinkSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const MIB = 1024 * 1024;
 const RELEASE_PREFIX = "/opt/newday/releases/";
@@ -80,6 +81,60 @@ function readableReleaseFile(root, path) {
     }
     return true;
   } catch { return false; }
+}
+
+export function rootOwnedExecutable(path) {
+  try {
+    if (typeof path !== "string" || !path.startsWith("/")) return false;
+    let pending = path.split("/").filter(Boolean);
+    let parents = [];
+    let links = 0;
+    const root = lstatSync("/");
+    if (!root.isDirectory() || root.uid !== 0 || (root.mode & 0o022) || !(root.mode & 0o001)) return false;
+    while (pending.length) {
+      const part = pending.shift();
+      if (part === ".") continue;
+      if (part === "..") { parents.pop(); continue; }
+      const current = join("/", ...parents, part);
+      const info = lstatSync(current);
+      if (info.uid !== 0) return false;
+      if (info.isSymbolicLink()) {
+        if (++links > 40) return false;
+        const target = readlinkSync(current);
+        if (target.startsWith("/")) parents = [];
+        // Expand links before interpreting '..', as the kernel does. Lexical
+        // normalization here could skip a writable intermediate target.
+        pending = [...target.split("/").filter(Boolean), ...pending];
+        continue;
+      }
+      if ((info.mode & 0o022) || !(info.mode & 0o001)) return false;
+      if (!pending.length) return info.isFile();
+      if (!info.isDirectory()) return false;
+      parents.push(part);
+    }
+    return false;
+  } catch { return false; }
+}
+
+export function resolveLinuxSwc(root) {
+  try {
+    const actualRoot = realpathSync(root);
+    const nextPackage = join(actualRoot, "apps/web/node_modules/next/package.json");
+    const require = createRequire(realpathSync(nextPackage));
+    const path = require.resolve("@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node");
+    return realpathSync(path).startsWith(`${actualRoot}/`) ? path : null;
+  } catch { return null; }
+}
+
+function processUsesNode(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    const executable = `/proc/${pid}/exe`;
+    const running = statSync(executable); const installed = statSync("/usr/bin/node");
+    return realpathSync(executable) === realpathSync("/usr/bin/node")
+      && running.dev === installed.dev && running.ino === installed.ino;
+  }
+  catch { return false; }
 }
 
 function inspectCommand(file, args, timeout = 5_000) {
@@ -317,22 +372,24 @@ export function collectCarryzFacts() {
   ]) paths[path] = fileInfo(path);
   let releaseTarget = null;
   try { releaseTarget = realpathSync("/opt/newday/current"); } catch { /* No release. */ }
+  const swcPath = releaseTarget ? resolveLinuxSwc(releaseTarget) : null;
   const releasePaths = releaseTarget && releaseTarget.startsWith(RELEASE_PREFIX) ? {
     release: fileInfo(releaseTarget),
     apiEntry: fileInfo(join(releaseTarget, "apps/api/dist/server.js")),
     nextCli: fileInfo(join(releaseTarget, "apps/web/node_modules/next/dist/bin/next")),
     buildId: readText(join(releaseTarget, "apps/web/.next/BUILD_ID"), 256),
     cache: fileInfo(join(releaseTarget, "apps/web/.next/cache")),
-    swc: fileInfo(join(releaseTarget, "apps/web/node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node")),
+    swc: swcPath ? fileInfo(swcPath) : null,
     routes: routeManifestOk(safeJson(join(releaseTarget, "apps/web/.next/routes-manifest.json"))),
     packageManager: safeJson(join(releaseTarget, "package.json"), 64 * 1024)?.packageManager ?? null,
     treeSafe: releaseTreeSafe(releaseTarget, join(releaseTarget, "apps/web/.next/cache")),
-    artifactsReadable: ["apps/api/dist/server.js", "apps/web/node_modules/next/dist/bin/next",
-      "apps/web/node_modules/@next/swc-linux-x64-gnu/next-swc.linux-x64-gnu.node",
+    artifactsReadable: swcPath !== null && readableReleaseFile(releaseTarget, swcPath)
+      && ["apps/api/dist/server.js", "apps/web/node_modules/next/dist/bin/next",
       "apps/web/.next/BUILD_ID", "apps/web/.next/routes-manifest.json",
       "deploy/self-host/backup.mjs"].every((path) => readableReleaseFile(releaseTarget, join(releaseTarget, path))),
   } : null;
-  const nodeVersion = inspectCommand("/usr/bin/node", ["--version"]);
+  const nodeTrusted = rootOwnedExecutable("/usr/bin/node");
+  const nodeVersion = nodeTrusted ? inspectCommand("/usr/bin/node", ["--version"]) : { ok: false };
   const pnpmPath = commandPath("pnpm");
   const unitsPresent = UNIT_PATHS.every((path) => paths[path]?.kind === "file");
   const unitsValid = unitsPresent ? inspectCommand(BIN.systemdAnalyze, ["verify", ...UNIT_PATHS], 15_000).ok : false;
@@ -352,11 +409,14 @@ export function collectCarryzFacts() {
     env: { api: selectedEnv("/etc/newday/api.env"), web: selectedEnv("/etc/newday/web.env") },
     units: { valid: unitsValid, profile: unitProfiles, effective: effectiveUnits, active: unitActive,
       mainPids: { api: loadedUnits["newday-api.service"].mainPid,
-        web: loadedUnits["newday-web.service"].mainPid } },
+        web: loadedUnits["newday-web.service"].mainPid },
+      nodeProcesses: { api: nodeTrusted && processUsesNode(loadedUnits["newday-api.service"].mainPid),
+        web: nodeTrusted && processUsesNode(loadedUnits["newday-web.service"].mainPid) } },
     nginx: { staticSyntax: staticNginxSyntax(installedNginx),
       profile: installedProfileMatches(NGINX_CONFIG, join(PROFILE_DIR, "newday.nginx.conf")) },
     sockets: socketFacts(),
     runtime: { nodeVersion: nodeVersion.ok ? nodeVersion.output.trim() : null,
+      nodeTrusted,
       pnpmFound: pnpmPath !== null, pnpmVersion: installedPnpmVersion(pnpmPath) },
     storage: {
       data: { mount: mountInfo("/var/lib/newday"), freeBytes: freeBytes("/var/lib/newday") },
@@ -438,10 +498,12 @@ export function evaluateCarryzPreflight(facts, assessedAt = new Date().toISOStri
   "Selected non-secret env settings match the CarryZ profile.",
   "A required env setting is missing or differs from the CarryZ profile.");
 
-  add("api_binding", listener(facts.sockets, 3001, "127.0.0.1", ["node"], facts.units?.mainPids?.api ?? -1),
+  add("api_binding", facts.units?.nodeProcesses?.api === true
+    && listener(facts.sockets, 3001, "127.0.0.1", ["node", "MainThread"], facts.units?.mainPids?.api ?? -1),
     "API has one node listener at 127.0.0.1:3001.",
     "API port 3001 is absent, non-loopback, duplicated, or owned by another process.");
-  add("web_binding", listener(facts.sockets, 3100, "127.0.0.1", ["node", "next-server"], facts.units?.mainPids?.web ?? -1),
+  add("web_binding", facts.units?.nodeProcesses?.web === true
+    && listener(facts.sockets, 3100, "127.0.0.1", ["node", "MainThread", "next-server"], facts.units?.mainPids?.web ?? -1),
     "Web has one node listener at 127.0.0.1:3100.",
     "Web port 3100 is absent, non-loopback, duplicated, or owned by another process.");
   add("nginx_binding", listener(facts.sockets, 8443, "172.23.1.127", ["nginx"]),
@@ -489,8 +551,7 @@ export function evaluateCarryzPreflight(facts, assessedAt = new Date().toISOStri
 
   const nodeMajor = Number(/^v?(\d+)\./.exec(facts.runtime?.nodeVersion ?? "")?.[1]);
   add("node_runtime", Number.isInteger(nodeMajor) && nodeMajor >= 24
-    && paths["/usr/bin/node"]?.kind === "file" && paths["/usr/bin/node"].uid === 0
-    && !!(paths["/usr/bin/node"].mode & 0o001) && !(paths["/usr/bin/node"].mode & 0o022),
+    && facts.runtime?.nodeTrusted === true,
   "Node 24+ is available at /usr/bin/node.", "Node 24+ at /usr/bin/node is missing or unverified.");
   add("pnpm_build_tool", facts.runtime?.pnpmFound === true
     && (facts.runtime?.pnpmVersion === null || facts.runtime?.pnpmVersion === "10.29.1"),

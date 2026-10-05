@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import {
   EXPECTED_BINDINGS,
@@ -38,6 +39,13 @@ it("runs the CLI through release and file symlinks instead of silently importing
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain("Usage: /usr/bin/node deploy/self-host/targets/carryz/preflight.mjs");
     }
+    const imported = spawnSync(process.execPath, ["--input-type=module", "-e",
+      `await import(${JSON.stringify(pathToFileURL(source).href)}); console.log("IMPORTED");`,
+      "nonexistent-eval-argument"], { encoding: "utf8", timeout: 5_000 });
+    expect(imported.error).toBeUndefined();
+    expect(imported.status).toBe(0);
+    expect(imported.stdout.trim()).toBe("IMPORTED");
+    expect(imported.stderr).toBe("");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
